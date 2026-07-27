@@ -382,6 +382,22 @@ with the new behavior.
 parity test that a host-backed and local agent behave identically from the
 relay's perspective.
 
+## 9.1 Implementation notes (deltas discovered while building)
+
+- **The host publishes the agent's kind:0 profile** after `grant` and
+  `configure`, signed by the agent over a short-lived NIP-42 connection
+  (`buzz_ws_client::publish_event` with the NIP-OA tag). Desktop cannot do
+  this for keys it never holds, and the relay rejects events authored by a
+  pubkey other than the authenticated connection. Attestation still lives
+  with the owner — the host signs *as the agent*, never vouches for it.
+- **Clean child exits do not restart.** The owner-sent `!shutdown`
+  convention makes `buzz-acp` exit 0 deliberately; the supervisor restarts
+  only on crash (non-zero/signal), mirroring `Restart=on-failure`.
+- **Desktop lifecycle routing is inside the generic commands.** `start`/
+  `stop`/`delete`/`update_managed_agent` detect `BackendKind::Host` and
+  route over the control plane themselves, so the frontend's existing
+  call sites needed no changes beyond the create path and the host picker.
+
 ## 10. Open questions (carried, non-blocking)
 
 1. **Multi-operator capacity** — when several members share one host, whether
