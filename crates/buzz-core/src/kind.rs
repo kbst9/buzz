@@ -145,6 +145,10 @@ pub const RESULT_GATED_KINDS: &[u32] = &[KIND_DM_VISIBILITY, KIND_AGENT_TURN_MET
 /// storage-layer search defense does not apply to them.
 pub const P_GATED_KINDS: &[u32] = &[
     KIND_AGENT_OBSERVER_FRAME,
+    // Agent-host control frames are encrypted request/reply pairs addressed
+    // to exactly one recipient; only the `p`-tagged host or owner may
+    // subscribe to them.
+    KIND_AGENT_HOST_CONTROL,
     KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION,
     KIND_GIFT_WRAP,
@@ -257,6 +261,18 @@ pub const KIND_TEAM: u32 = 30176;
 /// carry the agent's secret key, NIP-OA auth tag, env vars, or runtime fields,
 /// since these events are world-readable on the relay.
 pub const KIND_MANAGED_AGENT: u32 = 30177;
+
+/// Agent host announcement (parameterized replaceable, host-authored).
+///
+/// Published by a `buzz-agent-host` daemon to advertise itself as a remote
+/// execution target for managed agents. Addressed by `(host_pubkey, kind,
+/// d_tag)` where `d_tag` is the host's stable id. Content is a JSON body
+/// listing the launchable runtime ids, capacity, and acceptance policy —
+/// the runtime list is the host's capability boundary and the only set of
+/// processes a control frame can name. Secret-free and world-readable so
+/// any member's Desktop can discover hosts with a plain query. See
+/// `docs/remote-persistent-configurable-agents.md`.
+pub const KIND_AGENT_HOST_ANNOUNCE: u32 = 30178;
 
 // NIP-56 reporting
 /// NIP-56: Report an event, pubkey, or blob to relay moderators (kind:1984).
@@ -407,6 +423,16 @@ pub const KIND_PAIRING: u32 = 24134;
 pub const KIND_TYPING_INDICATOR: u32 = 20002;
 /// Ephemeral: owner-scoped encrypted agent observer telemetry and control frame.
 pub const KIND_AGENT_OBSERVER_FRAME: u32 = 24200;
+/// Ephemeral: agent-host control frame (NIP-44 v2 encrypted request/reply).
+///
+/// Carries lifecycle operations (create/grant/configure/start/stop/remove/
+/// status/logs) between a member's Desktop and a `buzz-agent-host` daemon.
+/// Addressed to its single recipient via the cleartext `p` tag — the host's
+/// pubkey for requests, the requesting owner's for replies — and `#p`-gated
+/// at the subscription layer like [`KIND_AGENT_OBSERVER_FRAME`]. Content is
+/// opaque ciphertext to the relay; all op-level authorization is host-side.
+/// See `docs/remote-persistent-configurable-agents.md`.
+pub const KIND_AGENT_HOST_CONTROL: u32 = 24300;
 /// Ephemeral: huddle emoji reaction burst. Channel-scoped to the ephemeral
 /// huddle channel with an `h` tag; never stored in the timeline.
 pub const KIND_HUDDLE_REACTION: u32 = 24810;
@@ -586,6 +612,8 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_PERSONA,
     KIND_TEAM,
     KIND_MANAGED_AGENT,
+    KIND_AGENT_HOST_ANNOUNCE,
+    KIND_AGENT_HOST_CONTROL,
     KIND_REPORT,
     KIND_PRODUCT_FEEDBACK,
     KIND_NIP29_PUT_USER,
@@ -784,6 +812,10 @@ const _: () = assert!(is_replaceable(KIND_AGENT_PROFILE)); // 10100 ∈ 10000–
 const _: () = assert!(is_parameterized_replaceable(KIND_PERSONA)); // 30175 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM)); // 30176 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_MANAGED_AGENT)); // 30177 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_AGENT_HOST_ANNOUNCE)); // 30178 ∈ 30000–39999
+// Agent-host control frames must be ephemeral — they can carry provider env
+// vars and log tails, and the relay must never persist them.
+const _: () = assert!(is_ephemeral(KIND_AGENT_HOST_CONTROL)); // 24300 ∈ 20000–29999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_EVENT_REMINDER)); // 30300 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_DM_VISIBILITY)); // 30622 ∈ 30000–39999

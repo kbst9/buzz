@@ -21,7 +21,8 @@ use buzz_core::kind::{
     KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT, KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN,
     KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES, KIND_HUDDLE_PARTICIPANT_JOINED,
     KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_STARTED, KIND_IA_ARCHIVE_REQUEST,
-    KIND_IA_UNARCHIVE_REQUEST, KIND_LONG_FORM, KIND_MANAGED_AGENT, KIND_MEMBER_ADDED_NOTIFICATION,
+    KIND_AGENT_HOST_ANNOUNCE, KIND_IA_UNARCHIVE_REQUEST, KIND_LONG_FORM, KIND_MANAGED_AGENT,
+    KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION, KIND_MODERATION_BAN, KIND_MODERATION_RESOLVE_REPORT,
     KIND_MODERATION_TIMEOUT, KIND_MODERATION_UNBAN, KIND_MODERATION_UNTIMEOUT, KIND_MUTE_LIST,
     KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP,
@@ -201,6 +202,7 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         KIND_TEXT_NOTE | KIND_LONG_FORM => Ok(Scope::MessagesWrite),
         KIND_CONTACT_LIST | KIND_READ_STATE | KIND_USER_STATUS | KIND_AGENT_ENGRAM
         | KIND_EVENT_REMINDER | KIND_PERSONA | KIND_TEAM | KIND_MANAGED_AGENT
+        | KIND_AGENT_HOST_ANNOUNCE
         | super::push_lease::KIND_PUSH_LEASE => {
             Ok(Scope::UsersWrite)
         }
@@ -410,6 +412,10 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             // keyed by (pubkey, kind, d_tag). A stray `h` tag must not channel-scope them.
             | KIND_TEAM
             | KIND_MANAGED_AGENT
+            // Agent-host announcements (30178): host-authored, keyed by
+            // (pubkey, kind, d_tag), discoverable community-wide — never
+            // channel-scoped.
+            | KIND_AGENT_HOST_ANNOUNCE
             // NIP-34: git events use `a` tags (repo reference), not `h` tags (channel scope).
             // Parameterized replaceable kinds are keyed by (pubkey, kind, d_tag).
             | KIND_GIT_REPO_ANNOUNCEMENT
