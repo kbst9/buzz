@@ -1,0 +1,32 @@
+[package]
+name = "buzz-backend-ssh"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Buzz agent backend provider that deploys agents to a remote host over SSH"
+readme = "README.md"
+publish = false # internal workspace tool, not published to crates.io
+
+[lib]
+name = "buzz_backend_ssh"
+path = "src/lib.rs"
+
+[[bin]]
+# The binary name is the contract: Buzz Desktop discovers providers by the
+# `buzz-backend-` prefix on PATH (see `managed_agents/backend.rs`), and the
+# suffix becomes the provider id shown in the "Run on" selector.
+name = "buzz-backend-ssh"
+path = "src/main.rs"
+
+[dependencies]
+# Request/response envelopes and the deploy payload. The payload is read as a
+# loosely-typed `Value` on purpose: Desktop may add fields (each documented as
+# "no protocol break"), and unknown fields must never fail a deploy.
+serde_json = { workspace = true }
+serde = { workspace = true }
+
+# Optional local config (`~/.config/buzz-backend-ssh/config.toml`) naming which
+# hosts to probe. Same version the workspace already pins for buzz-acp.
+toml = "1.0"
