@@ -159,6 +159,13 @@ pub fn render_env_file(spec: &DeploySpec) -> Result<String, String> {
         push("BUZZ_AUTH_TAG", tag)?;
     }
     push("BUZZ_ACP_AGENT_COMMAND", &spec.agent_command)?;
+    // The harness splits this on commas, so an argument containing one would be
+    // silently torn in half — reject it rather than launch a mangled command.
+    if let Some(bad) = spec.agent_args.iter().find(|a| a.contains(',')) {
+        return Err(format!(
+            "agent argument {bad:?} contains a comma, which BUZZ_ACP_AGENT_ARGS uses as its separator"
+        ));
+    }
     push("BUZZ_ACP_AGENT_ARGS", &spec.agent_args.join(","))?;
     if spec.system_prompt.is_some() {
         push("BUZZ_ACP_SYSTEM_PROMPT_FILE", &spec.prompt_path())?;
@@ -295,6 +302,14 @@ mod tests {
             r#"BUZZ_ACP_SYSTEM_PROMPT_FILE="/usr/local/share/buzz-agents/prompts/claude.md""#
         ));
         assert!(out.contains(r#"BUZZ_ACP_IDLE_TIMEOUT="900""#));
+    }
+
+    #[test]
+    fn comma_in_an_argument_is_rejected() {
+        let mut s = spec();
+        s.agent_args = vec!["-m".into(), "model,with,commas".into()];
+        let err = render_env_file(&s).unwrap_err();
+        assert!(err.contains("comma"), "got: {err}");
     }
 
     #[test]

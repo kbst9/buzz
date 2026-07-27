@@ -31,6 +31,20 @@ pub struct RemoteRuntime {
     /// Env var carrying the structured `provider`. Mirrors
     /// `KnownAcpRuntime.provider_env_var`.
     pub provider_env: Option<&'static str>,
+    /// CLI flag carrying `model`, for runtimes that take it as an argument
+    /// rather than an env var.
+    ///
+    /// Desktop can only deliver model two ways: an env var, or its config
+    /// bridge writing the runtime's own config file. The latter is inherently
+    /// local — it edits files in the Desktop user's home — so a remote agent
+    /// would silently ignore the model chosen in the UI. A CLI flag is the one
+    /// channel that survives the host boundary.
+    pub model_arg: Option<&'static str>,
+    /// CLI flag carrying `provider`, same rationale as [`Self::model_arg`].
+    pub provider_arg: Option<&'static str>,
+    /// Whether the flags above must precede the subcommand in [`Self::args`].
+    /// argparse-style CLIs reject top-level options placed after a subcommand.
+    pub args_before_subcommand: bool,
 }
 
 /// Runtimes this provider knows how to launch remotely.
@@ -47,6 +61,9 @@ pub const REMOTE_RUNTIMES: &[RemoteRuntime] = &[
         label: "Claude Code (claude-agent-acp)",
         model_env: None,
         provider_env: None,
+        model_arg: None,
+        provider_arg: None,
+        args_before_subcommand: false,
     },
     RemoteRuntime {
         id: "codex",
@@ -55,6 +72,9 @@ pub const REMOTE_RUNTIMES: &[RemoteRuntime] = &[
         label: "Codex (codex-acp)",
         model_env: None,
         provider_env: None,
+        model_arg: None,
+        provider_arg: None,
+        args_before_subcommand: false,
     },
     RemoteRuntime {
         id: "goose",
@@ -63,6 +83,9 @@ pub const REMOTE_RUNTIMES: &[RemoteRuntime] = &[
         label: "Goose (goose acp)",
         model_env: Some("GOOSE_MODEL"),
         provider_env: Some("GOOSE_PROVIDER"),
+        model_arg: None,
+        provider_arg: None,
+        args_before_subcommand: false,
     },
     RemoteRuntime {
         id: "buzz-agent",
@@ -71,16 +94,47 @@ pub const REMOTE_RUNTIMES: &[RemoteRuntime] = &[
         label: "Buzz Agent",
         model_env: Some("BUZZ_AGENT_MODEL"),
         provider_env: Some("BUZZ_AGENT_PROVIDER"),
+        model_arg: None,
+        provider_arg: None,
+        args_before_subcommand: false,
     },
     RemoteRuntime {
         id: "hermes",
         command: "hermes",
         args: &["acp", "--accept-hooks"],
         label: "Hermes Agent (hermes acp)",
+        // Hermes exposes no documented model env var; it takes top-level
+        // `-m` / `--provider` flags, which must precede the `acp` subcommand.
         model_env: None,
         provider_env: None,
+        model_arg: Some("-m"),
+        provider_arg: Some("--provider"),
+        args_before_subcommand: true,
     },
 ];
+
+impl RemoteRuntime {
+    /// Build the argument vector, injecting model/provider flags for runtimes
+    /// that take them on the command line.
+    ///
+    /// Placement matters: argparse-style CLIs (hermes) treat `-m` as a
+    /// top-level option and reject it after the `acp` subcommand.
+    pub fn build_args(&self, model: Option<&str>, provider: Option<&str>) -> Vec<String> {
+        let mut flags: Vec<String> = Vec::new();
+        for (flag, value) in [(self.model_arg, model), (self.provider_arg, provider)] {
+            if let (Some(flag), Some(value)) = (flag, value) {
+                flags.push(flag.to_string());
+                flags.push(value.to_string());
+            }
+        }
+        let base = self.args.iter().map(|s| (*s).to_string());
+        if self.args_before_subcommand {
+            flags.into_iter().chain(base).collect()
+        } else {
+            base.chain(flags).collect()
+        }
+    }
+}
 
 /// Look up a runtime by id.
 pub fn by_id(id: &str) -> Option<&'static RemoteRuntime> {
@@ -111,6 +165,32 @@ mod tests {
             assert_eq!(by_id(r.id).map(|x| x.command), Some(r.command));
         }
         assert!(by_id("nope").is_none());
+    }
+
+    #[test]
+    fn hermes_takes_model_as_a_flag_before_its_subcommand() {
+        let hermes = by_id("hermes").expect("hermes present");
+        let args = hermes.build_args(Some("gpt-5"), Some("openai"));
+        assert_eq!(
+            args,
+            vec![
+                "-m",
+                "gpt-5",
+                "--provider",
+                "openai",
+                "acp",
+                "--accept-hooks"
+            ],
+            "argparse rejects top-level options placed after the subcommand"
+        );
+        // No model chosen: base args only.
+        assert_eq!(hermes.build_args(None, None), vec!["acp", "--accept-hooks"]);
+    }
+
+    #[test]
+    fn env_var_runtimes_do_not_grow_cli_flags() {
+        let goose = by_id("goose").expect("goose present");
+        assert_eq!(goose.build_args(Some("m"), Some("p")), vec!["acp"]);
     }
 
     #[test]

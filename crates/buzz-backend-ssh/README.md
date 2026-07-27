@@ -144,6 +144,29 @@ Errors exit non-zero with a message on **stderr** — Desktop captures that into
   field in this provider's config. Folding remote runtimes into the real catalog
   needs an upstream change — an optional `runtimes: […]` array on the `op:info`
   response plus a host field on `AcpRuntimeCatalogEntry`.
-- **Model/provider env vars** are only mapped for runtimes where Desktop's own
-  catalog defines them (`goose`, `buzz-agent`). For others, set them through the
-  persona's env vars.
+- **Effort / max tokens / context limit do not cross the host boundary.** The
+  deploy payload carries `model` and `provider` but *not* thinking effort, max
+  tokens, or context limit. Desktop delivers those through its **config bridge**,
+  which reads and writes the runtime's own config file (`~/.claude/settings.json`,
+  `~/.config/goose/config.yaml`, …) in the Desktop user's home — inherently local.
+  Until the payload carries them, set them as persona or agent **env vars** in
+  Desktop (e.g. `GOOSE_THINKING_EFFORT`, `BUZZ_AGENT_THINKING_EFFORT`); those are
+  merged into the payload and written into the unit's env file.
+
+## Model selection per runtime
+
+`model` and `provider` *are* in the payload, and each runtime receives them
+through whichever channel it actually supports:
+
+| Runtime | Channel | Notes |
+|---|---|---|
+| `goose` | env — `GOOSE_MODEL` / `GOOSE_PROVIDER` | mirrors Desktop's catalog |
+| `buzz-agent` | env — `BUZZ_AGENT_MODEL` / `BUZZ_AGENT_PROVIDER` | mirrors Desktop's catalog |
+| `hermes` | CLI — `-m` / `--provider`, before the `acp` subcommand | no documented env var |
+| `claude` | none | provider-locked; model comes from the CLI's own config |
+| `codex` | none | brings its own backend |
+
+For `claude` and `codex` the desktop catalog also defines no model env var — they
+are configured through their config files, so a model chosen in the UI cannot
+reach a *remote* instance. Configure those on the remote host directly
+(`~/.claude/settings.json`, `~/.codex/config.toml`).

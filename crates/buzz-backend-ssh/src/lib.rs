@@ -221,6 +221,9 @@ pub fn resolve(
             None => format!("/home/{user}/buzz-agents/{id}"),
         });
 
+    let model = str_field(agent, "model");
+    let provider = str_field(agent, "provider");
+
     // Runtime override: prefer the operator's remote choice, else trust the
     // payload's command (which came from Desktop's local catalog).
     let payload_command = str_field(agent, "agent_command");
@@ -234,7 +237,7 @@ pub fn resolve(
             })?;
             (
                 rt.command.to_string(),
-                rt.args.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                rt.build_args(model.as_deref(), provider.as_deref()),
                 Some(rt),
             )
         }
@@ -270,8 +273,8 @@ pub fn resolve(
     // Project structured model/provider onto the runtime's env vars, matching
     // what local spawn does. Operator env already in the map wins.
     if let Some(rt) = runtime {
-        for (field, var) in [("model", rt.model_env), ("provider", rt.provider_env)] {
-            if let (Some(value), Some(var)) = (str_field(agent, field), var) {
+        for (value, var) in [(&model, rt.model_env), (&provider, rt.provider_env)] {
+            if let (Some(value), Some(var)) = (value.clone(), var) {
                 env_vars.entry(var.to_string()).or_insert(value);
             }
         }
@@ -368,7 +371,40 @@ mod tests {
         assert_eq!(host, "srv");
         // Desktop sent buzz-agent; the remote choice wins.
         assert_eq!(spec.agent_command, "hermes");
-        assert_eq!(spec.agent_args, vec!["acp", "--accept-hooks"]);
+        // hermes takes model/provider as CLI flags, ahead of its subcommand.
+        assert_eq!(
+            spec.agent_args,
+            vec![
+                "-m",
+                "claude-sonnet-4-5",
+                "--provider",
+                "anthropic",
+                "acp",
+                "--accept-hooks"
+            ]
+        );
+    }
+
+    #[test]
+    fn model_reaches_the_agent_by_whichever_channel_the_runtime_supports() {
+        // env-var runtime: model lands in the env file, args untouched.
+        let (goose, _) = resolve(&payload(), &json!({"runtime":"goose"}), &cfg()).unwrap();
+        assert_eq!(goose.agent_args, vec!["acp"]);
+        assert_eq!(
+            goose.env_vars.get("GOOSE_MODEL").map(String::as_str),
+            Some("claude-sonnet-4-5")
+        );
+
+        // CLI-flag runtime: model lands in the args, not the env.
+        let (hermes, _) = resolve(&payload(), &json!({"runtime":"hermes"}), &cfg()).unwrap();
+        assert!(hermes.agent_args.contains(&"claude-sonnet-4-5".to_string()));
+        assert!(!hermes.env_vars.contains_key("HERMES_MODEL"));
+
+        // Neither channel exists for claude — Desktop configures it through a
+        // local config file, which cannot cross to a remote host.
+        let (claude, _) = resolve(&payload(), &json!({"runtime":"claude"}), &cfg()).unwrap();
+        assert!(claude.agent_args.is_empty());
+        assert!(claude.env_vars.keys().all(|k| k == "FOO"));
     }
 
     #[test]
