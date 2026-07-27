@@ -82,11 +82,24 @@ export function resolveStartRuntimeForDefinition(
  *   is true because the preset commands deliberately override the
  *   definition's runtime preference.
  */
-export type BackendIntent = {
-  type: "provider";
-  id: string;
-  config: Record<string, unknown>;
-};
+export type BackendIntent =
+  | {
+      type: "provider";
+      id: string;
+      config: Record<string, unknown>;
+    }
+  /**
+   * Run on a `buzz-agent-host` daemon discovered over the relay. Handled
+   * before `buildInstanceInputForDefinition` — host-backed creation goes
+   * through the dedicated `create_host_agent` command (the host generates
+   * the agent's keypair; there is no local spawn input to build).
+   */
+  | {
+      type: "host";
+      hostPubkey: string;
+      /** Runtime id from the host's kind 30178 announcement. */
+      runtime: string;
+    };
 
 /**
  * The single definition→instance mapping (Phase 1B.3.5 rows 2–4). Every
@@ -124,6 +137,12 @@ export async function buildInstanceInputForDefinition(
     systemPrompt: persona.systemPrompt,
     avatarUrl,
   };
+
+  if (backendIntent?.type === "host") {
+    throw new Error(
+      "host-backed agents are created via create_host_agent, not a local instance input",
+    );
+  }
 
   if (backendIntent?.type === "provider") {
     return {

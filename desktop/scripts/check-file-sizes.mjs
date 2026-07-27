@@ -89,7 +89,9 @@ const overrides = new Map([
   // build_managed_agent_summary into callers, dangling-harness summaries render
   // the deleted id, and spawn errors surface as sentences (tests included).
   // +1: merge of the two deltas above (actual post-merge count).
-  ["src-tauri/src/commands/agents.rs", 1418],
+  // +7: BackendKind::Host routing call sites in start/stop/delete — the
+  // bodies live in commands/agent_hosts.rs; only the dispatch lines land here.
+  ["src-tauri/src/commands/agents.rs", 1426],
   // agent-lifecycle-fixes: cascade-delete in delete_persona restructured into
   // 3-phase (stage/stop/commit) + commit_cascade_agents injectable helper for
   // retry-safety. Load-bearing reviewer-required change; queued to split.
@@ -246,7 +248,9 @@ const overrides = new Map([
   // (#2680) to indicate runtimes that need a separate CLI install.
   // +6: ManagedAgent.runtime record-level pin + JSDoc so the harness delete
   // confirmation can count referencing agents (review fix for #2773).
-  ["src/shared/api/types.ts", 1058],
+  // +7: ManagedAgentBackend gains the "host" variant; host DTOs live in
+  // agentHostTypes.ts and are only re-exported here.
+  ["src/shared/api/types.ts", 1066],
   // harness-persona-sync feature growth, queued to split in the resolver-unify
   // refactor followup. discovery.rs is dominated by the new test module
   // (the effective_agent_command / divergent / create-time override matrix);
@@ -552,7 +556,10 @@ const overrides = new Map([
   // test-bindable seam (struct + helper + docs) so the linked-agent
   // regression test kills the stale-record mutation at get_agent_models'
   // consumption point (review finding, Wren + Dawn).
-  ["src-tauri/src/commands/agent_models.rs", 1152],
+  // +19: update_managed_agent skips local profile sync for host-backed
+  // records (no local key) and pushes the saved config to the host
+  // (Phase 2b `configure`); the exchange itself lives in agent_hosts.rs.
+  ["src-tauri/src/commands/agent_models.rs", 1172],
   // global-agent-config: get_agent_config_surface / write_agent_config_field /
   // put_agent_session_config commands + GlobalAgentConfig serde types. New file
   // in this PR; queued to split with the command module refactor.

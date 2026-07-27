@@ -11,6 +11,7 @@ import {
   managedAgentsQueryKey,
   personasQueryKey,
   useAcpRuntimesQuery,
+  useCreateHostAgentMutation,
   useCreateManagedAgentMutation,
   useCreatePersonaMutation,
   useManagedAgentsQuery,
@@ -66,6 +67,7 @@ export function useAgentManagement() {
   const createPersonaMutation = useCreatePersonaMutation();
   const updatePersonaMutation = useUpdatePersonaMutation();
   const createAgentMutation = useCreateManagedAgentMutation();
+  const createHostAgentMutation = useCreateHostAgentMutation();
   const [request, setRequest] = React.useState<AgentManagementRequest | null>(
     null,
   );
@@ -204,7 +206,18 @@ export function useAgentManagement() {
         avatarUrl,
       });
 
-      if (intent === "definition_start") {
+      if (intent === "definition_start" && backendIntent?.type === "host") {
+        // Host-backed: the dedicated command creates + grants remotely.
+        await createHostAgentMutation.mutateAsync({
+          hostPubkey: backendIntent.hostPubkey,
+          runtime: backendIntent.runtime,
+          name: persona.displayName,
+          personaId: persona.id,
+          systemPrompt: persona.systemPrompt,
+          model: persona.model ?? undefined,
+          provider: persona.provider ?? undefined,
+        });
+      } else if (intent === "definition_start") {
         const created = await createAgentMutation.mutateAsync(
           await buildInstanceInputForDefinition(
             persona,

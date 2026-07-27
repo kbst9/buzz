@@ -6,8 +6,10 @@ import {
 import type {
   AddChannelMembersInput,
   AddChannelMembersResult,
+  AgentHostInfo,
   BackendProviderCandidate,
   BackendProviderProbeResult,
+  CreateHostAgentInput,
   CanvasResponse,
   GetHomeFeedInput,
   HomeFeedResponse,
@@ -1130,6 +1132,44 @@ export async function discoverBackendProviders(): Promise<
   BackendProviderCandidate[]
 > {
   return invokeTauri<BackendProviderCandidate[]>("discover_backend_providers");
+}
+
+// ── Agent hosts (relay-native remote backend) ────────────────────────────────
+
+export async function discoverAgentHosts(): Promise<AgentHostInfo[]> {
+  return invokeTauri<AgentHostInfo[]>("discover_agent_hosts");
+}
+
+export async function acceptAgentHost(hostPubkey: string): Promise<void> {
+  await invokeTauri("accept_agent_host", { hostPubkey });
+}
+
+export async function createHostAgent(
+  input: CreateHostAgentInput,
+): Promise<ManagedAgent> {
+  const agent = await invokeTauri<RawManagedAgent>("create_host_agent", {
+    input: {
+      hostPubkey: input.hostPubkey,
+      runtime: input.runtime,
+      name: input.name,
+      personaId: input.personaId ?? null,
+      systemPrompt: input.systemPrompt ?? null,
+      model: input.model ?? null,
+      provider: input.provider ?? null,
+      envVars: input.envVars ?? {},
+    },
+  });
+  return fromRawManagedAgent(agent);
+}
+
+export async function hostAgentLogs(
+  pubkey: string,
+  lines?: number,
+): Promise<string[]> {
+  return invokeTauri<string[]>("host_agent_logs", {
+    pubkey,
+    lines: lines ?? null,
+  });
 }
 
 export async function probeBackendProvider(

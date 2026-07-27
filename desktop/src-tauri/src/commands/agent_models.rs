@@ -864,7 +864,7 @@ pub async fn update_managed_agent(
     state: State<'_, AppState>,
 ) -> Result<UpdateManagedAgentResponse, String> {
     // Phase 1: local save (synchronous, under lock)
-    let (summary, sync_params, rollback) = {
+    let (summary, sync_params, rollback, is_host_backed) = {
         let _store_guard = state
             .managed_agents_store_lock
             .lock()
@@ -993,7 +993,13 @@ pub async fn update_managed_agent(
         // update that touched only runtime/local fields is a no-op publish.
         super::agents::retain_managed_agent_pending(&app, &state, record);
 
-        let sync_params = if name_changed {
+        // Host-backed agents have no local key; the host republishes the
+        // profile when the configure op lands (Phase 2b).
+        let is_host_backed = matches!(
+            record.backend,
+            crate::managed_agents::BackendKind::Host { .. }
+        );
+        let sync_params = if name_changed && !is_host_backed {
             let agent_keys = Keys::parse(&record.private_key_nsec)
                 .map_err(|e| format!("failed to parse agent keys: {e}"))?;
             // Re-publish the renamed profile to the agent's effective relay:
@@ -1029,7 +1035,7 @@ pub async fn update_managed_agent(
             )?
         };
         let rollback = name_changed.then(|| AgentUpdateRollback::new(previous_record, record));
-        (summary, sync_params, rollback)
+        (summary, sync_params, rollback, is_host_backed)
     }; // lock dropped here
 
     try_regenerate_nest(&app);
@@ -1058,9 +1064,23 @@ pub async fn update_managed_agent(
         }
     }
 
+    // Phase 2b: push the saved config to the agent's host (`configure`) so
+    // instruction/model/env edits take effect remotely. Best-effort: the
+    // local save is authoritative and a retry is a no-op re-push.
+    let mut profile_sync_error = None;
+    if is_host_backed {
+        if let Err(e) =
+            crate::commands::agent_hosts::push_host_configure(&summary.pubkey, &app, &state).await
+        {
+            profile_sync_error = Some(format!(
+                "saved locally, but pushing the new configuration to the host failed: {e}"
+            ));
+        }
+    }
+
     Ok(UpdateManagedAgentResponse {
         agent: summary,
-        profile_sync_error: None,
+        profile_sync_error,
     })
 }
 

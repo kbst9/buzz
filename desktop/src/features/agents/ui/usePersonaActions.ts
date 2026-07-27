@@ -5,6 +5,7 @@ import {
   managedAgentsQueryKey,
   personasQueryKey,
   useAcpRuntimesQuery,
+  useCreateHostAgentMutation,
   useCreateManagedAgentMutation,
   useCreatePersonaMutation,
   useDeletePersonaMutation,
@@ -58,6 +59,7 @@ export function usePersonaActions() {
     enabled: shouldLoadAcpRuntimes,
   });
   const createAgentMutation = useCreateManagedAgentMutation();
+  const createHostAgentMutation = useCreateHostAgentMutation();
   const createPersonaMutation = useCreatePersonaMutation();
   const updatePersonaMutation = useUpdatePersonaMutation();
   const deletePersonaMutation = useDeletePersonaMutation();
@@ -173,6 +175,34 @@ export function usePersonaActions() {
           setPersonaDialogState(null);
           return true;
         }
+        // Host-backed creation goes through the dedicated command: the
+        // host generates the agent's keypair and starts it after the
+        // owner grant — there is no local spawn input to build.
+        if (startIntent?.type === "host") {
+          try {
+            const created = await createHostAgentMutation.mutateAsync({
+              hostPubkey: startIntent.hostPubkey,
+              runtime: startIntent.runtime,
+              name: persona.displayName,
+              personaId: persona.id,
+              systemPrompt: persona.systemPrompt,
+              model: persona.model ?? undefined,
+              provider: persona.provider ?? undefined,
+            });
+            setPersonaNoticeMessage(
+              `Created and started ${created.name} on its host.`,
+            );
+          } catch (error) {
+            setPersonaErrorMessage(
+              error instanceof Error
+                ? `${persona.displayName} was created, but the remote agent could not be created: ${error.message}`
+                : `${persona.displayName} was created, but the remote agent could not be created.`,
+            );
+          }
+          setPersonaDialogState(null);
+          return true;
+        }
+
         const agentInput = await buildInstanceInputForDefinition(
           persona,
           runtime,

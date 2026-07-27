@@ -337,7 +337,15 @@ export type ManagedAgentRuntimeStatus = {
 
 export type ManagedAgentBackend =
   | { type: "local" }
-  | { type: "provider"; id: string; config: Record<string, unknown> };
+  | { type: "provider"; id: string; config: Record<string, unknown> }
+  // buzz-agent-host daemon backend; snake_case fields are serde passthrough.
+  | { type: "host"; host_pubkey: string; runtime: string };
+
+export type {
+  AgentHostInfo,
+  AgentHostRuntime,
+  CreateHostAgentInput,
+} from "./agentHostTypes";
 
 export type ManagedAgent = {
   pubkey: string;

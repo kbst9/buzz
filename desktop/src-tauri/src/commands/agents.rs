@@ -1115,6 +1115,7 @@ pub async fn start_managed_agent(
     let owner_hex = workspace_owner_hex(&state)?;
     enum StartTarget {
         Local,
+        Host,
         Provider {
             backend: BackendKind,
             cached_binary_path: Option<String>,
@@ -1164,14 +1165,14 @@ pub async fn start_managed_agent(
             persona_id: record.persona_id.clone(),
         };
 
-        let target = if record.backend == BackendKind::Local {
-            StartTarget::Local
-        } else {
-            StartTarget::Provider {
+        let target = match record.backend {
+            BackendKind::Local => StartTarget::Local,
+            BackendKind::Host { .. } => StartTarget::Host,
+            BackendKind::Provider { .. } => StartTarget::Provider {
                 backend: record.backend.clone(),
                 cached_binary_path: record.provider_binary_path.clone(),
                 agent_json: build_deploy_payload(&app, &state, record)?,
-            }
+            },
         };
 
         (target, reconcile)
@@ -1181,6 +1182,7 @@ pub async fn start_managed_agent(
         StartTarget::Local => {
             start_local_agent_with_preflight(&app, &state, &pubkey, &owner_hex, false).await
         }
+        StartTarget::Host => super::agent_hosts::start_host_agent_routed(&pubkey, &app).await,
         StartTarget::Provider {
             backend: BackendKind::Provider { id, config },
             cached_binary_path,
@@ -1231,6 +1233,7 @@ pub async fn start_managed_agent(
     // profile sync at creation time failed silently. For legacy records (pre-PR-921)
     // with no persisted avatar, this also backfills the avatar from the relay.
     if result.is_ok()
+        && !reconcile_data.private_key_nsec.is_empty()
         && state
             .managed_agent_profile_reconcile_enabled
             .load(std::sync::atomic::Ordering::Acquire)
@@ -1260,6 +1263,9 @@ pub async fn stop_managed_agent(
     app: AppHandle,
 ) -> Result<ManagedAgentSummary, String> {
     use tauri::Manager;
+    if let Some(summary) = super::agent_hosts::try_stop_host_agent(&pubkey, &app).await? {
+        return Ok(summary);
+    }
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let _store_guard = state
@@ -1321,6 +1327,8 @@ pub async fn delete_managed_agent(
     app: AppHandle,
 ) -> Result<(), String> {
     use tauri::Manager;
+    let force_remote_delete =
+        super::agent_hosts::pre_delete_host_removal(&pubkey, force_remote_delete, &app).await?;
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
         {

@@ -86,6 +86,11 @@ import type {
 } from "@/features/agents/channelAgents";
 export { findReusableAgent } from "@/features/agents/agentReuse";
 export {
+  agentHostsQueryKey,
+  useAgentHostsQuery,
+  useCreateHostAgentMutation,
+} from "@/features/agents/hostAgentHooks";
+export {
   teamsQueryKey,
   useCreateTeamMutation,
   useDeleteTeamMutation,

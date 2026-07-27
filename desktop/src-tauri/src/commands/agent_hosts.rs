@@ -251,8 +251,10 @@ pub async fn create_host_agent(
     Ok(summary)
 }
 
-/// Shared body for start/stop: run the op, then stamp the record.
-async fn host_lifecycle_op(
+/// Shared body for start/stop: run the op, then stamp the record. Also the
+/// routing target for the generic `start_managed_agent`/`stop_managed_agent`
+/// commands when they encounter a Host-backed record.
+pub(crate) async fn host_lifecycle_op(
     pubkey: &str,
     app: &AppHandle,
     state: &AppState,
@@ -344,19 +346,20 @@ pub async fn stop_host_agent(
 
 /// Push the record's current configuration to the host (`configure`). The
 /// host rewrites the agent's env wholesale and restarts it if running —
-/// this is how instruction/model/env edits reach a remote agent.
-#[tauri::command]
-pub async fn configure_host_agent(
-    pubkey: String,
-    app: AppHandle,
-    state: State<'_, AppState>,
+/// this is how instruction/model/env edits reach a remote agent. Called by
+/// `update_managed_agent` after a Host-backed save, and exposed as a
+/// command for explicit re-pushes.
+pub(crate) async fn push_host_configure(
+    pubkey: &str,
+    app: &AppHandle,
+    state: &AppState,
 ) -> Result<(), String> {
     let (host_pubkey, config) = {
         let _store_guard = state
             .managed_agents_store_lock
             .lock()
             .map_err(|e| e.to_string())?;
-        let records = load_managed_agents(&app)?;
+        let records = load_managed_agents(app)?;
         let record = records
             .iter()
             .find(|r| r.pubkey == pubkey)
@@ -364,15 +367,25 @@ pub async fn configure_host_agent(
         (host_pubkey_of(record)?, host_config_for_record(record)?)
     };
     control_exchange(
-        &state,
+        state,
         &host_pubkey,
         &HostControlRequest::Configure {
-            agent: pubkey,
+            agent: pubkey.to_string(),
             config,
         },
     )
     .await?;
     Ok(())
+}
+
+/// Command wrapper over [`push_host_configure`].
+#[tauri::command]
+pub async fn configure_host_agent(
+    pubkey: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    push_host_configure(&pubkey, &app, &state).await
 }
 
 /// Remove the agent from its host (stops it and deletes host-side state,
@@ -437,5 +450,101 @@ pub async fn host_agent_logs(
     match reply {
         HostControlReply::Logs { lines, .. } => Ok(lines),
         other => Err(format!("unexpected host reply to logs: {other:?}")),
+    }
+}
+
+// ── Routing helpers for the generic lifecycle commands ──────────────────
+
+/// Host pubkey of a record, or `None` when it is not host-backed.
+fn host_pubkey_if_host_backed(
+    pubkey: &str,
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<Option<String>, String> {
+    let _store_guard = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let records = load_managed_agents(app)?;
+    Ok(records
+        .iter()
+        .find(|r| r.pubkey == pubkey)
+        .and_then(|r| match &r.backend {
+            BackendKind::Host { host_pubkey, .. } => Some(host_pubkey.clone()),
+            _ => None,
+        }))
+}
+
+/// `start_managed_agent` routing target for Host-backed records.
+pub(super) async fn start_host_agent_routed(
+    pubkey: &str,
+    app: &AppHandle,
+) -> Result<ManagedAgentSummary, String> {
+    use tauri::Manager;
+    let state = app.state::<AppState>();
+    host_lifecycle_op(
+        pubkey,
+        app,
+        &state,
+        |agent| HostControlRequest::Start { agent },
+        true,
+    )
+    .await
+}
+
+/// `stop_managed_agent` pre-step: stop over the relay when the record is
+/// host-backed. Returns `Ok(None)` for non-host records (caller proceeds
+/// with the local-process path).
+pub(super) async fn try_stop_host_agent(
+    pubkey: &str,
+    app: &AppHandle,
+) -> Result<Option<ManagedAgentSummary>, String> {
+    use tauri::Manager;
+    let state = app.state::<AppState>();
+    if host_pubkey_if_host_backed(pubkey, app, &state)?.is_none() {
+        return Ok(None);
+    }
+    host_lifecycle_op(
+        pubkey,
+        app,
+        &state,
+        |agent| HostControlRequest::Stop { agent },
+        false,
+    )
+    .await
+    .map(Some)
+}
+
+/// `delete_managed_agent` pre-step for host-backed records: remove the
+/// agent from its host first (stops the child and deletes host-side state
+/// including the agent key). On success the local delete proceeds as a
+/// confirmed remote removal; on failure the deployed-remote guard still
+/// requires an explicit force so a live remote agent is never silently
+/// orphaned. Non-host records pass through unchanged.
+pub(super) async fn pre_delete_host_removal(
+    pubkey: &str,
+    force_remote_delete: Option<bool>,
+    app: &AppHandle,
+) -> Result<Option<bool>, String> {
+    use tauri::Manager;
+    let state = app.state::<AppState>();
+    let Some(host_pubkey) = host_pubkey_if_host_backed(pubkey, app, &state)? else {
+        return Ok(force_remote_delete);
+    };
+    match control_exchange(
+        &state,
+        &host_pubkey,
+        &HostControlRequest::Remove {
+            agent: pubkey.to_string(),
+        },
+    )
+    .await
+    {
+        Ok(_) => Ok(Some(true)),
+        Err(e) if !force_remote_delete.unwrap_or(false) => Err(format!(
+            "could not remove the agent from its host: {e}. \
+             Delete again with force to drop only the local record."
+        )),
+        Err(_) => Ok(force_remote_delete),
     }
 }
