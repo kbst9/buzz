@@ -23,6 +23,7 @@ tracing-subscriber = { workspace = true }
 zeroize = { workspace = true }
 
 clap = { version = "4", features = ["derive", "env"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 toml = "1.0"
 
 [dev-dependencies]

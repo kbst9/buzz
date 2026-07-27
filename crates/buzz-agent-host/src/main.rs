@@ -30,6 +30,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
+    // Install ring as the process-level rustls CryptoProvider — required to
+    // dial wss:// relays, since the workspace dependency graph enables more
+    // than one provider feature and rustls refuses to pick one itself.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let args = Args::parse();
     let config = buzz_agent_host::HostConfig::load(&args.config)?;
     let keys = buzz_agent_host::state::load_or_generate_daemon_keys(&config.state_dir)?;
