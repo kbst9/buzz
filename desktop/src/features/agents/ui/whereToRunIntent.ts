@@ -15,6 +15,20 @@ export const emptyWhereToRunDraft: WhereToRunDraft = {
   probedProvider: null,
 };
 
+/**
+ * Merge schema defaults under whatever the operator has already entered.
+ *
+ * A probe can resolve at any time — on provider selection, or again on a later
+ * render — and must never discard input. Defaults seed *empty* fields only;
+ * existing values always win.
+ */
+export function seedProviderConfigDefaults(
+  current: Record<string, string>,
+  defaults: Record<string, string>,
+): Record<string, string> {
+  return { ...defaults, ...current };
+}
+
 export function providerConfigComplete(draft: WhereToRunDraft): boolean {
   if (draft.runOn === "local") return true;
   if (!draft.probedProvider) return false;

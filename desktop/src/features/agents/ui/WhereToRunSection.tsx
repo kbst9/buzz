@@ -5,7 +5,11 @@ import { useBackendProvidersQuery } from "@/features/agents/hooks";
 import { probeBackendProvider } from "@/shared/api/tauri";
 
 import { ProviderConfigFields } from "./ProviderConfigFields";
-import { emptyWhereToRunDraft, type WhereToRunDraft } from "./whereToRunIntent";
+import {
+  emptyWhereToRunDraft,
+  seedProviderConfigDefaults,
+  type WhereToRunDraft,
+} from "./whereToRunIntent";
 
 /** Optional remote-backend selector. Buzz shared compute is an LLM provider, not a run destination. */
 export function WhereToRunSection({
@@ -25,6 +29,15 @@ export function WhereToRunSection({
       backendProviders.find((provider) => provider.id === draft.runOn) ?? null,
     [backendProviders, draft.runOn],
   );
+
+  // The probe writes `providerConfig`, so it must not also *depend* on the draft
+  // that holds it: every keystroke would retrigger the probe and overwrite the
+  // field the operator was typing into. Read the live draft and callback through
+  // refs and key the effect on the provider identity alone.
+  const draftRef = React.useRef(draft);
+  draftRef.current = draft;
+  const onDraftChangeRef = React.useRef(onDraftChange);
+  onDraftChangeRef.current = onDraftChange;
 
   React.useEffect(() => {
     if (!isProviderMode || !selectedBackendProvider) {
@@ -47,10 +60,16 @@ export function WhereToRunSection({
           if (property.default != null)
             defaults[key] = String(property.default);
         }
-        onDraftChange({
-          ...draft,
+        const current = draftRef.current;
+        onDraftChangeRef.current({
+          ...current,
           probedProvider: result,
-          providerConfig: defaults,
+          // Schema defaults seed empty fields only — anything already entered
+          // wins, so a late or repeated probe never discards operator input.
+          providerConfig: seedProviderConfigDefaults(
+            current.providerConfig,
+            defaults,
+          ),
         });
       })
       .catch((error: unknown) => {
@@ -61,7 +80,7 @@ export function WhereToRunSection({
     return () => {
       cancelled = true;
     };
-  }, [draft, isProviderMode, onDraftChange, selectedBackendProvider]);
+  }, [isProviderMode, selectedBackendProvider]);
 
   if (backendProviders.length === 0) return null;
 

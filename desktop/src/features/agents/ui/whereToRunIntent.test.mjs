@@ -6,6 +6,7 @@ import {
   emptyWhereToRunDraft,
   providerConfigComplete,
   resolveBackendIntent,
+  seedProviderConfigDefaults,
 } from "./whereToRunIntent.ts";
 
 const probed = {
@@ -57,5 +58,29 @@ test("provider draft resolves with coerced config values", () => {
     type: "provider",
     id: "blox",
     config: { region: "us", size: 3 },
+  });
+});
+
+test("probe defaults seed empty fields without discarding operator input", () => {
+  const defaults = { host: "srv", user: "", runtime: "claude" };
+
+  // Fresh selection: defaults populate the form.
+  assert.deepEqual(seedProviderConfigDefaults({}, defaults), defaults);
+
+  // A re-probe must not revert what the operator typed. Regression test for the
+  // effect that depended on the draft it wrote, which reset every keystroke.
+  assert.deepEqual(
+    seedProviderConfigDefaults(
+      { user: "buzz-codex", runtime: "codex" },
+      defaults,
+    ),
+    { host: "srv", user: "buzz-codex", runtime: "codex" },
+  );
+
+  // Empty strings the operator cleared are still their choice, not "unset".
+  assert.deepEqual(seedProviderConfigDefaults({ host: "" }, defaults), {
+    host: "",
+    user: "",
+    runtime: "claude",
   });
 });
