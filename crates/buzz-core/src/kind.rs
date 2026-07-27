@@ -813,8 +813,8 @@ const _: () = assert!(is_parameterized_replaceable(KIND_PERSONA)); // 30175 ∈ 
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM)); // 30176 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_MANAGED_AGENT)); // 30177 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_AGENT_HOST_ANNOUNCE)); // 30178 ∈ 30000–39999
-// Agent-host control frames must be ephemeral — they can carry provider env
-// vars and log tails, and the relay must never persist them.
+                                                                               // Agent-host control frames must be ephemeral — they can carry provider env
+                                                                               // vars and log tails, and the relay must never persist them.
 const _: () = assert!(is_ephemeral(KIND_AGENT_HOST_CONTROL)); // 24300 ∈ 20000–29999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_EVENT_REMINDER)); // 30300 ∈ 30000–39999

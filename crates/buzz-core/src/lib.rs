@@ -20,6 +20,8 @@ pub mod event;
 pub mod filter;
 /// Git permission types — ref patterns, protection rules, policy evaluation.
 pub mod git_perms;
+/// Agent-host protocol — announce/control wire types and NIP-44 envelope.
+pub mod host;
 /// Buzz kind number registry — custom event type constants.
 pub mod kind;
 /// Network utilities — SSRF-safe IP classification.
