@@ -145,8 +145,32 @@ advertised, erroring with the valid values when one is unknown.
 
 ## 5. Exposure — reuse Cloudflare Access
 
+**This design has no SSH dependency.** The protocol is WebSocket + JSON-RPC end to
+end. Three layers are easy to conflate:
+
+| Layer | SSH? |
+|---|---|
+| `buzz-acp` ↔ goose protocol | No — WebSocket only |
+| Reachability from the Mac | A tunnel is needed; SSH is one option and not the recommended one |
+| Always-on harnesses on the host | No tunnel at all — `ws://127.0.0.1:3284/acp`, same machine |
+
+Contrast [buzz-backend-ssh](../crates/buzz-backend-ssh/README.md), which genuinely
+depends on SSH: it pipes a shell script over `ssh` and needs passwordless sudo on
+the target. Nothing here does, which is why revoking a teammate is an Access
+policy change rather than an `authorized_keys` edit.
+
 `goose serve` binds loopback by default. **Keep it there and never publish it.**
-Reuse the mechanism the SSH config already uses (`ProxyCommand cloudflared access ssh`):
+Reuse the mechanism the SSH config already uses (`ProxyCommand cloudflared access ssh`),
+in its TCP form:
+
+```bash
+# on the Mac — Access-authenticated local port, no SSH
+cloudflared access tcp --hostname goose.gradientcm.com --url 127.0.0.1:13284
+```
+
+`cloudflared access tcp` is confirmed present in the installed cloudflared
+(`tcp, rdp, ssh, smb` share one command). The `ws://127.0.0.1:13284/acp` used
+throughout this doc is the near end of that tunnel.
 
 | Option | Gate | Verdict |
 |---|---|---|
@@ -252,8 +276,10 @@ Generalize beyond model; validate against the session's advertised options.
 config options.
 
 ### Step 5 — Mac: Access sidecar + custom harnesses
-`cloudflared access` to a local port; one JSON per remote provider in
-`<app-data>/custom_harnesses/`.
+`cloudflared access tcp --hostname goose.gradientcm.com --url 127.0.0.1:13284`
+(no SSH), plus one JSON per remote provider in `<app-data>/custom_harnesses/`.
+Requires a Cloudflare public hostname for goose with an Access policy on it —
+the tunnel terminates at the host's loopback, so goose itself stays unpublished.
 *Accept:* `Claude (gradient)` appears in the runtime dropdown; an agent created on
 it answers an `@mention`; the work happens on the server.
 
