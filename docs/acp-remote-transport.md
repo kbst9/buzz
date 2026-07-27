@@ -1,6 +1,6 @@
 # Remote ACP transport — one `goose serve`, many providers
 
-**Status:** design, not yet implemented
+**Status:** design, ready to implement
 **Branch:** `feat/acp-remote-transport`
 **Verified against:** `kbst9/buzz` @ `37420764`, goose `1.44.0`
 **Related:** [remote-runtime-agents.md](remote-runtime-agents.md) · [remote-agent-host.md](remote-agent-host.md)
@@ -10,20 +10,20 @@
 ## 1. Summary
 
 Teach `buzz-acp` to dial an ACP endpoint over WebSocket instead of spawning a
-local child. Point it at a `goose serve` on the always-on host. goose fronts
-Claude, Codex, Grok and others through **your existing subscriptions**, and the
-provider, model, and thinking effort are selected **per session over ACP**.
+local child, and point it at one `goose serve` on the always-on host. goose fronts
+Claude, Codex and Grok through **existing subscriptions**, with provider, model,
+mode and thinking effort selected **per session over ACP**.
 
-This is the smallest change that gives Desktop-configured remote execution — one
-new transport in one crate, no backend provider, no daemon, no fork of the
-desktop app.
+The only code change anywhere is a transport in `buzz-acp`. The agent-config
+dropdown entry — literally `Claude (gradient)` — needs **no code at all**: Buzz
+already loads user-defined runtimes from JSON (§6).
 
-## 2. What was verified (not assumed)
+## 2. What was verified
 
-Everything below was tested against goose 1.44.0 on `gradient-ssh`.
+Tested against goose 1.44.0 on `gradient-ssh`, not assumed.
 
-**ACP works over WebSocket.** Using `tokio-tungstenite` — the client stack
-`buzz-acp` already links for the relay — against `goose serve`:
+**ACP works over WebSocket**, using `tokio-tungstenite` — the stack `buzz-acp`
+already links for the relay:
 
 ```
 handshake: HTTP 101 Switching Protocols
@@ -32,226 +32,251 @@ handshake: HTTP 101 Switching Protocols
      "agentInfo":{"name":"goose","version":"1.44.0"}}}
 ```
 
-Reproduce with `cargo run -p buzz-acp --example acp_ws_probe -- <url> <secret>`.
+Reproduce: `cargo run -p buzz-acp --example acp_ws_probe -- <url> <secret>`.
 
 **Endpoint shape.** `/acp` is the WebSocket route — `401` unauthenticated, `406`
-without an upgrade. Auth is the `X-Secret-Key` header backed by
-`GOOSE_SERVER__SECRET_KEY`. `/health` and `/status` are unauthenticated. Defaults
-bind `127.0.0.1:3284`; `--tls` available; `--dangerously-unauthenticated` exists
-and should never be used.
+without an upgrade. Auth is `X-Secret-Key` backed by `GOOSE_SERVER__SECRET_KEY`.
+`/health` and `/status` are unauthenticated. Defaults bind `127.0.0.1:3284`.
 
-**goose reuses already-authenticated CLIs.** Provider ids ending `-acp` shell out
-to an authenticated CLI rather than taking an API key. End-to-end on the server:
+**goose reuses authenticated CLIs.** End-to-end, no API keys:
 
 ```
 ● new session · claude-acp current  →  GOOSE_VIA_CLAUDE_OK   (Claude Max)
 ● new session · codex-acp  current  →  GOOSE_VIA_CODEX_OK    (ChatGPT Plus/Pro)
 ```
 
-**Env vars alone configure it.** With `~/.config/goose/config.yaml` removed,
-`GOOSE_PROVIDER=claude-acp GOOSE_MODEL=current` works. No config file, no
-`*_configured` flag.
+**Env vars alone configure it** — with `config.yaml` deleted,
+`GOOSE_PROVIDER=claude-acp GOOSE_MODEL=current` works.
 
-### 2.1 The correction: you do **not** need one `goose serve` per provider
+### 2.1 One instance, not one per provider
 
-`session/new` returns provider as a **per-session config option**:
+`session/new` advertises provider as a per-session config option:
 
 ```
 modes   : [auto, approve, smart_approve, chat]   current: auto
-option 'provider'        type=select  current='claude-acp'  count=71
+option 'provider'        select  current='claude-acp'  count=71
    subscription-backed: amp-acp, claude-acp, codex-acp, copilot-acp,
                         cursor-agent, gemini_oauth, pi-acp, xai_oauth
-option 'model'           type=select  current='current'     count=6
-option 'mode'            type=select  current='auto'        count=4
-option 'thinking_effort' type=select  current='off'
+option 'model'           select  current='current'     count=6
+option 'mode'            select  current='auto'        count=4
+option 'thinking_effort' select  current='off'
 ```
 
-**One instance serves all 71 providers**, switched per session via
-`session/set_config_option` — a request `buzz-acp` already implements
-(`acp.rs:622`). So the topology is one unit, one port, one endpoint to discover.
+A single instance switches provider per session via `session/set_config_option`,
+which `buzz-acp` already implements (`acp.rs:622`). One unit, one port, one
+endpoint.
 
-Two consequences worth noting:
+`xai_oauth` is *"xAI (SuperGrok Subscription)… OAuth instead of an API key.
+Falls back to a device-code flow on headless / remote machines."*
 
-- `xai_oauth` is *"xAI (SuperGrok Subscription)… OAuth instead of an API key.
-  Falls back to a device-code flow on headless / remote machines"* — Grok on a
-  subscription, answering the original question that started this work.
-- `thinking_effort` is a session config option. Effort **cannot** cross the host
-  boundary in the deploy-payload design (it isn't in the payload at all), but it
-  *can* here, because ACP carries it. This route closes the effort gap.
+`thinking_effort` being a session option matters: effort is **absent from the
+deploy payload entirely**, so the provider/daemon designs cannot carry it. ACP can.
 
-## 3. Architecture
+## 3. Architecture — one goose, two harness lifecycles
 
 ```
-    Mac                                        gradient-ssh
-┌─────────────┐                            ┌────────────────────────┐
-│ Buzz Desktop│ spawns                     │  goose serve (one)     │
-│   └─ buzz-acp ──── wss + X-Secret-Key ──▶│    /acp                │
-└─────────────┘                            │      ├ claude-acp ─▶ claude CLI (Max)
-       │ relay ws                          │      ├ codex-acp  ─▶ codex CLI (ChatGPT)
-       ▼                                   │      └ xai_oauth  ─▶ SuperGrok
-   buzz relay                              └────────────────────────┘
+                          gradient-ssh
+                    ┌──────────────────────────────────────┐
+                    │  goose serve  (one, 127.0.0.1:3284)  │
+                    │    ├ claude-acp ─▶ claude CLI (Max)  │
+                    │    ├ codex-acp  ─▶ codex CLI (ChatGPT)│
+                    │    └ xai_oauth  ─▶ SuperGrok         │
+                    └──────┬─────────────────────┬─────────┘
+       ws://127.0.0.1:3284 │                     │ via Access tunnel
+                    ┌──────▼───────┐      ┌──────▼──────────────┐
+                    │ systemd      │      │ Desktop-spawned     │
+                    │ buzz-acp ×N  │      │ buzz-acp            │
+                    │ ALWAYS ON    │      │ interactive         │
+                    └──────────────┘      └─────────────────────┘
 ```
 
-`buzz-acp` still runs where Desktop spawns it. **Execution and inference move;
-liveness does not** — close the laptop and the agent stops answering. That limit
-is inherent to every "Desktop configures it" design and is why the systemd agents
-already running on the host remain the answer for always-on work.
+Two classes of agent with honestly different lifecycles, sharing one execution
+layer. The systemd harnesses already running on the host keep answering when the
+laptop is shut; Desktop-spawned ones do not. That is not a compromise to fix —
+it is the distinction made explicit, and it lets the existing five agents move
+onto goose and gain provider/effort switching.
 
 ## 4. Changes to `buzz-acp`
 
 ### 4.1 `BUZZ_ACP_AGENT_URL` — the transport
 
-Today `AcpClient::spawn` builds a `tokio::process::Command`, pipes stdin/stdout,
-and uses `process_group(0)` so the tree can be killed. The new path swaps those
-pipes for a socket:
-
 ```rust
-#[arg(long, env = "BUZZ_ACP_AGENT_URL", conflicts_with = "agent_command")]
+/// When set, connect to this ACP endpoint instead of spawning a child.
+/// Takes precedence over `--agent-command`.
+#[arg(long, env = "BUZZ_ACP_AGENT_URL")]
 pub agent_url: Option<String>,
 
-#[arg(long, env = "BUZZ_ACP_AGENT_SECRET")]   // sent as X-Secret-Key
+/// Sent as the `X-Secret-Key` header.
+#[arg(long, env = "BUZZ_ACP_AGENT_SECRET")]
 pub agent_secret: Option<String>,
 ```
 
-The JSON-RPC framing layer above is unchanged — it already reads and writes
-newline-delimited JSON objects. Only the byte source differs, so `session/new`,
-`session/prompt`, `session/update`, `session/cancel` and the permission flow all
-work untouched.
+**The URL must *override* the command, not conflict with it.** A `conflicts_with`
+would be the obvious choice and is wrong: Desktop always sets
+`BUZZ_ACP_AGENT_COMMAND` from the runtime catalog, so a conflict would make every
+Desktop-launched agent fail. Precedence with a log line at startup is correct.
 
-Deliberate design points:
+The JSON-RPC framing above the transport is unchanged — it already reads and
+writes newline-delimited JSON objects, so `session/new`, `session/prompt`,
+`session/update`, `session/cancel` and the permission flow are untouched.
 
-- **`conflicts_with`** — a URL and a command are mutually exclusive. Silently
-  preferring one would make misconfiguration invisible.
-- **No process-group kill.** Cancellation becomes `session/cancel` plus closing
-  the socket. The existing `kill_process_group` path must be skipped, not called
-  with a bogus pid.
-- **Reconnect.** A dropped socket must not be a dead agent. Reconnect with
-  bounded backoff and surface the state, mirroring how the relay connection
-  already behaves.
-- **Idle timeout** (`BUZZ_ACP_IDLE_TIMEOUT`, default 620s) currently resets on
-  agent stdout activity; it should reset on inbound frames instead.
+Three things that are **not** just a pipe swap:
+
+- **Cancellation.** `kill_process_group` has no meaning here. Cancel becomes
+  `session/cancel` plus closing the socket; the kill path must be skipped, not
+  called with a fabricated pid.
+- **Reconnect.** A dropped socket must not read as a dead agent. Bounded backoff,
+  mirroring the relay connection's existing behaviour.
+- **Idle timeout.** `BUZZ_ACP_IDLE_TIMEOUT` (default 620s) currently resets on
+  child stdout activity; it must reset on inbound frames.
 
 ### 4.2 `BUZZ_ACP_CONFIG_OPTIONS` — provider, effort, mode
 
-`buzz-acp` can already set the **model** config option (`BUZZ_ACP_MODEL`,
-`extract_model_config_options`). goose exposes three more — `provider`,
-`mode`, `thinking_effort` — through the same `session/set_config_option` request.
-
-A small generalization covers all of them:
+`buzz-acp` can already set the **model** option (`BUZZ_ACP_MODEL`,
+`extract_model_config_options`). goose exposes three more through the same
+request. Generalize:
 
 ```
 BUZZ_ACP_CONFIG_OPTIONS=provider=claude-acp,thinking_effort=high
 ```
 
-Applied after `session/new`, validated against the `configOptions` that session
-actually advertised, with a clear error naming the valid values when one is
-unknown. This is how a Desktop persona chooses Claude vs Codex vs Grok on a
-remote goose.
+Applied after `session/new`, validated against the options that session actually
+advertised, erroring with the valid values when one is unknown.
 
-## 5. Discovery and registration
+## 5. Exposure — reuse Cloudflare Access
 
-The question you asked, and it gets much easier now that it is **one endpoint per
-host** rather than one per provider. Three tiers, each usable alone.
+`goose serve` binds loopback by default. **Keep it there and never publish it.**
+Reuse the mechanism the SSH config already uses (`ProxyCommand cloudflared access ssh`):
 
-### Tier 1 — static URL (no infrastructure)
-
-Set on a persona or agent in Desktop:
-
-```
-BUZZ_ACP_AGENT_URL    = wss://goose.gradientcm.com/acp
-BUZZ_ACP_AGENT_SECRET = <shared secret>
-BUZZ_ACP_CONFIG_OPTIONS = provider=claude-acp
-```
-
-Desktop merges global < persona < agent env vars into what the harness receives,
-so this works today with no code beyond §4. Good enough for one operator.
-
-### Tier 2 — relay announcement (recommended for more than one person)
-
-A host publishes a **replaceable, secret-free** event listing its endpoints:
-
-```jsonc
-{ "kind": 30178, "tags": [["d","gradient"]],
-  "content": { "label": "gradient",
-               "endpoints": [{ "id":"goose", "url":"wss://goose.gradientcm.com/acp",
-                               "kind":"acp", "providers":["claude-acp","codex-acp","xai_oauth"] }] } }
-```
-
-The elegant part: **`buzz-acp` is already connected to the relay with its own
-identity**, so it can resolve a logical name — `BUZZ_ACP_AGENT_URL=buzz://gradient/goose`
-— by querying for the announcement. No new client, no new credential, no separate
-discovery service. Membership is the gate, exactly as everywhere else in Buzz.
-
-This is the same `kind:30178` proposed in [remote-agent-host.md](remote-agent-host.md),
-but carrying only endpoints rather than deployment capability — a much smaller
-thing to specify and to trust.
-
-### Tier 3 — the catalog (upstream)
-
-Announcements feed `runtimes: [...]` on `AcpRuntimeCatalogEntry`, so Desktop's own
-runtime dropdown shows `claude (gradient)` beside `claude (this computer)`. Only
-this tier makes the UI *honest* about where an agent runs; Tiers 1 and 2 work
-while the dropdown still describes the local machine. Requires the Rust catalog
-change — `AGENTS.md` forbids a TypeScript shim.
-
-## 6. Exposing the endpoint
-
-`goose serve` binds `127.0.0.1` by default — keep it that way. The harness on the
-Mac needs network reach, so pick one:
-
-| Option | Auth | Notes |
+| Option | Gate | Verdict |
 |---|---|---|
-| cloudflared public hostname | `X-Secret-Key` only | Simplest; a shared secret is the *only* gate. Weaker than the relay's nostr auth |
-| cloudflared + Access service token | Access **and** secret | Harness must send `CF-Access-Client-Id/Secret`; it is a plain HTTP client, so it can |
-| SSH tunnel | SSH | No new exposure; requires a tunnel to be up |
+| `cloudflared access` on the Mac → host loopback | Access identity, then goose secret | **Recommended.** No public hostname, no new ingress; goose's secret is defence in depth |
+| Public hostname + `CF-Access-Client-Id/Secret` from the harness | Access service token + secret | Works, no sidecar, but goose is internet-facing |
+| Public hostname, secret only | shared secret | Rejected — one string between the internet and your subscriptions |
 
-Do not use `--dangerously-unauthenticated`. Do not bind `0.0.0.0` — recall that
-Docker's published ports already bypass ufw on this host, so "the firewall will
-catch it" is not a safe assumption.
+Never `--dangerously-unauthenticated`. Never bind `0.0.0.0`: on this host Docker's
+published ports already bypass ufw, so "the firewall will catch it" is unsafe.
 
-## 7. Implementation steps
+A NIP-98-validating reverse proxy would make authorization nostr like everything
+else in Buzz. Rejected for now: new privileged code guarding your subscriptions,
+to replace a mechanism you already operate.
 
-**Step 1 — transport.** `BUZZ_ACP_AGENT_URL` + `BUZZ_ACP_AGENT_SECRET`, with the
-framing layer untouched. Skip process-group kill on the URL path.
-*Accept:* the existing `acp_ws_probe` handshake, driven through `AcpClient`
-rather than the example.
+### 5.1 Pin the adapter paths
 
-**Step 2 — transport parity tests.** Run the existing ACP test suite against both
-a spawned child and a socket, so neither path can regress alone.
-*Accept:* same assertions pass for both transports.
+goose honours per-adapter command overrides — `CLAUDE_CODE_COMMAND`,
+`CODEX_COMMAND`, `CURSOR_AGENT_COMMAND`, `GEMINI_CLI_COMMAND`. Set absolute paths
+in the unit so the `@zed-industries` vs `@agentclientprotocol` package ambiguity
+cannot bite.
 
-**Step 3 — reconnect and cancellation.** Backoff on drop; `session/cancel` plus
-socket close replaces killing a process tree.
-*Accept:* killing `goose serve` mid-turn surfaces a clean error and recovers on
-restart, rather than hanging until the idle timeout.
+## 6. The UI: `Claude (gradient)` with no code
 
-**Step 4 — `BUZZ_ACP_CONFIG_OPTIONS`.** Generalize beyond model; validate against
-the session's advertised options.
-*Accept:* one goose endpoint runs a Claude agent and a Codex agent concurrently,
-distinguished only by config options.
+`custom_harnesses.rs` is a loader for **user-defined ACP runtimes**: *"Users drop
+JSON files into `<app-data>/custom_harnesses/` to register arbitrary ACP-speaking
+agents without modifying the app or opening a PR."*
 
-**Step 5 — host unit.** A single `goose serve` systemd unit, loopback-bound, with
-a secret from an `EnvironmentFile`, plus the chosen exposure from §6.
-*Accept:* survives reboot; `/health` reachable through the tunnel.
+`HarnessDefinition` is `{ id, label, command, args, env, install_instructions_url,
+install_hint }`, and **`env` is injected at spawn time on the harness process** —
+which is exactly what reads `BUZZ_ACP_AGENT_URL`. So one file per remote provider:
 
-**Step 6 — Tier 2 discovery.** Announcement publisher plus `buzz://host/endpoint`
-resolution inside the harness.
-*Accept:* an agent configured with a logical name deploys with no URL anywhere in
-its config.
+```json
+{
+  "id": "claude-gradient",
+  "label": "Claude (gradient)",
+  "command": "true",
+  "env": {
+    "BUZZ_ACP_AGENT_URL": "ws://127.0.0.1:13284/acp",
+    "BUZZ_ACP_AGENT_SECRET": "…",
+    "BUZZ_ACP_CONFIG_OPTIONS": "provider=claude-acp"
+  },
+  "install_hint": "Requires the Access tunnel to gradient-ssh to be up."
+}
+```
 
-## 8. Limits and risks
+Drop in `codex-gradient.json` and `grok-gradient.json` alongside, and the runtime
+dropdown reads:
 
-- **No always-on.** The harness lives with Desktop. This design moves execution,
-  never liveness.
-- **Three hops.** `buzz-acp → goose → claude-agent-acp → claude`. Each adds
-  latency and a failure mode, and `GOOSE_MODEL: current` defers real model choice
-  to the inner adapter — you are selecting a provider more than a model.
-- **Shared-secret auth** is weaker than the nostr authorization used everywhere
-  else in Buzz. Tier 2 discovery does not fix this; only Access service tokens or
-  a nostr-authenticated endpoint would.
-- **Adapter package drift.** goose's help says `@zed-industries/codex-acp`; this
-  host has `@agentclientprotocol/codex-acp`. Same binary name, two orgs — a
-  future install could shadow the other.
-- **Only goose serves ACP over a network.** `claude-agent-acp`, `codex-acp` and
-  `hermes acp` are stdio-only, so goose is doing real work here as a multiplexer,
-  not merely a passthrough.
+```
+Claude Code            (this computer)
+Claude (gradient)
+Codex (gradient)
+Grok (gradient)
+```
+
+Personas pin them, teams contain them, and everything downstream behaves normally
+because these are ordinary managed agents.
+
+Constraints, from the loader's own rules:
+
+- **`command` is vestigial** under a URL transport but must be non-empty and is
+  probed locally for availability. `"true"` satisfies the probe honestly enough;
+  leaving a real name shows *unavailable*, which you said is acceptable.
+- **No id collisions with built-ins** — `check_id_collision` rejects `claude`,
+  `goose`, etc. Hence `claude-gradient`.
+- **No custom avatars and no auto-install**, both deliberate security choices in
+  the loader. Custom entries get a generic icon.
+- Definition `env` **loses** to Buzz-injected vars, so it cannot hijack
+  `BUZZ_PRIVATE_KEY` or `BUZZ_MANAGED_AGENT`.
+
+This is the significant find: it makes upstream catalog work **optional**, not a
+prerequisite. The label carries the host, so the dropdown stops lying without
+touching `AcpRuntimeCatalogEntry`.
+
+## 7. Implementation plan
+
+### Step 0 — host: one `goose serve` unit
+`/etc/systemd/system/goose-serve.service`, `User=` a dedicated account,
+`--host 127.0.0.1 --port 3284`, `EnvironmentFile` holding
+`GOOSE_SERVER__SECRET_KEY`, plus `GOOSE_PROVIDER`/`GOOSE_MODEL` defaults and the
+pinned `*_COMMAND` paths from §5.1.
+*Accept:* survives reboot; `/health` 200 on loopback; `/acp` 401 without the key.
+
+### Step 1 — `buzz-acp`: transport
+`config.rs` gains `agent_url`/`agent_secret`; `acp.rs` gains a connect path
+alongside spawn. URL takes precedence over command, logged at startup.
+*Accept:* `AcpClient` completes `initialize` against `goose serve` — the probe's
+handshake, driven through the real client rather than the example.
+
+### Step 2 — parity tests
+Run the existing ACP suite against both transports so neither can regress alone.
+*Accept:* identical assertions pass for spawned-child and socket.
+
+### Step 3 — cancellation, reconnect, idle timeout
+`session/cancel` + close replaces process-group kill; bounded backoff on drop;
+idle timer resets on inbound frames.
+*Accept:* killing `goose serve` mid-turn yields a clean error and recovery on
+restart, instead of hanging to the idle timeout.
+
+### Step 4 — `BUZZ_ACP_CONFIG_OPTIONS`
+Generalize beyond model; validate against the session's advertised options.
+*Accept:* two agents on one endpoint, one Claude and one Codex, differing only in
+config options.
+
+### Step 5 — Mac: Access sidecar + custom harnesses
+`cloudflared access` to a local port; one JSON per remote provider in
+`<app-data>/custom_harnesses/`.
+*Accept:* `Claude (gradient)` appears in the runtime dropdown; an agent created on
+it answers an `@mention`; the work happens on the server.
+
+### Step 6 — migrate the existing five (optional)
+Point the systemd harnesses at `ws://127.0.0.1:3284/acp` with
+`BUZZ_ACP_CONFIG_OPTIONS=provider=…`, gaining provider and effort switching while
+staying always-on.
+*Accept:* each still answers, now with effort configurable.
+
+### Step 7 — relay discovery (optional, for more than one operator)
+Host publishes a replaceable, secret-free endpoint announcement; `buzz-acp`
+resolves `buzz://gradient/goose` over the relay connection **it already has**, so
+no new client or credential. Replaces hand-written URLs in the JSON files.
+*Accept:* an agent configured with a logical name runs with no URL in its config.
+
+## 8. Limits
+
+- **No always-on for Desktop-spawned agents.** Structural, addressed by the
+  two-lifecycle split rather than solved.
+- **Three hops** — `buzz-acp → goose → claude-agent-acp → claude`. Reframed: goose
+  *is* the ACP gateway you would otherwise write, since the other adapters are
+  stdio-only. The hop buys the network transport, 71 providers, and effort.
+- **`GOOSE_MODEL: current`** defers real model choice to the inner adapter, so you
+  are selecting a provider more than a model.
+- **Shared-secret auth** remains goose's own mechanism; Access is what makes it
+  acceptable, not the secret itself.
