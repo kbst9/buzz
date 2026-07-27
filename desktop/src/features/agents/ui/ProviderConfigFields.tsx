@@ -1,5 +1,7 @@
 import { Input } from "@/shared/ui/input";
 
+import { enumOptionsFor, needsBlankOption } from "./providerConfigSchema";
+
 /// Coerce string config values to their schema-declared types (number, boolean).
 /// Providers receive JSON — sending "3" instead of 3 for an integer field breaks
 /// typed config parsing on the provider side.
@@ -51,33 +53,55 @@ export function ProviderConfigFields({
 
   return (
     <div className="space-y-3">
-      {entries.map(([key, prop]) => (
-        <div key={key} className="space-y-1.5">
-          <label
-            className="text-sm font-medium"
-            htmlFor={`provider-cfg-${key}`}
-          >
-            {typeof prop.title === "string" ? prop.title : key}
-            {required.has(key) ? (
-              <span className="ml-1 text-destructive">*</span>
+      {entries.map(([key, prop]) => {
+        const value =
+          config[key] ?? (typeof prop.default === "string" ? prop.default : "");
+        const options = enumOptionsFor(prop, value);
+        return (
+          <div key={key} className="space-y-1.5">
+            <label
+              className="text-sm font-medium"
+              htmlFor={`provider-cfg-${key}`}
+            >
+              {typeof prop.title === "string" ? prop.title : key}
+              {required.has(key) ? (
+                <span className="ml-1 text-destructive">*</span>
+              ) : null}
+            </label>
+            {options ? (
+              <select
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
+                id={`provider-cfg-${key}`}
+                onChange={(e) => onChange({ ...config, [key]: e.target.value })}
+                value={value}
+              >
+                {needsBlankOption(value, options) ? (
+                  <option value="">—</option>
+                ) : null}
+                {options.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <Input
+                id={`provider-cfg-${key}`}
+                onChange={(e) => onChange({ ...config, [key]: e.target.value })}
+                placeholder={
+                  typeof prop.description === "string" ? prop.description : ""
+                }
+                value={value}
+              />
+            )}
+            {typeof prop.description === "string" ? (
+              <p className="text-xs text-muted-foreground">
+                {prop.description}
+              </p>
             ) : null}
-          </label>
-          <Input
-            id={`provider-cfg-${key}`}
-            onChange={(e) => onChange({ ...config, [key]: e.target.value })}
-            placeholder={
-              typeof prop.description === "string" ? prop.description : ""
-            }
-            value={
-              config[key] ??
-              (typeof prop.default === "string" ? prop.default : "")
-            }
-          />
-          {typeof prop.description === "string" ? (
-            <p className="text-xs text-muted-foreground">{prop.description}</p>
-          ) : null}
-        </div>
-      ))}
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -19,6 +19,13 @@ pub struct Config {
     /// Remote Unix user pre-filled into the `user` field. Defaults to the SSH
     /// login user when unset.
     pub default_user: Option<String>,
+    /// Extra Unix users to probe besides the SSH login user.
+    ///
+    /// Runtimes are frequently per-user — hermes installs into `~/.local/bin`,
+    /// so it is invisible unless probed as the account that owns it. Listing
+    /// those accounts here makes them selectable in Desktop instead of requiring
+    /// the operator to know the name by heart.
+    pub users: Vec<String>,
     /// Base directory for agent working directories; the agent id is appended.
     pub workdir_base: Option<String>,
     /// systemd unit name prefix. Keep the default unless it collides.

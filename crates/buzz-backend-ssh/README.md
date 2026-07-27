@@ -48,15 +48,25 @@ commented):
 ```toml
 default_host = "my-server"
 default_user = "buzz"
+users        = ["hermes", "hermesgpt"]   # extra accounts to probe
 workdir_base = "/home/buzz/agents"
 unit_prefix  = "buzz-acp-"
 probe_cache_seconds = 600
 ```
 
-Setting `default_host` lets `op:info` probe that host and report which runtimes
-are actually installed, pre-filling the form. Desktop renders provider config as
-plain text inputs and ignores JSON Schema `enum`, so discovered runtimes appear in
-the field *description* rather than as a dropdown.
+Setting `default_host` lets `op:info` probe that host over SSH and report what is
+actually installed. **`user` and `runtime` then render as dropdowns** populated
+from detection, with the SSH login user as the default.
+
+Runtimes are often per-user — hermes installs into `~/.local/bin`, so it is
+invisible unless probed as the account that owns it. List those accounts in
+`users` and each is probed through its own login shell, so a runtime only one
+account can launch still becomes selectable. The `runtime` description names
+which accounts have each one, e.g.
+`hermes (as hermes, hermesgpt); codex (as kbs)`.
+
+Probes are cached for `probe_cache_seconds` because Desktop allows `op:info` only
+10 seconds and an SSH handshake through an access proxy is not fast.
 
 > `workdir_base` is shared across agents while `user` is per-agent, so a base
 > under one user's home will create directories there owned by another user. Leave
@@ -129,11 +139,11 @@ Errors exit non-zero with a message on **stderr** — Desktop captures that into
   `systemctl disable --now buzz-acp-<id>` and delete the three files.
 - **Renaming orphans a unit.** The id is a slug of the agent name, so a rename
   deploys a new unit and abandons the old one.
-- **Runtime selection is per-agent, not catalog-integrated.** The Desktop runtime
-  dropdown still lists *local* runtimes; the remote choice is made in this
-  provider's config. Fixing that properly needs an upstream change — an optional
-  `runtimes: […]` array on the `op:info` response plus a host field on
-  `AcpRuntimeCatalogEntry`.
+- **Runtime selection is per-agent, not catalog-integrated.** Desktop's own
+  runtime dropdown still lists *local* runtimes; the remote choice is a separate
+  field in this provider's config. Folding remote runtimes into the real catalog
+  needs an upstream change — an optional `runtimes: […]` array on the `op:info`
+  response plus a host field on `AcpRuntimeCatalogEntry`.
 - **Model/provider env vars** are only mapped for runtimes where Desktop's own
   catalog defines them (`goose`, `buzz-agent`). For others, set them through the
   persona's env vars.

@@ -61,18 +61,30 @@ pub fn op_info() -> Value {
         "Runtime to launch on the remote host. Known: {}.",
         runtimes::all_ids().join(", ")
     );
-    let mut runtime_default = Value::Null;
+    let mut user_desc =
+        "Unix user the agent runs as. Give each agent its own unprivileged account.".to_string();
+    let mut runtime_enum: Vec<String> = Vec::new();
+    let mut user_enum: Vec<String> = Vec::new();
+    let mut runtime_default = String::new();
+    let mut user_default = cfg.default_user.clone().unwrap_or_default();
     let mut notes: Vec<String> = Vec::new();
 
     if let Some(host) = cfg.default_host.as_deref() {
-        match ssh::probe_runtimes(host, cfg.default_user.as_deref(), cfg.probe_cache_seconds()) {
-            Ok(found) if !found.is_empty() => {
-                let ids: Vec<&str> = found.iter().map(|f| f.id.as_str()).collect();
-                runtime_desc = format!(
-                    "Runtime to launch on the remote host. Detected on {host}: {}.",
-                    ids.join(", ")
+        match ssh::probe_runtimes(host, &cfg.users, cfg.probe_cache_seconds()) {
+            Ok(probe) if !probe.found.is_empty() => {
+                runtime_enum = probe.runtime_ids();
+                runtime_default = runtime_enum[0].clone();
+                runtime_desc = format!("Detected on {host} — {}.", probe.summary());
+
+                user_enum = probe.users();
+                if user_default.is_empty() {
+                    user_default = probe.login_user.clone().unwrap_or_default();
+                }
+                user_desc = format!(
+                    "Unix user the agent runs as. Accounts on {host}: {}. \
+                     Give each agent its own unprivileged account.",
+                    user_enum.join(", ")
                 );
-                runtime_default = json!(ids[0]);
             }
             Ok(_) => notes.push(format!("no known runtimes detected on {host}")),
             Err(e) => notes.push(format!("probe of {host} failed: {e}")),
@@ -90,6 +102,28 @@ pub fn op_info() -> Value {
         description.push_str(&format!(" ({})", notes.join("; ")));
     }
 
+    // Only advertise `enum` when detection actually produced choices; an empty
+    // enum would render as a dropdown with nothing in it and no way to type.
+    let mut runtime_prop = json!({
+        "type": "string",
+        "title": "Remote runtime",
+        "description": runtime_desc,
+        "default": runtime_default,
+    });
+    if !runtime_enum.is_empty() {
+        runtime_prop["enum"] = json!(runtime_enum);
+    }
+
+    let mut user_prop = json!({
+        "type": "string",
+        "title": "Remote user",
+        "description": user_desc,
+        "default": user_default,
+    });
+    if !user_enum.is_empty() {
+        user_prop["enum"] = json!(user_enum);
+    }
+
     json!({
         "ok": true,
         "name": PROVIDER_NAME,
@@ -105,18 +139,8 @@ pub fn op_info() -> Value {
                     "description": "Alias from ~/.ssh/config. Authentication uses your SSH agent; credentials are never stored here.",
                     "default": cfg.default_host.clone().unwrap_or_default(),
                 },
-                "user": {
-                    "type": "string",
-                    "title": "Remote user",
-                    "description": "Unix user the agent runs as. Give each agent its own unprivileged user.",
-                    "default": cfg.default_user.clone().unwrap_or_default(),
-                },
-                "runtime": {
-                    "type": "string",
-                    "title": "Remote runtime",
-                    "description": runtime_desc,
-                    "default": runtime_default,
-                },
+                "user": user_prop,
+                "runtime": runtime_prop,
                 "workdir": {
                     "type": "string",
                     "title": "Working directory",
