@@ -68,26 +68,35 @@ export function WelcomeSetup({
     [],
   );
 
+  // `replace: true`: on the first-run screen there is no other community the
+  // user could "finish first" — a persisted transaction for a different relay
+  // is a stale leftover, and the user's fresh submit supersedes it.
   const startConnection = React.useCallback(
     (relayUrl: string) => {
-      communityOnboarding.start({
-        source: "first-community",
-        firstCommunityPage: page === "member" ? "member" : "join",
-        relayUrl,
-      });
+      communityOnboarding.start(
+        {
+          source: "first-community",
+          firstCommunityPage: page === "member" ? "member" : "join",
+          relayUrl,
+        },
+        { replace: true },
+      );
     },
     [communityOnboarding, page],
   );
 
   const redeemInvite = React.useCallback(
     (relayUrl: string, code: string, policyReceipt?: string) => {
-      communityOnboarding.start({
-        source: "first-community",
-        firstCommunityPage: page === "member" ? "member" : "join",
-        relayUrl,
-        inviteCode: code,
-        policyReceipt,
-      });
+      communityOnboarding.start(
+        {
+          source: "first-community",
+          firstCommunityPage: page === "member" ? "member" : "join",
+          relayUrl,
+          inviteCode: code,
+          policyReceipt,
+        },
+        { replace: true },
+      );
     },
     [communityOnboarding, page],
   );

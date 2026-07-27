@@ -316,7 +316,10 @@ import * as React from "react";
 
 type CommunityOnboardingContextValue = {
   transaction: CommunityOnboardingTransaction | null;
-  start: (input: StartCommunityOnboardingInput) => boolean;
+  start: (
+    input: StartCommunityOnboardingInput,
+    options?: { replace?: boolean },
+  ) => boolean;
   update: (
     patch: CommunityOnboardingTransactionPatch,
     expectedId?: string,
@@ -336,8 +339,14 @@ export function CommunityOnboardingProvider({
     loadCommunityOnboardingTransaction,
   );
   const start = React.useCallback(
-    (input: StartCommunityOnboardingInput) => {
+    (input: StartCommunityOnboardingInput, options?: { replace?: boolean }) => {
+      // A persisted transaction for a different relay refuses new starts so a
+      // deep link cannot hijack an onboarding already in progress. Callers on
+      // user-initiated forms pass `replace: true`: the user typing a new URL
+      // supersedes a stale transaction (which otherwise wedges onboarding
+      // with a silently dead submit — there is no other way to dislodge it).
       if (
+        !options?.replace &&
         transaction &&
         canonicalRelayUrl(input.relayUrl) !== transaction.relayUrl
       ) {
