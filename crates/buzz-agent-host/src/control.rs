@@ -390,9 +390,52 @@ impl Daemon {
 
         let secret = self.store.load_agent_secret(agent)?;
         self.supervisor.start(&record, &self.config, secret).await?;
+        self.publish_agent_profile(&record);
         Ok(HostControlReply::Granted {
             agent: agent.to_string(),
         })
+    }
+
+    /// Publish the agent's kind:0 profile (name + NIP-OA auth tag), signed
+    /// by the agent itself over a short-lived NIP-42 connection — Desktop
+    /// cannot do this for host-backed agents because it never holds the
+    /// agent's key. Best-effort: a failure is logged, never fatal, and the
+    /// next grant/configure retries.
+    fn publish_agent_profile(&self, record: &AgentRecord) {
+        let Some(auth_tag_json) = record.auth_tag.clone() else {
+            return;
+        };
+        let Ok(secret) = self.store.load_agent_secret(&record.pubkey) else {
+            return;
+        };
+        let Ok(agent_keys) = Keys::parse(&secret) else {
+            return;
+        };
+        let relay_url = self.config.relay_url.clone();
+        let label = record.config.label.clone();
+        let pubkey = record.pubkey.clone();
+        tokio::spawn(async move {
+            let result = async {
+                let auth_tag = buzz_sdk::nip_oa::parse_auth_tag(&auth_tag_json)
+                    .map_err(|e| format!("parse auth tag: {e}"))?;
+                let content = serde_json::json!({ "name": label }).to_string();
+                let event = nostr::EventBuilder::new(nostr::Kind::Metadata, content)
+                    .tags([auth_tag.clone()])
+                    .sign_with_keys(&agent_keys)
+                    .map_err(|e| format!("sign profile: {e}"))?;
+                buzz_ws_client::publish_event(&relay_url, event, &agent_keys, Some(&auth_tag), 20)
+                    .await
+                    .map_err(|e| format!("publish profile: {e}"))
+            }
+            .await;
+            match result {
+                Ok(ok) if ok.accepted => {
+                    info!(agent = %pubkey, "agent profile published");
+                }
+                Ok(ok) => warn!(agent = %pubkey, reason = %ok.message, "profile rejected"),
+                Err(e) => warn!(agent = %pubkey, "profile publish failed: {e}"),
+            }
+        });
     }
 
     async fn op_configure(
@@ -409,6 +452,7 @@ impl Daemon {
         if record.desired_run && record.auth_tag.is_some() {
             let secret = self.store.load_agent_secret(agent)?;
             self.supervisor.start(&record, &self.config, secret).await?;
+            self.publish_agent_profile(&record);
         }
         Ok(HostControlReply::Configured {
             agent: agent.to_string(),

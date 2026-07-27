@@ -10,6 +10,16 @@ pub enum BackendKind {
         id: String,
         config: serde_json::Value,
     },
+    /// Agent runs on a `buzz-agent-host` daemon, controlled over the relay
+    /// (kind 24300 frames). The agent's keypair is generated host-side —
+    /// records with this backend hold no `private_key_nsec`. Lifecycle ops
+    /// route through `commands::agent_hosts`, never local process spawn.
+    Host {
+        /// The host daemon's pubkey (hex) — the 24300 recipient.
+        host_pubkey: String,
+        /// Runtime id from the host's kind 30178 announcement.
+        runtime: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -223,6 +223,18 @@ impl Supervisor {
                         break;
                     }
                     Some(status) => {
+                        // A clean exit (code 0) is deliberate — e.g. the owner
+                        // sent the `!shutdown` convention message and buzz-acp
+                        // exited gracefully. Respect it; only crashes restart.
+                        if matches!(status.as_ref().ok().and_then(|s| s.code()), Some(0)) {
+                            info!(agent = %pubkey, "agent exited cleanly; not restarting");
+                            push_log(
+                                &log_ring,
+                                "[host] agent exited cleanly".to_string(),
+                                &log_path,
+                            );
+                            break;
+                        }
                         let code = status
                             .ok()
                             .and_then(|s| s.code())

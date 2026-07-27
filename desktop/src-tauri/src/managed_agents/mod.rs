@@ -13,6 +13,7 @@ pub(crate) mod effective_config;
 mod env_vars;
 pub(crate) mod git_bash;
 pub(crate) mod global_config;
+pub(crate) mod host_backend;
 mod managed_node_paths;
 mod nest;
 mod persona_avatars;
