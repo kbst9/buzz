@@ -1,0 +1,29 @@
+[package]
+name = "buzz-agent-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Always-on daemon that runs Buzz agents on a remote host, controlled over the relay"
+
+[dependencies]
+buzz-core = { workspace = true }
+buzz-sdk = { workspace = true }
+buzz-ws-client = { workspace = true }
+
+nostr = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+zeroize = { workspace = true }
+
+clap = { version = "4", features = ["derive", "env"] }
+toml = "1.0"
+
+[dev-dependencies]
+tempfile = "3"
