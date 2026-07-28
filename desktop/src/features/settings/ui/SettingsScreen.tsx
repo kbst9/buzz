@@ -5,6 +5,7 @@ import type { SettingsSection } from "@/features/settings/ui/SettingsPanels";
 import { SettingsView } from "@/features/settings/ui/SettingsView";
 
 type SettingsScreenProps = {
+  activeRelayUrl?: string;
   currentPubkey?: string;
   fallbackDisplayName?: string;
   isUpdatingDesktopNotifications: boolean;
@@ -23,6 +24,7 @@ type SettingsScreenProps = {
 };
 
 export function SettingsScreen({
+  activeRelayUrl,
   currentPubkey,
   fallbackDisplayName,
   isUpdatingDesktopNotifications,
@@ -41,6 +43,7 @@ export function SettingsScreen({
 }: SettingsScreenProps) {
   return (
     <SettingsView
+      activeRelayUrl={activeRelayUrl}
       currentPubkey={currentPubkey}
       fallbackDisplayName={fallbackDisplayName}
       isUpdatingDesktopNotifications={isUpdatingDesktopNotifications}

@@ -778,6 +778,9 @@ export function AppShell() {
                       <div className="flex min-h-0 flex-1 overflow-hidden">
                         <React.Suspense fallback={null}>
                           <LazySettingsScreen
+                            activeRelayUrl={
+                              communitiesHook.activeCommunity?.relayUrl
+                            }
                             currentPubkey={identityQuery.data?.pubkey}
                             fallbackDisplayName={
                               identityQuery.data?.displayName
