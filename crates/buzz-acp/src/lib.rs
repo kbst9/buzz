@@ -922,6 +922,8 @@ fn handle_relay_observer_control_event(
     pool: &mut AgentPool,
     observer: Option<&observer::ObserverHandle>,
     owner_pubkey_hex: &str,
+    publisher: &relay::RelayEventPublisher,
+    rest_client: &relay::RestClient,
 ) {
     // Defense-in-depth: verify signature even though the relay already checked.
     if let Err(e) = buzz_core::verify_event(&event) {
@@ -967,10 +969,68 @@ fn handle_relay_observer_control_event(
         Some("switch_model") => {
             handle_switch_model_control(&payload, pool, observer);
         }
+        Some("set_profile") => {
+            handle_set_profile_control(&payload, keys, publisher, rest_client, observer);
+        }
         _ => {
             tracing::debug!(payload = %payload, "ignoring unknown observer control frame");
         }
     }
+}
+
+/// Parse a `set_profile` control payload into a profile overlay.
+///
+/// Field semantics mirror [`buzz_sdk::profile::ProfileOverlay`]: an absent or
+/// `null` field is untouched, an empty string clears. Pure so the mapping is
+/// unit-testable without frames.
+fn control_profile_overlay(payload: &serde_json::Value) -> buzz_sdk::profile::ProfileOverlay {
+    let field = |key: &str| {
+        payload
+            .get(key)
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+    };
+    buzz_sdk::profile::ProfileOverlay {
+        name: field("name"),
+        about: field("about"),
+        avatar_url: field("avatarUrl"),
+        nip05: None,
+    }
+}
+
+/// Handle a `set_profile` control frame: the owner asks the agent to update
+/// its own kind:0. Reuses the startup sync path (`sync_profile`) — the same
+/// tag-preserving merge, signed by the agent's own key, so keys never move;
+/// the owner gate above is the authorization. Fire-and-forget: the durable
+/// ack is the replaced kind:0 itself; a `control_result` observer frame
+/// reports acceptance immediately.
+fn handle_set_profile_control(
+    payload: &serde_json::Value,
+    keys: &nostr::Keys,
+    publisher: &relay::RelayEventPublisher,
+    rest_client: &relay::RestClient,
+    observer: Option<&observer::ObserverHandle>,
+) {
+    let overlay = control_profile_overlay(payload);
+    if overlay.is_empty() {
+        tracing::warn!("set_profile control frame carried no fields — ignoring");
+        return;
+    }
+    if let Some(observer) = observer {
+        observer.emit(
+            "control_result",
+            None,
+            &observer::ObserverContext::default(),
+            serde_json::json!({ "type": "set_profile", "status": "accepted" }),
+        );
+    }
+    tracing::info!("set_profile control frame accepted — syncing profile");
+    let keys = keys.clone();
+    let publisher = publisher.clone();
+    let rest_client = rest_client.clone();
+    tokio::spawn(async move {
+        sync_profile(&publisher, &rest_client, &keys, &overlay).await;
+    });
 }
 
 /// Handle a `cancel_turn` control frame: signal the in-flight task to cancel.
@@ -1445,6 +1505,10 @@ async fn tokio_main() -> Result<()> {
 
     let presence_publisher = relay.event_publisher();
     let presence_keys = config.keys.clone();
+    // Hoisted for the control-frame select arm: `relay` is mutably borrowed
+    // by `relay.next_event()` inside the loop, so the profile-control path
+    // takes its REST handle up front.
+    let control_rest_client = relay.rest_client();
 
     // Priority: BUZZ_AUTH_TAG (NIP-OA attestation) → --agent-owner flag.
     let startup_owner: Option<String> = resolve_agent_owner(&config);
@@ -1984,7 +2048,7 @@ async fn tokio_main() -> Result<()> {
                     match control_event {
                         Some(event) => {
                             if let Some(ref owner_hex) = owner_cache.pubkey {
-                                handle_relay_observer_control_event(&config.keys, event, &mut pool, observer.as_ref(), owner_hex);
+                                handle_relay_observer_control_event(&config.keys, event, &mut pool, observer.as_ref(), owner_hex, &presence_publisher, &control_rest_client);
                             } else {
                                 tracing::warn!("observer control frame received but no owner resolved — dropping");
                             }
@@ -4573,6 +4637,28 @@ mod author_gate_tests {
             .await,
             "the owner must always be accepted under Allowlist"
         );
+    }
+
+    #[test]
+    fn control_profile_overlay_maps_fields_and_nulls() {
+        let payload = serde_json::json!({
+            "type": "set_profile",
+            "name": "Codex II",
+            "about": null,
+            "avatarUrl": ""
+        });
+        let overlay = control_profile_overlay(&payload);
+        assert_eq!(overlay.name.as_deref(), Some("Codex II"));
+        assert_eq!(overlay.about, None, "null means untouched");
+        assert_eq!(
+            overlay.avatar_url.as_deref(),
+            Some(""),
+            "empty string clears"
+        );
+        assert!(!overlay.is_empty());
+
+        let empty = control_profile_overlay(&serde_json::json!({ "type": "set_profile" }));
+        assert!(empty.is_empty());
     }
 
     // The default `respond-to` is OwnerOnly. Under steering, "an ineligible

@@ -70,7 +70,10 @@ BUZZ_ACP_AGENT_COMMAND=claude-agent-acp
 BUZZ_ACP_RELAY_OBSERVER=true
 
 # The agent's profile, as config. Published at startup only when changed;
-# the auth tag and unknown fields are preserved automatically.
+# the auth tag and unknown fields are preserved automatically. Env-declared
+# fields reassert on every restart — pin a field here only when it should
+# be authoritative over app/CLI edits (owners can edit online agents from
+# Settings > Connected agents; those edits stick unless pinned here).
 BUZZ_ACP_PROFILE_NAME=Hermes
 BUZZ_ACP_PROFILE_ABOUT=Always-on research agent.
 BUZZ_ACP_PROFILE_AVATAR_URL=https://example.org/hermes.png
@@ -143,9 +146,11 @@ No restart needed.
   never replayed. After recovering an agent, send a fresh mention.
 - **Allowlists do not apply in DMs.** DM turns are owner-only by
   DM-hardening design; test in channels.
-- **Profile edits later:** change the `BUZZ_ACP_PROFILE_*` env and restart
-  (publish-on-diff makes this free), or run `buzz users set-profile` on the
-  host with the unit's env exported — both preserve the auth tag.
+- **Profile edits later**, in precedence order: Settings > Connected agents
+  (online agents apply edits themselves via an owner-signed control frame —
+  no host access needed); `buzz users set-profile` on the host; or pin
+  `BUZZ_ACP_PROFILE_*` in env + restart. All three preserve the auth tag.
+  Env-pinned fields override the other two on every restart.
 - **Thinking traces are runtime-dependent.** The harness forwards
   `agent_thought_chunk` when the runtime emits it (claude/codex adapters
   do); a runtime without thought output still streams messages and tool

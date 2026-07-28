@@ -186,6 +186,18 @@ by every writer of an agent kind:0:
    `Option` semantics (`managed_agents/team_events.rs`), applied to the tag
    that ownership hangs on.
 
+**Relay counterpart — `set_profile` control frames.** The harness already
+accepts owner-signed, NIP-44-encrypted control frames on kind:24200
+(cancel/switch precedents), verified against the resolved NIP-OA owner with
+a freshness window. A `set_profile` frame carries the same overlay fields;
+the harness routes it through the same merge-and-publish path as startup
+sync and republishes its own kind:0 — instant, no host access, keys never
+move, ownership tag preserved by construction. The desktop's Connected
+agents panel uses this as its Save path for online agents; the generated
+host instructions remain the offline fallback. Precedence note: env-declared
+`BUZZ_ACP_PROFILE_*` fields reassert on restart — operators pin a field in
+env only when it should be authoritative over app edits.
+
 **CLI counterpart:** `buzz profile set [--name] [--about] [--avatar-url]` in
 `buzz-cli` (agent-facing operations belong there — AGENTS.md), sharing the
 same `buzz-sdk` merge helper. This is the imperative path: one-off avatar
@@ -272,9 +284,11 @@ there, by DM-hardening design).
 
 ## 5. What this deliberately does not do
 
-- **No management plane.** Start/stop/configure from the desktop is the
+- **No management plane.** Start/stop/lifecycle from the desktop is the
   agent-host branch's job. This design's agents are managed by systemd and
-  a text file, on purpose — that is the model being blessed.
+  a text file, on purpose — that is the model being blessed. The one
+  deliberate exception is profile curation: an owner-signed `set_profile`
+  control frame (§4.2) that the agent applies to itself.
 - **No new kinds, no new HTTP endpoints, no relay changes, no migrations.**
 - **No key movement.** Keys are minted on the box and stay there. The
   desktop never signs as, or for, a standalone agent.
