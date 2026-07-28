@@ -2069,7 +2069,7 @@ mod tests {
             ("repos", 4),
             ("social", 7),
             ("upload", 1),
-            ("users", 5),
+            ("users", 6),
             ("workflows", 8),
         ];
 
