@@ -67,24 +67,18 @@ export function CommunityEmojiIcon({
   className: string;
   iconUrl?: string | null;
 }) {
-  if (iconUrl) {
-    return (
-      <span
-        aria-hidden="true"
-        className={cn(className, "h-5 overflow-hidden rounded-md")}
-      >
-        <img
-          alt=""
-          className="h-full w-full object-cover"
-          draggable={false}
-          src={iconUrl}
-        />
-      </span>
-    );
-  }
+  if (!iconUrl) return null;
   return (
-    <span aria-hidden="true" className={className}>
-      <span className="-translate-y-px leading-normal">🐝</span>
+    <span
+      aria-hidden="true"
+      className={cn(className, "h-5 overflow-hidden rounded-md")}
+    >
+      <img
+        alt=""
+        className="h-full w-full object-cover"
+        draggable={false}
+        src={iconUrl}
+      />
     </span>
   );
 }

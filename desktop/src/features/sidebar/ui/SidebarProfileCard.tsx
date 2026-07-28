@@ -84,15 +84,9 @@ export function SidebarProfileCard({
   const communityLabel = activeCommunity?.name ?? "No community";
   const readonlyCommunityLabel = (
     <span
-      className="flex min-w-0 cursor-pointer items-center gap-1 text-xs leading-snug text-sidebar-foreground/70"
+      className="flex min-w-0 cursor-pointer items-center text-xs leading-snug text-sidebar-foreground/70"
       data-buzz-sidebar-secondary
     >
-      <span
-        aria-hidden="true"
-        className="flex w-3.5 shrink-0 items-center justify-center text-2xs"
-      >
-        <span className="-translate-y-px leading-normal">🐝</span>
-      </span>
       <span className="truncate">{communityLabel}</span>
     </span>
   );
