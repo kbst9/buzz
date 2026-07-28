@@ -67,8 +67,9 @@ Status legend: `[ ]` open · `[x]` done (commit) · `[~]` partial · `[–]` won
   bug). Gate: `candidate.isAgent && !eligibleAgentPubkeys.has(pubkey)`.
   - Anchor: `desktop/src/features/messages/ui/useNewMessageRecipients.ts:131`
   - Fix: feed F0 with `collectVerifiedAgentPubkeys(userSearchResults)`.
-  - Merge path: **~2 contained lines** in one hook + cases in its existing
-    test file. No UI edits (`NewMessageScreen` adds no gate of its own).
+  - Merge path: **~2 contained lines** in one hook + a **new test file**
+    (the hook has none today). No UI edits (`NewMessageScreen` adds no gate
+    of its own).
   - Caveat to carry into UX copy someday: buzz-acp DM-hardening means the
     agent replies only to its owner in DMs (`crates/buzz-acp/src/lib.rs:4774`)
     — same as already-listed directory agents, so parity is still correct.
@@ -214,6 +215,137 @@ that should be `viewerIsOwner` (already computed, NIP-OA-derived,
     `features/moderation/ui/MessageModerationMenuItems.tsx:42-104` vs
     `MembersSidebarMemberCard.tsx:154-155`
   - Merge path: optional polish; contained edits. Low priority.
+
+## Blast radius per fix
+
+Shared invariants first: **every fix is desktop-frontend only** — no relay,
+mobile, CLI, or migration changes anywhere (T1.3/T1.4/T3.4 *publish* an
+existing event kind, kind:9000, through relay policy that already governs
+it). Classification always derives from the Rust-verified NIP-OA tag, so
+none of these let a self-authored profile flag spoof agent-ness. One shared
+data dependency: frontend `member.isAgent` is enriched by the member-list
+command's profile overlay (`desktop/src-tauri/src/commands/channels.rs:446-456`);
+if its batch kind:0 query fails it silently degrades to role-only for that
+fetch (`unwrap_or_default`) and role-gated behavior returns until a refetch
+— T2.1/T2.2 inherit this, nothing else does.
+
+- **F0 (eligibility third input)** — Touches: append-only exports in
+  `agentAutocompleteEligibility.ts` (+ its existing test file).
+  Runtime radius: **zero until a call site opts in** — the changed function
+  is consumed by exactly three hooks (`useMentions`,
+  `useNewMessageRecipients`, `ProjectsAgentPromptPage`), each of which only
+  changes when it passes the new set (T1.1/T1.5/T4.2). Risk: a too-broad
+  verified set would offer agents that won't respond; bounded by Option B
+  semantics and covered by unit tests.
+- **T1.1 (DM picker)** — Touches: `useNewMessageRecipients.ts` (~2 lines) +
+  new test file. Runtime radius: recipient candidates for every user of New
+  Message/compose; connected agents appear (chip metadata: `isAgent`, owner
+  attribution already rendered by `NewMessageResultRow`). Behavioral note:
+  non-owners can now start a DM the agent won't answer (harness DM
+  hardening) — identical to already-listed directory agents, so no new
+  inconsistency. Risk: low; candidate dedupe/coalesce paths already handle
+  agent entries; hook previously untested.
+- **T1.2 (global search)** — Touches: `useSearchResults.ts` (~2 lines) +
+  first test for the gate. Runtime radius: identity results for everyone —
+  connected agents become findable, routed to the "agents" section with the
+  Bot icon (`TopbarSearch`/`SearchResultItem` need no edits). No
+  cross-community exposure: user search is relay-scoped. Risk: low, but
+  this is the app-wide search surface — regression here is highly visible,
+  hence the new test.
+- **T1.3 (huddle add)** — Touches: new `useHuddleAgentCandidates.ts` +
+  ~10 lines in `AddAgentDialog.tsx`. Runtime radius: huddle add-list only;
+  selecting a connected agent publishes kind:9000 `role=bot` to the
+  ephemeral+parent channels — the already-shipped backend path
+  (`huddle/agents.rs`); TTS/participants/remove pick it up role-based with
+  no changes. Risk: offering an offline agent that never joins — mitigated
+  by the presence dot; huddle UX otherwise untouched.
+- **T1.4 (channel Add-agents dialog)** — Touches: new section component +
+  one insertion in `AddChannelBotDialog.tsx`. Runtime radius: that dialog
+  only; adds via the relay member-add path (subject to
+  `channel_add_policy`, refusals surface like the members picker). The
+  persona/team provisioning flow is untouched. Risk: low-medium (dialog
+  state handling), no shared consumers.
+- **T1.5 (Projects picker)** — Touches: `useAgentCandidates()` inside
+  `ProjectsAgentPromptPage.tsx` (sole consumer). Runtime radius: Projects
+  prompt page agent list. Same non-owner DM-hardening caveat as T1.1.
+  Risk: minimal.
+- **T2.1 (session roster — LANDED `d1cc2a4a`)** — Touched: two predicates
+  in `useChannelAgentSessions.ts` + new 6-case test file. Runtime radius —
+  the widest of the set, for **all viewers** of any channel/DM containing a
+  verified member-role agent: typing reclassifies from the human typing row
+  to the bot activity accessory; composer/thread activity chips can now
+  show the agent; members-sidebar "View activity" stops auto-closing;
+  `?agentSession=` deep links survive. Consumers of the changed functions:
+  `useChannelAgentSessions` itself, `useChannelActivityTyping` (whose
+  `reportChannelBotTyping` mirror now feeds the working signal → sidebar
+  badges), `BotActivityBar`/`ChannelPane` rosters. Risk assessed low: the
+  admitting flag is the Rust-verified one, and the identical predicate has
+  been in production in `useClassifiedMembers` since the members-sidebar
+  fix. Verified by full desktop suite (3773 green).
+- **T2.2 (stop-turn for owned connected agents)** — Touches:
+  `agentSessionSelection.ts` + `useChannelAgentSessions.ts` (ownership
+  threading) + tests. Runtime radius: owners only (button renders off
+  `canInterruptTurn && isWorking`); press sends the owner-signed kind:24200
+  cancel frame the harness already verifies (freshness-windowed, same
+  transport as `set_profile`). Risk: harness builds predating control
+  frames ignore it — button times out gracefully; non-owners see no change.
+- **T3.1 (panel Edit dialog)** — Touches: extraction of `EditAgentDialog`
+  into a new file (from the fork-owned settings card — zero upstream merge
+  risk) + ~4 lines in `UserProfilePanel.tsx`. Runtime radius: owned
+  connected agents' profile panels gain Edit; save paths are exactly the
+  settings card's (kind:30177 publish + live `set_profile` frame) — no new
+  write paths. Risk: predicate discipline (`viewerIsOwner`, not `isBot`) so
+  non-owners never see Edit; hot-file edit kept minimal.
+- **T3.2 (instructions on panel)** — Touches: `UserProfilePanelSections`
+  predicate + wiring `useConnectedAgentDefinitionQuery`. Runtime radius:
+  owner-only block on the panel; one extra cached query per panel open.
+  Risk: minimal.
+- **T3.3 (channels tab)** — Touches: one predicate in
+  `UserProfilePanelUtils.ts` + test. Runtime radius: profile-panel Channels
+  tab for all viewers of any agent — it now lists memberships already
+  public in `channelsQuery` instead of a false empty state. Risk: nil.
+- **T3.4 (add-to-channel from panel)** — Touches: `UserProfilePanel.tsx`
+  predicate + a relay-add branch (reuse the members-picker mutation +
+  error surfacing). Runtime radius: owner affordance; the add itself is
+  relay-policed (`channel_add_policy`) so no new authority is granted
+  client-side. Risk: needs the refusal toast wired or failures are silent.
+- **T3.5 (activity off channel routes)** — Touches:
+  `useOpenAgentActivity.ts` (+ its test file). Runtime radius: consumers
+  are the profile panel, popover, and members sidebar — "View activity"
+  becomes available for idle owned connected agents everywhere. Risk: worst
+  case is opening a session panel for a channel the agent has left; the
+  existing roster guard already closes that benignly.
+- **T3.6 (cold-start decrypt seed)** — Touches: new hook file + **one
+  mount line in `AppShell.tsx`** (the only hot-file edit in Tier 3, kept to
+  a line). Runtime radius: one paged user-search query per community boot;
+  effect is invisible except that owned connected agents' observer frames
+  decrypt from app start instead of after their profile happens to load.
+  Risk: startup network cost only; ingestion dedup already handles overlap.
+- **T4.1 (Agents page section)** — Touches: new component + one insertion
+  in `AgentsView.tsx`. Runtime radius: Agents page layout for everyone;
+  read-only listing, actions route to existing editor/dialogs. Risk: nil
+  beyond layout.
+- **T4.2 (Pulse)** — Touches: contained edits in `PulseView.tsx` (+
+  `PulseTabBar` count; composer half rides F0 in `useMentions`). Runtime
+  radius: **visible content re-bucketing for everyone** — connected
+  agents' notes move from the People tab to the Agents tab, badges/counts
+  change, agent notes get bot styling. Flag in release notes; it will read
+  as "posts moved". Risk: tab-count/copy regressions; no data changes.
+- **T4.3 (sidebar tooltip names)** — Touches:
+  `useActiveWorkingChannelsById.ts`. Runtime radius: tooltip copy only
+  ("Nova working" instead of "1 agent working"). Risk: nil.
+- **T4.4 (owner line + moderation-menu alignment)** — Touches:
+  `MembersSidebarMemberCard` (additive owner label) and
+  `MessageModerationMenuItems` (gate Ban/Timeout off `message.isAgent`).
+  Runtime radius: the second half **removes an affordance moderators
+  currently have** on agent-authored messages (aligning with the members
+  sidebar's existing exemption) — product sign-off before landing; applies
+  to managed and connected agents alike. Risk: policy, not code.
+- **Dead-code deletion** (`ChannelMemberInviteCard`,
+  `MembersSidebarAgentControls`, `RecentNotesSection`) — Runtime radius:
+  none (no importers; re-verify at delete time). Merge radius: deletions
+  can conflict if upstream later touches those files — trivial "keep
+  deleted" resolutions, and rerere remembers.
 
 ## Design limits (deliberate — revisit only with a design change)
 
