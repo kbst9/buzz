@@ -797,6 +797,45 @@ impl BuzzClient {
         .await
     }
 
+    /// Claim a community invite — `POST /api/invites/claim`, NIP-98-signed
+    /// by the CLI identity (the claimer). On success the relay returns
+    /// `{status, community_id, host, role}`; `status` is `joined` or
+    /// `already_member`.
+    pub async fn claim_invite(
+        &self,
+        code: &str,
+        policy_receipt: Option<&str>,
+    ) -> Result<String, CliError> {
+        let url = format!("{}/api/invites/claim", self.relay_url);
+        let mut payload = serde_json::json!({ "code": code });
+        if let Some(receipt) = policy_receipt {
+            payload["policy_receipt"] = serde_json::Value::String(receipt.to_string());
+        }
+        let body = bytes::Bytes::from(
+            serde_json::to_vec(&payload)
+                .map_err(|e| CliError::Other(format!("claim serialization failed: {e}")))?,
+        );
+        self.with_retry_body(|| {
+            let body = body.clone();
+            let url = url.clone();
+            async move {
+                let auth = sign_nip98(&self.keys, "POST", &url, Some(&body))?;
+                let resp = self
+                    .with_auth_tag(
+                        self.http
+                            .post(&url)
+                            .header("Authorization", auth)
+                            .header("Content-Type", "application/json")
+                            .body(body),
+                    )
+                    .send()
+                    .await?;
+                self.handle_response(resp).await
+            }
+        })
+        .await
+    }
+
     /// Execute a one-shot count via the HTTP bridge.
     /// Returns the count as a JSON string.
     #[allow(dead_code)]

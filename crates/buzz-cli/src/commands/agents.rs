@@ -148,7 +148,31 @@ pub async fn dispatch(command: AgentsCmd, client: &BuzzClient) -> Result<(), Cli
         }
 
         AgentsCmd::Archived => cmd_archived(client).await,
+        AgentsCmd::MintTag {
+            agent_pubkey,
+            conditions,
+        } => cmd_mint_tag(client, &agent_pubkey, &conditions),
     }
+}
+
+/// Mint a NIP-OA auth tag for `agent_pubkey`, signed by the CLI identity as
+/// owner. Purely local: nothing is published and no relay call is made — the
+/// output is handed to the agent process as `BUZZ_AUTH_TAG`.
+fn cmd_mint_tag(client: &BuzzClient, agent_pubkey: &str, conditions: &str) -> Result<(), CliError> {
+    let agent_hex = agent_pubkey.trim();
+    validate_hex64(agent_hex)?;
+    let agent_pk = PublicKey::from_hex(agent_hex)
+        .map_err(|e| CliError::Usage(format!("agent pubkey: {e}")))?;
+    let tag_json = buzz_sdk::nip_oa::compute_auth_tag(client.keys(), &agent_pk, conditions)
+        .map_err(|e| CliError::Usage(format!("mint-tag: {e}")))?;
+    let out = json!({
+        "auth_tag": tag_json,
+        "owner_pubkey": client.keys().public_key().to_hex(),
+        "agent_pubkey": agent_hex,
+        "conditions": conditions,
+    });
+    println!("{out}");
+    Ok(())
 }
 
 /// Require `BUZZ_AUTH_TAG` and parse the owner pubkey from it. Used only by
