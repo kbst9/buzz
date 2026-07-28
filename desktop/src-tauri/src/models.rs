@@ -32,6 +32,10 @@ pub struct ProfileInfo {
     pub about: Option<String>,
     pub nip05_handle: Option<String>,
     pub owner_pubkey: Option<String>,
+    /// `true` when the profile carries a verified NIP-OA auth tag — the
+    /// cryptographic "this identity is an agent" signal, consistent with
+    /// `UserProfileSummaryInfo::is_agent`.
+    pub is_agent: bool,
     /// `true` when a real kind:0 event was found on the relay; `false` for the
     /// synthesized fallback returned when no metadata event exists.  The
     /// onboarding gate uses this to distinguish "new user with no profile" from

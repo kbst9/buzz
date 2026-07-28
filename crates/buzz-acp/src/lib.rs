@@ -90,6 +90,88 @@ async fn publish_presence(
     Ok(())
 }
 
+/// Sync the agent's kind:0 profile from the configured overlay, publishing
+/// only when the merge differs from the relay's copy.
+///
+/// Merge-preserving by construction (`buzz_sdk::profile`): unknown content
+/// fields survive, the NIP-OA auth tag is carried forward (from the current
+/// profile, else `BUZZ_AUTH_TAG`), and `bot: true` is always set. A missing
+/// tag on both sides is a refusal — the harness keeps running, but never
+/// replaces an owned profile with an unowned one. Every failure path is a
+/// warn-and-continue: profile sync must not take the agent down.
+async fn sync_profile(
+    publisher: &relay::RelayEventPublisher,
+    rest_client: &relay::RestClient,
+    keys: &nostr::Keys,
+    overlay: &buzz_sdk::profile::ProfileOverlay,
+) {
+    use buzz_sdk::profile::{merge_agent_profile, CurrentProfile};
+
+    let me = keys.public_key();
+    let filter = nostr::Filter::new()
+        .kind(nostr::Kind::Metadata)
+        .author(me)
+        .limit(1);
+    let current: Option<CurrentProfile> =
+        match tokio::time::timeout(Duration::from_millis(3000), rest_client.query(&[filter])).await
+        {
+            Ok(Ok(resp)) => {
+                resp.as_array()
+                    .and_then(|arr| arr.first())
+                    .map(|event| CurrentProfile {
+                        content: event
+                            .get("content")
+                            .and_then(|c| c.as_str())
+                            .unwrap_or("{}")
+                            .to_string(),
+                        tags: event
+                            .get("tags")
+                            .and_then(|t| serde_json::from_value(t.clone()).ok())
+                            .unwrap_or_default(),
+                    })
+            }
+            _ => {
+                tracing::warn!(
+                    "profile sync: current profile fetch failed — skipping (retries next start)"
+                );
+                return;
+            }
+        };
+
+    let env_tag = std::env::var("BUZZ_AUTH_TAG").ok();
+    let merged = match merge_agent_profile(&me, current.as_ref(), overlay, env_tag.as_deref()) {
+        Ok(merged) => merged,
+        Err(buzz_sdk::SdkError::MissingAuthTag) => {
+            tracing::warn!(
+                "profile sync refused: no NIP-OA auth tag on the current profile or in \
+                 BUZZ_AUTH_TAG — publishing would orphan the agent"
+            );
+            return;
+        }
+        Err(e) => {
+            tracing::warn!("profile sync failed: {e}");
+            return;
+        }
+    };
+    if !merged.changed {
+        tracing::info!("profile already in sync — nothing published");
+        return;
+    }
+
+    let signed = merged.into_builder().and_then(|builder| {
+        builder
+            .sign_with_keys(keys)
+            .map_err(|e| buzz_sdk::SdkError::InvalidInput(format!("profile sign: {e}")))
+    });
+    match signed {
+        Ok(event) => match publisher.publish_event(event).await {
+            Ok(()) => tracing::info!("profile published (kind:0 sync)"),
+            Err(e) => tracing::warn!("profile publish failed: {e}"),
+        },
+        Err(e) => tracing::warn!("profile sync failed: {e}"),
+    }
+}
+
 fn emit_runtime_lifecycle(
     observer: Option<&observer::ObserverHandle>,
     start_nonce: &str,
@@ -1504,6 +1586,18 @@ async fn tokio_main() -> Result<()> {
     let dedup_mode = config.dedup_mode;
     let mut queue =
         EventQueue::new(dedup_mode).with_in_flight_deadline(config.max_turn_duration_secs);
+
+    // Profile sync precedes the presence flip: by the time anyone sees the
+    // agent online, its kind:0 (name, avatar, bot flag, auth tag) is current.
+    if !config.profile_overlay.is_empty() {
+        sync_profile(
+            &presence_publisher,
+            &relay.rest_client(),
+            &presence_keys,
+            &config.profile_overlay,
+        )
+        .await;
+    }
 
     // Online means the harness can receive work, not merely that its socket is
     // connected. Publishing after channel subscriptions gives desktop callers
@@ -4994,6 +5088,7 @@ mod build_mcp_servers_tests {
             persona_env_vars: vec![],
             has_generated_codex_config: false,
             relay_observer: false,
+            profile_overlay: buzz_sdk::profile::ProfileOverlay::default(),
             lazy_pool: false,
             agent_owner: None,
             no_base_prompt: false,
@@ -5215,6 +5310,7 @@ mod error_outcome_emission_tests {
             persona_env_vars: vec![],
             has_generated_codex_config: false,
             relay_observer: false,
+            profile_overlay: buzz_sdk::profile::ProfileOverlay::default(),
             lazy_pool: false,
             agent_owner: None,
             no_base_prompt: false,

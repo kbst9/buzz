@@ -153,59 +153,63 @@ pub async fn cmd_set_profile(
     avatar_url: Option<&str>,
     about: Option<&str>,
     nip05_handle: Option<&str>,
+    force: bool,
 ) -> Result<(), CliError> {
-    if display_name.is_none() && avatar_url.is_none() && about.is_none() && nip05_handle.is_none() {
+    let overlay = buzz_sdk::profile::ProfileOverlay {
+        name: display_name.map(str::to_string),
+        avatar_url: avatar_url.map(str::to_string),
+        about: about.map(str::to_string),
+        nip05: nip05_handle.map(str::to_string),
+    };
+    if overlay.is_empty() && !force {
         return Err(CliError::Usage(
-            "at least one field required (--name, --avatar, --about, --nip05)".into(),
+            "at least one field required (--name, --avatar, --about, --nip05); \
+             or pass --force for a normalize-only publish"
+                .into(),
         ));
     }
 
-    // Read-merge-write: fetch current profile, merge in the new fields, then sign.
-    let current = fetch_current_profile(client).await?;
+    // Read-merge-write through the sdk helper: unknown content fields and
+    // all tags survive. An identity with a NIP-OA auth tag (on the current
+    // profile, or supplied via BUZZ_AUTH_TAG — the harness-injected env) is
+    // an agent: its merge additionally guarantees the tag is carried
+    // forward and the profile is branded bot:true. Rebuilding kind:0 from
+    // known fields is exactly how agents got orphaned before — never
+    // reintroduce a from-scratch profile write here.
+    let me = client.keys().public_key();
+    let current = fetch_current_profile_parts(client, &me.to_hex()).await?;
+    let env_auth_tag = std::env::var("BUZZ_AUTH_TAG").ok();
+    let is_agent_identity = env_auth_tag
+        .as_deref()
+        .is_some_and(|tag| !tag.trim().is_empty())
+        || current
+            .as_ref()
+            .is_some_and(|profile| buzz_sdk::profile::valid_auth_tag(&me, profile).is_some());
 
-    // Merge: caller-supplied fields win; fall back to current profile values.
-    let merged_name = display_name
-        .map(|s| s.to_string())
-        .or_else(|| {
-            current
-                .get("display_name")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        })
-        .or_else(|| {
-            current
-                .get("name")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        });
-    let merged_picture = avatar_url.map(|s| s.to_string()).or_else(|| {
-        current
-            .get("picture")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-    });
-    let merged_about = about.map(|s| s.to_string()).or_else(|| {
-        current
-            .get("about")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-    });
-    let merged_nip05 = nip05_handle.map(|s| s.to_string()).or_else(|| {
-        current
-            .get("nip05")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-    });
+    let merged = if is_agent_identity {
+        buzz_sdk::profile::merge_agent_profile(
+            &me,
+            current.as_ref(),
+            &overlay,
+            env_auth_tag.as_deref(),
+        )
+    } else {
+        buzz_sdk::profile::merge_profile(current.as_ref(), &overlay)
+    }
+    .map_err(crate::validate::sdk_err)?;
 
-    let builder = buzz_sdk::build_profile(
-        merged_name.as_deref(),
-        None, // `name` field (username) — not exposed by CLI
-        merged_picture.as_deref(),
-        merged_about.as_deref(),
-        merged_nip05.as_deref(),
-    )
-    .map_err(|e| CliError::Other(format!("build_profile failed: {e}")))?;
+    if !merged.changed && !force {
+        println!(
+            "{}",
+            serde_json::json!({
+                "accepted": true,
+                "message": "profile unchanged — nothing published"
+            })
+        );
+        return Ok(());
+    }
 
+    let builder = merged.into_builder().map_err(crate::validate::sdk_err)?;
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;
@@ -213,34 +217,55 @@ pub async fn cmd_set_profile(
     Ok(())
 }
 
-/// Fetch the current user's profile metadata via POST /query (kind:0).
-/// Returns the parsed content JSON object, or an empty object if no profile exists.
-async fn fetch_current_profile(
-    client: &BuzzClient,
-) -> Result<serde_json::Map<String, serde_json::Value>, CliError> {
-    let my_pk = client.keys().public_key().to_hex();
+/// Print the raw kind:0 event (content and tags) for `pubkey`, or the
+/// current identity when omitted. Unlike `users get`, nothing is projected
+/// away — this is how an operator checks the NIP-OA auth tag survived.
+pub async fn cmd_get_profile(client: &BuzzClient, pubkey: Option<&str>) -> Result<(), CliError> {
+    let target = match pubkey {
+        Some(pk) => {
+            validate_hex64(pk)?;
+            pk.to_string()
+        }
+        None => client.keys().public_key().to_hex(),
+    };
     let filter = serde_json::json!({
         "kinds": [0],
-        "authors": [my_pk],
+        "authors": [target],
+        "limit": 1
+    });
+    let raw = client.query(&filter).await?;
+    println!("{raw}");
+    Ok(())
+}
+
+/// Fetch the current kind:0 for `author` as merge input (content + tags).
+/// Returns `None` when no profile exists yet.
+async fn fetch_current_profile_parts(
+    client: &BuzzClient,
+    author: &str,
+) -> Result<Option<buzz_sdk::profile::CurrentProfile>, CliError> {
+    let filter = serde_json::json!({
+        "kinds": [0],
+        "authors": [author],
         "limit": 1
     });
     let raw = client.query(&filter).await?;
     let events: serde_json::Value = serde_json::from_str(&raw)
         .map_err(|e| CliError::Other(format!("failed to parse profile query: {e}")))?;
 
-    let Some(arr) = events.as_array() else {
-        return Ok(serde_json::Map::new());
+    let Some(event) = events.as_array().and_then(|arr| arr.first()) else {
+        return Ok(None);
     };
-    let Some(event) = arr.first() else {
-        return Ok(serde_json::Map::new());
-    };
-    // kind:0 content is a JSON string containing the profile fields
-    let content_str = event
+    let content = event
         .get("content")
         .and_then(|c| c.as_str())
-        .unwrap_or("{}");
-    let content: serde_json::Value = serde_json::from_str(content_str).unwrap_or_default();
-    Ok(content.as_object().cloned().unwrap_or_default())
+        .unwrap_or("{}")
+        .to_string();
+    let tags: Vec<Vec<String>> = event
+        .get("tags")
+        .and_then(|t| serde_json::from_value(t.clone()).ok())
+        .unwrap_or_default();
+    Ok(Some(buzz_sdk::profile::CurrentProfile { content, tags }))
 }
 
 /// Get presence status for users — query kind:40902 presence snapshot events.
@@ -319,6 +344,7 @@ pub async fn dispatch(
             avatar,
             about,
             nip05,
+            force,
         } => {
             cmd_set_profile(
                 client,
@@ -326,9 +352,11 @@ pub async fn dispatch(
                 avatar.as_deref(),
                 about.as_deref(),
                 nip05.as_deref(),
+                force,
             )
             .await
         }
+        UsersCmd::GetProfile { pubkey } => cmd_get_profile(client, pubkey.as_deref()).await,
         UsersCmd::Presence { pubkeys } => cmd_get_presence(client, &pubkeys).await,
         UsersCmd::SetPresence { status } => cmd_set_presence(client, &status.to_string()).await,
     }

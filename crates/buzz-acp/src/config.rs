@@ -474,6 +474,22 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_RELAY_OBSERVER", default_value_t = false)]
     pub relay_observer: bool,
 
+    /// Display name for the agent's kind:0 profile, published at startup
+    /// when it differs from the relay's copy (merge-preserving: unknown
+    /// fields survive, the NIP-OA auth tag is carried forward, bot:true is
+    /// set). Empty string clears the field.
+    #[arg(long, env = "BUZZ_ACP_PROFILE_NAME")]
+    pub profile_name: Option<String>,
+
+    /// About text for the agent's kind:0 profile (see --profile-name).
+    #[arg(long, env = "BUZZ_ACP_PROFILE_ABOUT")]
+    pub profile_about: Option<String>,
+
+    /// Avatar URL (http(s)) for the agent's kind:0 profile (see
+    /// --profile-name).
+    #[arg(long, env = "BUZZ_ACP_PROFILE_AVATAR_URL")]
+    pub profile_avatar_url: Option<String>,
+
     /// Connect and subscribe before starting the ACP/LLM subprocess pool.
     #[arg(long, env = "BUZZ_ACP_LAZY_POOL", default_value_t = false)]
     pub lazy_pool: bool,
@@ -550,6 +566,9 @@ pub struct Config {
     pub has_generated_codex_config: bool,
     /// Whether to publish encrypted observer frames through the relay.
     pub relay_observer: bool,
+    /// Startup profile sync overlay (name/about/avatar). All `None` means
+    /// profile sync is skipped entirely.
+    pub profile_overlay: buzz_sdk::profile::ProfileOverlay,
     /// Whether ACP/LLM subprocess initialization is deferred until accepted work arrives.
     pub lazy_pool: bool,
     /// Agent owner pubkey (hex). Used for `--respond-to=owner-only` gate.
@@ -1074,6 +1093,12 @@ impl Config {
             persona_env_vars,
             has_generated_codex_config,
             relay_observer: args.relay_observer,
+            profile_overlay: buzz_sdk::profile::ProfileOverlay {
+                name: args.profile_name,
+                about: args.profile_about,
+                avatar_url: args.profile_avatar_url,
+                nip05: None,
+            },
             lazy_pool: args.lazy_pool,
             agent_owner: args.agent_owner.map(|s| s.trim().to_ascii_lowercase()),
             no_base_prompt: args.no_base_prompt,
@@ -1444,6 +1469,7 @@ mod tests {
             persona_env_vars: vec![],
             has_generated_codex_config: false,
             relay_observer: false,
+            profile_overlay: buzz_sdk::profile::ProfileOverlay::default(),
             lazy_pool: false,
             agent_owner: None,
             no_base_prompt: false,

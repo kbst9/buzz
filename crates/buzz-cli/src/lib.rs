@@ -809,21 +809,35 @@ pub enum UsersCmd {
         #[arg(long = "name")]
         name: Option<String>,
     },
-    /// Update the current identity's profile
+    /// Update the current identity's profile (merge-preserving: unknown
+    /// fields and tags survive; agent identities keep their NIP-OA auth tag
+    /// and are branded bot:true). Pass "" to clear a field.
     #[command(name = "set-profile")]
     SetProfile {
-        /// Display name
+        /// Display name (sets name + display_name; "" clears both)
         #[arg(long)]
         name: Option<String>,
-        /// Avatar URL
+        /// Avatar URL (http(s) only; "" clears)
         #[arg(long)]
         avatar: Option<String>,
-        /// Bio / about text
+        /// Bio / about text ("" clears)
         #[arg(long)]
         about: Option<String>,
-        /// NIP-05 identifier (e.g. user@example.com)
+        /// NIP-05 identifier (e.g. user@example.com; "" clears)
         #[arg(long)]
         nip05: Option<String>,
+        /// Publish even when nothing changed (also allows a field-less
+        /// normalize-only run: re-assert auth tag + bot flag)
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print the raw kind:0 profile event (content AND tags — shows the
+    /// NIP-OA auth tag that `users get` projects away)
+    #[command(name = "get-profile")]
+    GetProfile {
+        /// Pubkey to inspect (64-char hex). Omit for your own profile
+        #[arg(long)]
+        pubkey: Option<String>,
     },
     /// Get presence status for users
     Presence {
@@ -1924,7 +1938,13 @@ mod tests {
         );
         assert_eq!(
             names(&cmd, "users"),
-            vec!["get", "presence", "set-presence", "set-profile"]
+            vec![
+                "get",
+                "get-profile",
+                "presence",
+                "set-presence",
+                "set-profile"
+            ]
         );
         assert_eq!(
             names(&cmd, "workflows"),
@@ -2011,7 +2031,7 @@ mod tests {
             ("repos", 4),
             ("social", 7),
             ("upload", 1),
-            ("users", 4),
+            ("users", 5),
             ("workflows", 8),
         ];
 

@@ -15,6 +15,7 @@
 pub mod builders;
 pub mod mentions;
 pub mod nip_oa;
+pub mod profile;
 
 pub use builders::*;
 
@@ -109,4 +110,13 @@ pub enum SdkError {
     /// Input failed validation (e.g. malformed pubkey).
     #[error("invalid input: {0}")]
     InvalidInput(String),
+    /// An agent profile merge found no NIP-OA auth tag to carry forward.
+    ///
+    /// Publishing would replace an owned profile with an unowned one:
+    /// kind:0 is replaceable and the auth tag lives inside it, so this is
+    /// a refusal, not a warning.
+    #[error(
+        "no NIP-OA auth tag to carry forward — supply the current profile's tag or an auth-tag fallback; refusing to publish an unowned agent profile"
+    )]
+    MissingAuthTag,
 }

@@ -13,6 +13,7 @@ import { compareMembersByRole } from "./memberUtils";
 export function useClassifiedMembers(
   members: ChannelMember[],
   currentPubkey?: string,
+  profiles?: Readonly<Record<string, { isAgent?: boolean }>>,
 ) {
   const managedAgentsQuery = useManagedAgentsQuery();
   const relayAgentsQuery = useRelayAgentsQuery();
@@ -35,11 +36,17 @@ export function useClassifiedMembers(
       const normalized = normalizePubkey(member.pubkey);
       return (
         member.role === "bot" ||
+        member.isAgent === true ||
         managedAgentPubkeys.has(normalized) ||
-        relayAgentPubkeys.has(normalized)
+        relayAgentPubkeys.has(normalized) ||
+        // Verified NIP-OA signal: a member whose kind:0 carries a valid
+        // auth tag is an agent regardless of channel role — standalone
+        // harness agents join as plain `member` and would otherwise be
+        // classified as people.
+        profiles?.[normalized]?.isAgent === true
       );
     },
-    [managedAgentPubkeys, relayAgentPubkeys],
+    [managedAgentPubkeys, profiles, relayAgentPubkeys],
   );
 
   const isMyBot = React.useCallback(

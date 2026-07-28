@@ -130,6 +130,10 @@ export type Profile = {
   about: string | null;
   nip05Handle: string | null;
   ownerPubkey: string | null;
+  /** True when the profile carries a verified NIP-OA auth tag — the
+   * cryptographic "this identity is an agent" signal, consistent with
+   * `UserProfileSummary.isAgent`. */
+  isAgent: boolean;
   /** True when a real kind:0 metadata event exists on the relay for this pubkey.
    * False for the synthesized fallback returned when no event is present.
    * Used by the onboarding gate to distinguish new users from returning users

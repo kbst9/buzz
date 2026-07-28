@@ -111,6 +111,9 @@ export function useProfileQuery(enabled = true) {
             about: cached.about,
             nip05Handle: null,
             ownerPubkey: null,
+            // The self cache predates agent classification; the fetch result
+            // replaces this immediately and selves are not agents anyway.
+            isAgent: false,
             // Only true when the cache entry was explicitly written with a
             // real kind:0-backed profile. Older entries (absent field) and
             // no-event fallbacks default to false — conservative is correct.
@@ -388,6 +391,7 @@ export function useUsersBatchQuery(
             // These cached summaries are never used for the onboarding gate.
             hasProfileEvent: false,
             ...summary,
+            isAgent: summary.isAgent === true,
           },
       );
     }
