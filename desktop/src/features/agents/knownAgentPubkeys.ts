@@ -53,6 +53,11 @@ export function mergeOwnedAgentPubkeys(
 /**
  * Channel-scoped variant: the managed ∪ relay baseline plus this channel's
  * bot members (role `bot` or `isAgent`), so member-only agents are included.
+ *
+ * `profiles` (when provided) contributes the verified NIP-OA signal: a
+ * member whose kind:0 carries a valid auth tag is an agent regardless of
+ * its channel role — standalone harness agents join as plain `member` and
+ * would otherwise pass as humans.
  */
 export function mergeChannelKnownAgentPubkeys(
   channelMembers:
@@ -60,11 +65,17 @@ export function mergeChannelKnownAgentPubkeys(
     | undefined,
   managedAgents: readonly { pubkey: string }[] | undefined,
   relayAgents: readonly { pubkey: string }[] | undefined,
+  profiles?: Readonly<Record<string, { isAgent?: boolean }>>,
 ): ReadonlySet<string> {
   const pubkeys = new Set(mergeKnownAgentPubkeys(managedAgents, relayAgents));
   for (const member of channelMembers ?? []) {
-    if (member.role === "bot" || member.isAgent) {
-      pubkeys.add(normalizePubkey(member.pubkey));
+    const normalized = normalizePubkey(member.pubkey);
+    if (
+      member.role === "bot" ||
+      member.isAgent ||
+      profiles?.[normalized]?.isAgent === true
+    ) {
+      pubkeys.add(normalized);
     }
   }
   return pubkeys;

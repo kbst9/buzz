@@ -165,6 +165,8 @@ export function buildPersonaDraftProfile(persona: AgentPersona): Profile {
     about: null,
     nip05Handle: null,
     ownerPubkey: null,
+    // A persona draft is an agent by definition.
+    isAgent: true,
     // Draft profile synthesised from persona config — not backed by a kind:0 event.
     hasProfileEvent: false,
   };

@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 
 import { useActiveAgentTurnsBridge } from "@/features/agents/activeAgentTurnsStore";
@@ -8,7 +9,7 @@ import {
 import { useManagedAgentObserverBridge } from "@/features/agents/observerRelayStore";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import type { ManagedAgent } from "@/shared/api/types";
+import type { ManagedAgent, UserProfileSummary } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
 type IngestionAgent = Pick<ManagedAgent, "pubkey" | "status">;
@@ -56,6 +57,65 @@ export function combineObserverIngestionAgents(
 }
 
 /**
+ * Owned-agent pubkeys the app has verifiably *seen*: every per-pubkey
+ * profile cache entry (`["users-batch-entry", pk]`) whose verified NIP-OA
+ * `ownerPubkey` is the current identity.
+ *
+ * This is the enumeration source the kind:10100 directory cannot provide —
+ * standalone harness agents never publish 10100, but their profiles flow
+ * through the same batch cache the moment any surface (member list,
+ * timeline, search) loads them. Their observer frames are `#p`-addressed to
+ * the owner and already arrive on the subscription; this hook is what gets
+ * them *registered* so they decrypt.
+ */
+function useSeenOwnedAgentPubkeys(
+  currentPubkey: string | null | undefined,
+): readonly string[] {
+  const queryClient = useQueryClient();
+  const [pubkeys, setPubkeys] = React.useState<readonly string[]>([]);
+
+  React.useEffect(() => {
+    if (!currentPubkey) {
+      setPubkeys([]);
+      return;
+    }
+    const me = normalizePubkey(currentPubkey);
+
+    const collect = () => {
+      const entries = queryClient.getQueriesData<UserProfileSummary>({
+        queryKey: ["users-batch-entry"],
+      });
+      const owned = new Set<string>();
+      for (const [queryKey, summary] of entries) {
+        const pubkey = queryKey[1];
+        if (typeof pubkey !== "string" || !summary?.ownerPubkey) {
+          continue;
+        }
+        if (normalizePubkey(summary.ownerPubkey) === me) {
+          owned.add(normalizePubkey(pubkey));
+        }
+      }
+      const next = [...owned].sort();
+      setPubkeys((prev) =>
+        prev.length === next.length &&
+        prev.every((pubkey, index) => pubkey === next[index])
+          ? prev
+          : next,
+      );
+    };
+
+    collect();
+    return queryClient.getQueryCache().subscribe((event) => {
+      if (event.query.queryKey[0] === "users-batch-entry") {
+        collect();
+      }
+    });
+  }, [currentPubkey, queryClient]);
+
+  return pubkeys;
+}
+
+/**
  * App-level owner-global observer ingestion.
  *
  * Mounted once in AppShell so observer frames (kind 24200) are received,
@@ -81,13 +141,23 @@ export function useAgentObserverIngestion() {
   const managedAgents = managedAgentsQuery.data;
 
   const relayAgentsQuery = useRelayAgentsQuery();
-  const relayAgentPubkeys = React.useMemo(
-    () => (relayAgentsQuery.data ?? []).map((agent) => agent.pubkey),
-    [relayAgentsQuery.data],
+  const seenOwnedPubkeys = useSeenOwnedAgentPubkeys(currentPubkey);
+  const candidatePubkeys = React.useMemo(
+    () => [
+      ...new Set([
+        ...(relayAgentsQuery.data ?? []).map((agent) =>
+          normalizePubkey(agent.pubkey),
+        ),
+        // Verified-owned agents outside the 10100 directory (standalone
+        // harness deployments) — see useSeenOwnedAgentPubkeys.
+        ...seenOwnedPubkeys,
+      ]),
+    ],
+    [relayAgentsQuery.data, seenOwnedPubkeys],
   );
 
-  const profilesQuery = useUsersBatchQuery(relayAgentPubkeys, {
-    enabled: Boolean(currentPubkey) && relayAgentPubkeys.length > 0,
+  const profilesQuery = useUsersBatchQuery(candidatePubkeys, {
+    enabled: Boolean(currentPubkey) && candidatePubkeys.length > 0,
   });
   const profiles = profilesQuery.data?.profiles;
 
@@ -105,11 +175,11 @@ export function useAgentObserverIngestion() {
     }
     return combineObserverIngestionAgents(
       managedAgents ?? [],
-      relayAgentPubkeys,
+      candidatePubkeys,
       ownerByPubkey,
       currentPubkey,
     );
-  }, [currentPubkey, managedAgents, profiles, relayAgentPubkeys]);
+  }, [candidatePubkeys, currentPubkey, managedAgents, profiles]);
 
   useManagedAgentObserverBridge(ingestionAgents);
   useActiveAgentTurnsBridge(ingestionAgents);

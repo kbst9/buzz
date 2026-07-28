@@ -404,6 +404,7 @@ fn current_pubkey_hex_unwrap(state: &AppState) -> String {
 
 fn empty_profile_info(pubkey: &str) -> ProfileInfo {
     ProfileInfo {
+        is_agent: false,
         pubkey: pubkey.to_string(),
         display_name: None,
         avatar_url: None,

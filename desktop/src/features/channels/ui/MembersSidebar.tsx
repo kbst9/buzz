@@ -175,23 +175,6 @@ export function MembersSidebar({
   const rawMembers = membersQuery.data ?? [];
   const selfMember =
     rawMembers.find((member) => member.pubkey === currentPubkey) ?? null;
-  const {
-    people,
-    bots,
-    archived,
-    isBot,
-    isMyBot,
-    managedAgentsQuery,
-    relayAgentsQuery,
-  } = useClassifiedMembers(rawMembers, currentPubkey);
-  const activeMembers = React.useMemo(
-    () =>
-      [...people, ...bots].sort((left, right) =>
-        compareMembersForModal(currentPubkey, left, right),
-      ),
-    [bots, currentPubkey, people],
-  );
-
   const allMemberPubkeys = React.useMemo(
     () => rawMembers.map((member) => member.pubkey),
     [rawMembers],
@@ -202,6 +185,26 @@ export function MembersSidebar({
   const memberProfilesQuery = useUsersBatchQuery(allMemberPubkeys, {
     enabled: open && rawMembers.length > 0,
   });
+  const {
+    people,
+    bots,
+    archived,
+    isBot,
+    isMyBot,
+    managedAgentsQuery,
+    relayAgentsQuery,
+  } = useClassifiedMembers(
+    rawMembers,
+    currentPubkey,
+    memberProfilesQuery.data?.profiles,
+  );
+  const activeMembers = React.useMemo(
+    () =>
+      [...people, ...bots].sort((left, right) =>
+        compareMembersForModal(currentPubkey, left, right),
+      ),
+    [bots, currentPubkey, people],
+  );
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
   const deferredSearchQuery = React.useDeferredValue(searchQuery.trim());
   const normalizedDeferredSearchQuery = deferredSearchQuery.toLowerCase();
