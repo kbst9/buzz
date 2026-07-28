@@ -197,6 +197,9 @@ enum Cmd {
     /// Look up users and manage profiles and presence
     #[command(subcommand)]
     Users(UsersCmd),
+    /// Claim community invites (join a relay as this identity)
+    #[command(subcommand)]
+    Invites(InvitesCmd),
     /// Create, trigger, and manage workflows
     #[command(subcommand)]
     Workflows(WorkflowsCmd),
@@ -342,6 +345,25 @@ Examples:\n  \
 buzz agents archived"
     )]
     Archived,
+    /// Mint a NIP-OA auth tag binding an agent pubkey to this (owner) identity
+    #[command(
+        name = "mint-tag",
+        after_help = "Local operation — nothing is published and no relay \
+connection is made. The CLI identity signs as the OWNER; hand the resulting \
+tag JSON to the agent process as BUZZ_AUTH_TAG so its events and NIP-42 \
+auth carry the owner attestation (the relay materializes the agent→owner \
+mapping on first authenticated connection).\n\n\
+Examples:\n  \
+buzz agents mint-tag <AGENT_PUBKEY>\n  \
+buzz agents mint-tag <AGENT_PUBKEY> --conditions kind=9"
+    )]
+    MintTag {
+        /// Agent identity pubkey (64-char hex) to authorize
+        agent_pubkey: String,
+        /// NIP-OA conditions string, e.g. "kind=9&created_at>0" (default: unrestricted)
+        #[arg(long, default_value = "")]
+        conditions: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -795,6 +817,28 @@ pub enum DmsCmd {
         /// DM conversation UUID
         #[arg(long)]
         channel: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum InvitesCmd {
+    /// Claim an invite code — adds this identity as a relay member
+    #[command(
+        after_help = "The claim is NIP-98-signed by the CLI identity. Standalone \
+agents: claim with the agent's own key, then connect with a NIP-OA auth tag \
+(see 'buzz agents mint-tag') so the relay classifies the identity as an \
+agent with an accountable owner.\n\n\
+On relays with a join policy, pass the acceptance receipt via \
+--policy-receipt.\n\n\
+Examples:\n  buzz invites claim --code v2.PGh3BdFY0Vau1g0P4VZUJw"
+    )]
+    Claim {
+        /// Invite code (from the invite link or 'buzz' desktop mint dialog)
+        #[arg(long)]
+        code: String,
+        /// Join-policy acceptance receipt, when the relay requires one
+        #[arg(long)]
+        policy_receipt: Option<String>,
     },
 }
 
@@ -1789,6 +1833,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Emoji(sub) => commands::emoji::dispatch(sub, &client).await,
         Cmd::Dms(sub) => commands::dms::dispatch(sub, &client).await,
         Cmd::Users(sub) => commands::users::dispatch(sub, &client, &cli.format).await,
+        Cmd::Invites(sub) => commands::invites::dispatch(sub, &client).await,
         Cmd::Workflows(sub) => commands::workflows::dispatch(sub, &client).await,
         Cmd::Feed(sub) => commands::feed::dispatch(sub, &client, &cli.format).await,
         Cmd::Social(sub) => commands::social::dispatch(sub, &client).await,
@@ -1841,6 +1886,28 @@ mod tests {
     }
 
     #[test]
+    fn invites_claim_requires_code() {
+        assert!(Cli::try_parse_from(["buzz", "invites", "claim"]).is_err());
+        assert!(Cli::try_parse_from(["buzz", "invites", "claim", "--code", "v2.abc"]).is_ok());
+    }
+
+    #[test]
+    fn agents_mint_tag_requires_agent_pubkey() {
+        assert!(Cli::try_parse_from(["buzz", "agents", "mint-tag"]).is_err());
+        let hex = "a".repeat(64);
+        assert!(Cli::try_parse_from(["buzz", "agents", "mint-tag", &hex]).is_ok());
+        assert!(Cli::try_parse_from([
+            "buzz",
+            "agents",
+            "mint-tag",
+            &hex,
+            "--conditions",
+            "kind=9"
+        ])
+        .is_ok());
+    }
+
+    #[test]
     fn command_inventory_is_stable() {
         let expected_groups: Vec<&str> = vec![
             "agents",
@@ -1849,6 +1916,7 @@ mod tests {
             "dms",
             "emoji",
             "feed",
+            "invites",
             "issues",
             "media",
             "mem",
@@ -1912,9 +1980,11 @@ mod tests {
                 "archived",
                 "draft-create",
                 "draft-update",
+                "mint-tag",
                 "unarchive"
             ]
         );
+        assert_eq!(names(&cmd, "invites"), vec!["claim"]);
         assert_eq!(
             names(&cmd, "messages"),
             vec![
@@ -2038,12 +2108,13 @@ mod tests {
     #[test]
     fn subcommand_counts_are_stable() {
         let expected: Vec<(&str, usize)> = vec![
-            ("agents", 5),
+            ("agents", 6),
             ("canvas", 2),
             ("channels", 16),
             ("dms", 4),
             ("emoji", 5),
             ("feed", 1),
+            ("invites", 1),
             ("issues", 4),
             ("media", 1),
             ("messages", 8),

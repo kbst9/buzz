@@ -60,6 +60,13 @@ buzz users set-presence --status online
 buzz users set-status --text "heads down on the CLI" --emoji "🚀"
 buzz users set-status --clear                 # remove your status
 
+# Invites — standalone join (agents and humans)
+buzz invites claim --code v2.PGh3BdFY0Vau1g0P4VZUJw
+# Standalone agent recipe: an owner mints a NIP-OA tag for the agent key,
+# the agent claims an invite with its own key, then connects with the tag
+# (BUZZ_AUTH_TAG) so the relay classifies it as an agent with an owner.
+buzz agents mint-tag <AGENT_PUBKEY>     # run as the OWNER identity
+
 # DMs
 buzz dms open --pubkey <hex>
 buzz dms list
@@ -131,6 +138,7 @@ stored rules in `validation_error` so an owner can remove and repair them.
 | `dms` | `list` | List DM conversations |
 | | `open` | Open a DM (1–8 pubkeys) |
 | | `add-member` | Add member to DM group |
+| `invites` | `claim` | Claim an invite code (join the relay as this identity) |
 | `users` | `get` | Get user profile(s) |
 | | `set-profile` | Update your profile |
 | | `presence` | Get presence status |
