@@ -112,33 +112,31 @@ async fn sync_profile(
         .kind(nostr::Kind::Metadata)
         .author(me)
         .limit(1);
-    let current: Option<CurrentProfile> = match tokio::time::timeout(
-        Duration::from_millis(3000),
-        rest_client.query(&[filter]),
-    )
-    .await
-    {
-        Ok(Ok(resp)) => resp
-            .as_array()
-            .and_then(|arr| arr.first())
-            .map(|event| CurrentProfile {
-                content: event
-                    .get("content")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("{}")
-                    .to_string(),
-                tags: event
-                    .get("tags")
-                    .and_then(|t| serde_json::from_value(t.clone()).ok())
-                    .unwrap_or_default(),
-            }),
-        _ => {
-            tracing::warn!(
-                "profile sync: current profile fetch failed — skipping (retries next start)"
-            );
-            return;
-        }
-    };
+    let current: Option<CurrentProfile> =
+        match tokio::time::timeout(Duration::from_millis(3000), rest_client.query(&[filter])).await
+        {
+            Ok(Ok(resp)) => {
+                resp.as_array()
+                    .and_then(|arr| arr.first())
+                    .map(|event| CurrentProfile {
+                        content: event
+                            .get("content")
+                            .and_then(|c| c.as_str())
+                            .unwrap_or("{}")
+                            .to_string(),
+                        tags: event
+                            .get("tags")
+                            .and_then(|t| serde_json::from_value(t.clone()).ok())
+                            .unwrap_or_default(),
+                    })
+            }
+            _ => {
+                tracing::warn!(
+                    "profile sync: current profile fetch failed — skipping (retries next start)"
+                );
+                return;
+            }
+        };
 
     let env_tag = std::env::var("BUZZ_AUTH_TAG").ok();
     let merged = match merge_agent_profile(&me, current.as_ref(), overlay, env_tag.as_deref()) {
@@ -160,13 +158,11 @@ async fn sync_profile(
         return;
     }
 
-    let signed = merged
-        .into_builder()
-        .and_then(|builder| {
-            builder
-                .sign_with_keys(keys)
-                .map_err(|e| buzz_sdk::SdkError::InvalidInput(format!("profile sign: {e}")))
-        });
+    let signed = merged.into_builder().and_then(|builder| {
+        builder
+            .sign_with_keys(keys)
+            .map_err(|e| buzz_sdk::SdkError::InvalidInput(format!("profile sign: {e}")))
+    });
     match signed {
         Ok(event) => match publisher.publish_event(event).await {
             Ok(()) => tracing::info!("profile published (kind:0 sync)"),

@@ -164,7 +164,9 @@ pub fn merge_profile(
     apply_field(&mut content, "picture", overlay.avatar_url.as_deref());
     apply_field(&mut content, "nip05", overlay.nip05.as_deref());
 
-    let tags = current.map(|profile| profile.tags.clone()).unwrap_or_default();
+    let tags = current
+        .map(|profile| profile.tags.clone())
+        .unwrap_or_default();
     finish_merge(current, content, tags)
 }
 
@@ -355,8 +357,14 @@ mod tests {
         assert_eq!(value["name"], "Hermes");
         assert_eq!(value["picture"], "https://x.example/a.png");
         assert_eq!(value["bot"], true);
-        assert!(merged.tags.iter().any(|t| t.first().map(String::as_str) == Some("client")));
-        assert!(merged.tags.iter().any(|t| t.first().map(String::as_str) == Some("auth")));
+        assert!(merged
+            .tags
+            .iter()
+            .any(|t| t.first().map(String::as_str) == Some("client")));
+        assert!(merged
+            .tags
+            .iter()
+            .any(|t| t.first().map(String::as_str) == Some("auth")));
     }
 
     #[test]
@@ -410,13 +418,11 @@ mod tests {
             .filter(|t| t.first().map(String::as_str) == Some("auth"))
             .collect();
         assert_eq!(auth_tags.len(), 1, "foreign tag dropped, fallback appended");
-        assert!(
-            verify_auth_tag(
-                &serde_json::to_string(&auth_tags[0]).expect("json"),
-                &agent.public_key()
-            )
-            .is_ok()
-        );
+        assert!(verify_auth_tag(
+            &serde_json::to_string(&auth_tags[0]).expect("json"),
+            &agent.public_key()
+        )
+        .is_ok());
     }
 
     #[test]
@@ -500,7 +506,10 @@ mod tests {
             Some(&fallback),
         )
         .expect("merge");
-        assert!(!second.changed, "same overlay over its own output is a no-op");
+        assert!(
+            !second.changed,
+            "same overlay over its own output is a no-op"
+        );
 
         let third = merge_agent_profile(
             &agent.public_key(),

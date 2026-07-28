@@ -179,7 +179,9 @@ pub async fn cmd_set_profile(
     let me = client.keys().public_key();
     let current = fetch_current_profile_parts(client, &me.to_hex()).await?;
     let env_auth_tag = std::env::var("BUZZ_AUTH_TAG").ok();
-    let is_agent_identity = env_auth_tag.as_deref().is_some_and(|tag| !tag.trim().is_empty())
+    let is_agent_identity = env_auth_tag
+        .as_deref()
+        .is_some_and(|tag| !tag.trim().is_empty())
         || current
             .as_ref()
             .is_some_and(|profile| buzz_sdk::profile::valid_auth_tag(&me, profile).is_some());
