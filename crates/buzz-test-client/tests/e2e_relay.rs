@@ -325,6 +325,71 @@ async fn test_invite_mint_requires_owner_or_admin() {
     assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
 }
 
+/// Standalone-join recipe: an agent claims an invite with its own keypair,
+/// then authenticates over WebSocket carrying an owner-signed NIP-OA tag.
+/// The relay must materialize `users.agent_owner_pubkey` — the column that
+/// classifies the identity as an agent (rate tiers, directory, observer
+/// frames) — even though membership was satisfied by the agent's own
+/// `relay_members` row rather than owner delegation.
+///
+/// On a closed relay (`BUZZ_REQUIRE_RELAY_MEMBERSHIP=true`) this exercises
+/// the member-by-row + tag branch, which previously skipped tag extraction
+/// entirely and left invite-claimed agents classified as human. On an open
+/// relay it degrades to the unconditional backfill. The end state is
+/// identical in both configurations.
+#[tokio::test]
+#[ignore]
+async fn test_invite_claimed_agent_materializes_nip_oa_owner() {
+    let host = "localhost:3000";
+    let owner = Keys::generate();
+    seed_relay_member(host, &owner, "admin").await;
+
+    // Owner mints an invite over HTTP (NIP-98-signed).
+    let mint_response = invite_post(&owner, "/api/invites", "{}").await;
+    assert_eq!(mint_response.status(), reqwest::StatusCode::OK);
+    let mint_json: serde_json::Value = mint_response.json().await.expect("mint JSON");
+    let code = mint_json
+        .get("code")
+        .and_then(serde_json::Value::as_str)
+        .expect("minted code")
+        .to_string();
+
+    // The agent claims it with its own key — a membership row of its own.
+    let agent = Keys::generate();
+    let claim_body = serde_json::json!({ "code": code }).to_string();
+    let claim_response = invite_post(&agent, "/api/invites/claim", &claim_body).await;
+    assert_eq!(claim_response.status(), reqwest::StatusCode::OK);
+
+    // Agent authenticates over WS with the owner-signed NIP-OA tag.
+    let tag_json = buzz_sdk::nip_oa::compute_auth_tag(&owner, &agent.public_key(), "")
+        .expect("compute auth tag");
+    let auth_tag = buzz_sdk::nip_oa::parse_auth_tag(&tag_json).expect("parse auth tag");
+    let mut client = BuzzTestClient::connect_unauthenticated(&relay_url())
+        .await
+        .expect("connect agent");
+    client
+        .authenticate_with_nip_oa(&agent, &auth_tag)
+        .await
+        .expect("NIP-42 auth with NIP-OA tag");
+
+    // Classification materialized: agent_owner_pubkey = owner.
+    let pool = e2e_db_pool().await;
+    let community_id = ensure_test_community(host).await;
+    let owner_bytes: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT agent_owner_pubkey FROM users WHERE community_id = $1 AND pubkey = $2",
+    )
+    .bind(community_id)
+    .bind(agent.public_key().to_bytes().to_vec())
+    .fetch_one(&pool)
+    .await
+    .expect("agent users row exists after auth");
+    assert_eq!(
+        owner_bytes,
+        Some(owner.public_key().to_bytes().to_vec()),
+        "invite-claimed agent must be classified with its NIP-OA owner"
+    );
+}
+
 #[tokio::test]
 #[ignore]
 async fn test_invite_code_minted_for_one_host_fails_on_another() {
