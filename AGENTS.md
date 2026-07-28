@@ -592,3 +592,59 @@ usage.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — system design and component relationships
 - [RELEASING.md](RELEASING.md) — release process: `release-desktop`, `release-relay`, `scripts/mobile-release.sh`, candidate tags, internal builds
 - [README.md](README.md) — project overview and quick start
+
+---
+
+## Fork Operations (deploy branch only — never upstream this section)
+
+This checkout is the **kbst9/buzz fork** of block/buzz. Everything below is
+fork-local convention, lives only on `deploy`, and must never reach a PR
+against upstream. Set up 2026-07-28.
+
+### Branch model
+
+| Branch | Rule |
+|--------|------|
+| `main` | Pristine mirror of block/buzz. **Never commit to it.** It only moves by fast-forward from `upstream`. |
+| `feat/*` | One coherent change each, branched off `main` — these are upstream-PR candidates. |
+| `deploy` | The only branch prod runs. Assembled by merging `main` + feature branches. Merge fixups are the only direct commits. |
+
+### The sync loop
+
+`buzz-sync` (in `~/.local/bin`, outside the repo on purpose) runs the whole
+cycle: fetch `upstream` → fast-forward `main` → push → merge `main` into
+`deploy` (git rerere is enabled and replays previously-resolved conflicts) →
+push → launch `just ci` detached on the build host.
+
+```bash
+buzz-sync            # full loop
+buzz-sync status     # watch the remote CI run
+buzz-sync ci         # (re)launch remote CI only
+buzz-sync --no-ci    # sync without launching CI
+```
+
+On conflict it exits with the file list: resolve, `git add -A`, `git commit`,
+rerun. The resolution is remembered. Known hot spots: the buzz-cli
+surface-guard tests in `crates/buzz-cli/src/lib.rs` (names **and** counts —
+union both sides), `desktop/scripts/check-file-sizes.mjs` overrides, and any
+file both sides' agent features touch. Sync often; small deltas conflict
+trivially, stale ones conflict structurally.
+
+### Building and CI
+
+The local Mac disk is chronically near-full — **run heavy Rust builds and
+full CI on the build host** (`ssh gradient-ssh`, clone at `~/buzz`, CI log at
+`/tmp/buzz-ci.log`), not locally. Local is fine for: single-crate
+`cargo test -p`, desktop `pnpm test`/`pnpm run check`, fmt. If local disk
+fills (ENOSPC can kill even shell output capture): safe reclaims are
+`target/` dirs and `target/*/debug/incremental`; never touch user data.
+Before committing a dirty tree you didn't create, check for disk-pressure
+shrapnel: `grep -rl "temporarily truncated" --exclude-dir={target,node_modules,.git} .`
+— a prior session may have emptied a file intending to restore it.
+
+### Deploying
+
+Tag what you ship on `deploy` as `deploy/YYYY-MM-DD` (annotated, pushed).
+Prod deploys in place, so those tags are the rollback refs. Deploy specifics
+(compose files, agent units, rollback commands) are in the operator's session
+memory, not this repo.
