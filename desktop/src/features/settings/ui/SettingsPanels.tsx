@@ -4,6 +4,7 @@ import {
   Archive,
   BellRing,
   Bot,
+  Cable,
   Check,
   ChevronDown,
   Cpu,
@@ -28,6 +29,7 @@ import type {
   NotificationSettings,
 } from "@/features/notifications/hooks";
 import type { SoundName, SoundSlot } from "@/features/notifications/lib/sound";
+import { ConnectedAgentsSettingsCard } from "@/features/agents/ui/ConnectedAgentsSettingsCard";
 import { CommunityMembersSettingsCard } from "@/features/community-members/ui/CommunityMembersSettingsCard";
 import { CustomEmojiSettingsCard } from "@/features/custom-emoji/ui/CustomEmojiSettingsCard";
 import { LocalArchiveSettingsCard } from "@/features/local-archive/ui/LocalArchiveSettingsCard";
@@ -95,6 +97,7 @@ export type SettingsSection =
   | "appearance"
   | "shortcuts"
   | "hosted-communities"
+  | "connected-agents"
   | "community-members"
   | "moderation"
   | "custom-emoji"
@@ -114,6 +117,7 @@ const SETTINGS_SECTION_VALUES: readonly SettingsSection[] = [
   "appearance",
   "shortcuts",
   "hosted-communities",
+  "connected-agents",
   "community-members",
   "moderation",
   "custom-emoji",
@@ -138,6 +142,7 @@ export type SettingsSectionDescriptor = {
 };
 
 export type SettingsPanelProps = {
+  activeRelayUrl?: string;
   currentPubkey?: string;
   fallbackDisplayName?: string;
   isUpdatingDesktopNotifications: boolean;
@@ -199,6 +204,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "hosted-communities",
     label: "Hosted communities",
     icon: MessagesSquare,
+  },
+  {
+    value: "connected-agents",
+    label: "Connected agents",
+    icon: Cable,
   },
   {
     value: "community-members",
@@ -829,6 +839,13 @@ export function renderSettingsSection(
       return <KeyboardShortcutsCard />;
     case "hosted-communities":
       return <HostedCommunitiesSettingsCard />;
+    case "connected-agents":
+      return (
+        <ConnectedAgentsSettingsCard
+          currentPubkey={props.currentPubkey}
+          relayUrl={props.activeRelayUrl}
+        />
+      );
     case "community-members":
       return (
         <CommunityMembersSettingsCard currentPubkey={props.currentPubkey} />
