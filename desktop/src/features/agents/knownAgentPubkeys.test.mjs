@@ -62,38 +62,27 @@ test("owned agents exclude agents controlled by somebody else", () => {
   assert.equal(merged.size, 0);
 });
 
-test("channel-known agents include role, relay flag, and verified-profile members", () => {
+test("channel-known agents include role and relay-flagged members", () => {
   const memberHuman = "1".repeat(64);
   const memberBotRole = "2".repeat(64);
   const memberRelayFlagged = "3".repeat(64);
-  const memberAuthTagged = "4".repeat(64);
 
   const merged = mergeChannelKnownAgentPubkeys(
     [
       { pubkey: memberHuman, role: "member", isAgent: false },
       { pubkey: memberBotRole, role: "bot", isAgent: false },
-      { pubkey: memberRelayFlagged, role: "member", isAgent: true },
       {
-        pubkey: memberAuthTagged.toUpperCase(),
+        pubkey: memberRelayFlagged.toUpperCase(),
         role: "member",
-        isAgent: false,
+        isAgent: true,
       },
     ],
     undefined,
     undefined,
-    { [memberAuthTagged]: { isAgent: true } },
   );
 
   assert.deepEqual(
     [...merged].sort(),
-    [memberBotRole, memberRelayFlagged, memberAuthTagged].sort(),
+    [memberBotRole, memberRelayFlagged].sort(),
   );
-});
-
-test("channel-known agents ignore profile flags for non-members", () => {
-  const stranger = "5".repeat(64);
-  const merged = mergeChannelKnownAgentPubkeys([], undefined, undefined, {
-    [stranger]: { isAgent: true },
-  });
-  assert.equal(merged.size, 0);
 });

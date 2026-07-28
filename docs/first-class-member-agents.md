@@ -334,6 +334,31 @@ mention, wears its avatar, and is badged as an agent in every desktop
 surface — while the desktop holds none of its keys and manages none of its
 lifecycle.
 
+## 6.1 Implementation notes (deltas discovered while building)
+
+- **The settings nav renders from `settingsNavGroups`, not the flat
+  `settingsSections` list.** A section registered only in the flat list is
+  compiled, deep-linkable, and invisible. Cost one full misdiagnosis cycle;
+  UI-visibility claims are now verified with a mock-bridge screenshot
+  before being called done.
+- **CLI naming:** the profile commands landed as `buzz users set-profile` /
+  `get-profile` — the `users` group already owned profile writes; a new
+  top-level `profile` group would have duplicated taxonomy. The CLI surface
+  guard tests (`subcommand_names_are_stable`) enforce deliberate updates.
+- **Observer enumeration** uses the per-pubkey profile query cache
+  (`["users-batch-entry", pk]`) as the app-global "agents I have seen"
+  registry rather than a new store — profiles already flow through it from
+  every surface, and it needs no reset wiring on community switch because
+  the QueryClient itself is community-scoped.
+- **`set_profile` control frames** (§4.2) were added after the initial
+  design when practice showed host-access-for-a-rename was the first thing
+  an operator hit. They reuse the cancel/switch control channel and the
+  startup sync path wholesale; the only new code is payload→overlay
+  mapping and a spawn.
+- **Env pinning became precedence-bearing** the moment app edits existed:
+  `BUZZ_ACP_PROFILE_*` reasserts on restart, so the reference deployment
+  pins only the observer flag and leaves names app-managed.
+
 ## 7. Open questions (carried, non-blocking)
 
 - Should the relay *warn* (not reject) when a kind:0 replacement drops a
