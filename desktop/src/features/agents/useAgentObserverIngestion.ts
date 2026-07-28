@@ -68,6 +68,37 @@ export function combineObserverIngestionAgents(
  * the owner and already arrive on the subscription; this hook is what gets
  * them *registered* so they decrypt.
  */
+/**
+ * Pure core of `useSeenOwnedAgentPubkeys`, extracted for tests: the cache
+ * stores `{ summary, fetchedAt }` WRAPPERS under `["users-batch-entry", pk]`
+ * (see `UsersBatchEntry` in features/profile/hooks.ts) — reading the bare
+ * summary shape here once made the whole widening a silent no-op, which is
+ * why this stays a tested seam.
+ */
+export function collectSeenOwnedAgentPubkeys(
+  entries: ReadonlyArray<
+    readonly [
+      readonly unknown[],
+      { summary?: UserProfileSummary | null } | undefined,
+    ]
+  >,
+  currentPubkey: string,
+): string[] {
+  const me = normalizePubkey(currentPubkey);
+  const owned = new Set<string>();
+  for (const [queryKey, entry] of entries) {
+    const pubkey = queryKey[1];
+    const ownerPubkey = entry?.summary?.ownerPubkey;
+    if (typeof pubkey !== "string" || !ownerPubkey) {
+      continue;
+    }
+    if (normalizePubkey(ownerPubkey) === me) {
+      owned.add(normalizePubkey(pubkey));
+    }
+  }
+  return [...owned].sort();
+}
+
 function useSeenOwnedAgentPubkeys(
   currentPubkey: string | null | undefined,
 ): readonly string[] {
@@ -79,23 +110,15 @@ function useSeenOwnedAgentPubkeys(
       setPubkeys([]);
       return;
     }
-    const me = normalizePubkey(currentPubkey);
+    const me = currentPubkey;
 
     const collect = () => {
-      const entries = queryClient.getQueriesData<UserProfileSummary>({
+      const entries = queryClient.getQueriesData<{
+        summary?: UserProfileSummary | null;
+      }>({
         queryKey: ["users-batch-entry"],
       });
-      const owned = new Set<string>();
-      for (const [queryKey, summary] of entries) {
-        const pubkey = queryKey[1];
-        if (typeof pubkey !== "string" || !summary?.ownerPubkey) {
-          continue;
-        }
-        if (normalizePubkey(summary.ownerPubkey) === me) {
-          owned.add(normalizePubkey(pubkey));
-        }
-      }
-      const next = [...owned].sort();
+      const next = collectSeenOwnedAgentPubkeys(entries, me);
       setPubkeys((prev) =>
         prev.length === next.length &&
         prev.every((pubkey, index) => pubkey === next[index])
@@ -104,12 +127,28 @@ function useSeenOwnedAgentPubkeys(
       );
     };
 
-    collect();
-    return queryClient.getQueryCache().subscribe((event) => {
-      if (event.query.queryKey[0] === "users-batch-entry") {
+    // Batch resolution writes one cache entry per pubkey; coalesce the
+    // per-event storm into one scan per tick instead of O(N) scans per
+    // N-profile batch.
+    let scheduled = false;
+    const scheduleCollect = () => {
+      if (scheduled) {
+        return;
+      }
+      scheduled = true;
+      window.setTimeout(() => {
+        scheduled = false;
         collect();
+      }, 0);
+    };
+
+    collect();
+    const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+      if (event.query.queryKey[0] === "users-batch-entry") {
+        scheduleCollect();
       }
     });
+    return unsubscribe;
   }, [currentPubkey, queryClient]);
 
   return pubkeys;

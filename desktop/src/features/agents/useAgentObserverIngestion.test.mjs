@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { combineObserverIngestionAgents } from "./useAgentObserverIngestion.ts";
+import {
+  collectSeenOwnedAgentPubkeys,
+  combineObserverIngestionAgents,
+} from "./useAgentObserverIngestion.ts";
 
 const ME = "aaaa1234aaaa1234aaaa1234aaaa1234aaaa1234aaaa1234aaaa1234aaaa1234";
 const OTHER =
@@ -84,5 +87,48 @@ describe("combineObserverIngestionAgents", () => {
       undefined,
     );
     assert.deepEqual(result, [{ pubkey: AGENT_LOCAL, status: "running" }]);
+  });
+});
+
+describe("collectSeenOwnedAgentPubkeys", () => {
+  const entry = (pubkey, value) => [["users-batch-entry", pubkey], value];
+
+  it("collects owned agents from the wrapped cache entry shape", () => {
+    // The cache stores { summary, fetchedAt } wrappers — reading the bare
+    // summary shape regressed the entire observer widening to a no-op once.
+    const entries = [
+      entry(AGENT_REMOTE, {
+        summary: { displayName: "Codex", isAgent: true, ownerPubkey: ME },
+        fetchedAt: 123,
+      }),
+      entry(AGENT_LOCAL.toUpperCase(), {
+        summary: {
+          displayName: "Hermes",
+          isAgent: true,
+          ownerPubkey: ME.toUpperCase(),
+        },
+        fetchedAt: 123,
+      }),
+      entry(AGENT_FOREIGN, {
+        summary: { displayName: "Mira", isAgent: true, ownerPubkey: OTHER },
+        fetchedAt: 123,
+      }),
+    ];
+
+    assert.deepEqual(
+      collectSeenOwnedAgentPubkeys(entries, ME),
+      [AGENT_LOCAL, AGENT_REMOTE].sort(),
+    );
+  });
+
+  it("ignores misses, ownerless summaries, and malformed keys", () => {
+    const entries = [
+      entry(AGENT_REMOTE, { summary: null, fetchedAt: 1 }),
+      entry(AGENT_LOCAL, { summary: { displayName: "x", ownerPubkey: null } }),
+      entry(AGENT_FOREIGN, undefined),
+      [["users-batch-entry"], { summary: { ownerPubkey: ME } }],
+    ];
+
+    assert.deepEqual(collectSeenOwnedAgentPubkeys(entries, ME), []);
   });
 });

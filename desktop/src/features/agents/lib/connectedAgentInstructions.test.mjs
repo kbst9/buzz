@@ -39,6 +39,12 @@ test("edit instructions include only the fields that were set", () => {
   assert.ok(text.includes("buzz-acp-codex"));
   assert.ok(text.includes("--avatar 'https://x.example/codex.png'"));
   assert.ok(!text.includes("--name"));
+  assert.ok(
+    !text.includes("bash -c"),
+    "flags must not be nested inside another quoting layer",
+  );
+  assert.ok(text.includes("sudo -i"));
+  assert.ok(!text.includes("source /etc/buzz-agents"));
 });
 
 test("edit instructions shell-quote values with apostrophes", () => {

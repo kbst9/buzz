@@ -116,19 +116,25 @@ async fn sync_profile(
         match tokio::time::timeout(Duration::from_millis(3000), rest_client.query(&[filter])).await
         {
             Ok(Ok(resp)) => {
-                resp.as_array()
-                    .and_then(|arr| arr.first())
-                    .map(|event| CurrentProfile {
-                        content: event
-                            .get("content")
-                            .and_then(|c| c.as_str())
-                            .unwrap_or("{}")
-                            .to_string(),
-                        tags: event
-                            .get("tags")
-                            .and_then(|t| serde_json::from_value(t.clone()).ok())
-                            .unwrap_or_default(),
-                    })
+                // A non-array body is a malformed response, not "no profile"
+                // — treating it as absent would let the merge replace a
+                // richer kind:0 with a minimal one, the exact clobber the
+                // merge helper exists to prevent.
+                let Some(events) = resp.as_array() else {
+                    tracing::warn!("profile sync: unexpected query response shape — skipping");
+                    return;
+                };
+                events.first().map(|event| CurrentProfile {
+                    content: event
+                        .get("content")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("{}")
+                        .to_string(),
+                    tags: event
+                        .get("tags")
+                        .and_then(|t| serde_json::from_value(t.clone()).ok())
+                        .unwrap_or_default(),
+                })
             }
             _ => {
                 tracing::warn!(
@@ -1541,6 +1547,19 @@ async fn tokio_main() -> Result<()> {
     let mut relay_observer_control_rx = None;
     let mut relay_observer_publisher_task = None;
     let mut relay_observer_publisher = None;
+    // Owner CONTROL reception (cancel/switch/set_profile) is not telemetry:
+    // it is subscribed whenever an owner is resolved, independent of the
+    // --relay-observer flag. The flag gates only the outbound frame
+    // publisher — opting out of streaming a transcript must not also make
+    // the agent deaf to its owner.
+    if owner_cache.pubkey.is_some() {
+        relay
+            .subscribe_observer_controls()
+            .await
+            .map_err(|e| anyhow::anyhow!("observer control subscribe error: {e}"))?;
+        relay_observer_control_rx = relay.take_observer_control_rx();
+        tracing::info!("owner control frames enabled");
+    }
     if config.relay_observer {
         if let (Some(observer), Some(owner_pubkey_hex)) =
             (observer.clone(), owner_cache.pubkey.clone())
@@ -1555,11 +1574,6 @@ async fn tokio_main() -> Result<()> {
                         owner_pubkey_hex,
                         owner_pubkey,
                     ));
-                    relay
-                        .subscribe_observer_controls()
-                        .await
-                        .map_err(|e| anyhow::anyhow!("observer control subscribe error: {e}"))?;
-                    relay_observer_control_rx = relay.take_observer_control_rx();
                     tracing::info!("relay observer enabled");
                 }
                 Err(error) => {

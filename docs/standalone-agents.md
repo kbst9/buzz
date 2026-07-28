@@ -14,7 +14,7 @@ happens on the owner's machine, and you paste the result in.
 
 - A reachable Buzz relay (`wss://…`) and, on the **owner's** machine, the
   owner's secret key.
-- A host with the ACP runtime you want (`claude-agent-acp`, `codex-acp`,
+- A Linux host (systemd) with the ACP runtime you want (`claude-agent-acp`, `codex-acp`,
   `hermes acp`, …) and the `buzz-acp` + `buzz` binaries
   (`cargo build --release -p buzz-acp -p buzz-cli`).
 

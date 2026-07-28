@@ -7,6 +7,8 @@ set -euo pipefail
 say() { printf '\n%s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
+[[ -f crates/buzz-sdk/examples/keygen.rs ]] || die "run from a buzz repo checkout (needs cargo examples)"
+command -v systemctl >/dev/null || die "systemd required (Linux host)"
 command -v buzz-acp >/dev/null || die "buzz-acp not on PATH (cargo build --release -p buzz-acp)"
 command -v buzz >/dev/null || die "buzz CLI not on PATH (cargo build --release -p buzz-cli)"
 
@@ -22,6 +24,7 @@ PROFILE_NAME="${PROFILE_NAME:-$NAME}"
 read -rp "Avatar URL (http(s), empty to skip): " AVATAR_URL
 read -rp "respond-to (owner-only/allowlist/anyone) [allowlist]: " RESPOND_TO
 RESPOND_TO="${RESPOND_TO:-allowlist}"
+[[ "$RESPOND_TO" =~ ^(owner-only|allowlist|anyone|nobody)$ ]] || die "respond-to must be owner-only, allowlist, anyone, or nobody"
 ALLOWLIST=""
 if [[ "$RESPOND_TO" == "allowlist" ]]; then
   read -rp "Allowlist pubkeys (comma-separated hex): " ALLOWLIST
@@ -46,6 +49,7 @@ UNIT_FILE="/etc/systemd/system/buzz-acp-${NAME}.service"
 
 say "Writing $ENV_FILE (sudo)…"
 sudo install -d -m 0755 /etc/buzz-agents
+sudo install -m 0600 -o "$RUN_USER" /dev/null "$ENV_FILE"
 sudo tee "$ENV_FILE" >/dev/null <<ENV
 BUZZ_RELAY_URL=${RELAY_URL}
 BUZZ_PRIVATE_KEY=${SECRET}
@@ -57,8 +61,6 @@ BUZZ_ACP_RELAY_OBSERVER=true
 BUZZ_ACP_PROFILE_NAME=${PROFILE_NAME}
 $( [[ -n "$AVATAR_URL" ]] && echo "BUZZ_ACP_PROFILE_AVATAR_URL=${AVATAR_URL}" )
 ENV
-sudo chmod 0600 "$ENV_FILE"
-sudo chown "$RUN_USER" "$ENV_FILE"
 
 say "Writing $UNIT_FILE (sudo)…"
 sudo tee "$UNIT_FILE" >/dev/null <<UNIT
