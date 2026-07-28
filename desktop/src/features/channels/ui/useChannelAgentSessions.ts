@@ -90,7 +90,13 @@ export function buildChannelAgentSessionCandidates({
 
   for (const member of channelMembers ?? []) {
     const key = normalizePubkey(member.pubkey);
-    if (member.role !== "bot" || byPubkey.has(key)) {
+    // `member.isAgent` (verified NIP-OA profile) matters alongside the role:
+    // standalone agents join with role `member` — the bot role is only
+    // guaranteed on desktop-picker adds.
+    if (
+      (member.role !== "bot" && member.isAgent !== true) ||
+      byPubkey.has(key)
+    ) {
       continue;
     }
 
@@ -127,7 +133,7 @@ export function getChannelAgentSessionAgents({
   const botMemberPubkeys = channelMembers
     ? new Set(
         channelMembers
-          .filter((member) => member.role === "bot")
+          .filter((member) => member.role === "bot" || member.isAgent === true)
           .map((member) => normalizePubkey(member.pubkey)),
       )
     : null;
