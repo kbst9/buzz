@@ -852,6 +852,19 @@ pub enum UsersCmd {
         #[arg(long, value_enum)]
         status: PresenceStatus,
     },
+    /// Set your user status (NIP-38 kind:30315 — the "status" line on your profile)
+    #[command(name = "set-status")]
+    SetStatus {
+        /// Status text (required unless --clear)
+        #[arg(long, required_unless_present = "clear")]
+        text: Option<String>,
+        /// Optional emoji shown before the status text
+        #[arg(long)]
+        emoji: Option<String>,
+        /// Remove your status entirely
+        #[arg(long, conflicts_with_all = ["text", "emoji"])]
+        clear: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1818,6 +1831,30 @@ mod tests {
     }
 
     #[test]
+    fn set_status_clear_rejects_text_and_emoji() {
+        for extra in [["--text", "busy"], ["--emoji", "🎶"]] {
+            let args = ["buzz", "users", "set-status", "--clear"]
+                .into_iter()
+                .chain(extra);
+            assert!(
+                Cli::try_parse_from(args).is_err(),
+                "--clear must conflict with {}",
+                extra[0]
+            );
+        }
+    }
+
+    #[test]
+    fn set_status_requires_text_or_clear() {
+        assert!(Cli::try_parse_from(["buzz", "users", "set-status"]).is_err());
+        assert!(
+            Cli::try_parse_from(["buzz", "users", "set-status", "--emoji", "🎶"]).is_err(),
+            "--emoji alone must not imply a status"
+        );
+        assert!(Cli::try_parse_from(["buzz", "users", "set-status", "--clear"]).is_ok());
+    }
+
+    #[test]
     fn command_inventory_is_stable() {
         let expected_groups: Vec<&str> = vec![
             "agents",
@@ -1943,7 +1980,8 @@ mod tests {
                 "get-profile",
                 "presence",
                 "set-presence",
-                "set-profile"
+                "set-profile",
+                "set-status"
             ]
         );
         assert_eq!(
