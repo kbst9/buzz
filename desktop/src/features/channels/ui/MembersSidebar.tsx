@@ -7,10 +7,7 @@ import {
   useChannelMembersQuery,
 } from "@/features/channels/hooks";
 import { attachManagedAgentToChannel } from "@/features/agents/channelAgents";
-import {
-  coalesceAgentAutocompleteCandidates,
-  isAgentIdentityInManagedList,
-} from "@/features/agents/lib/agentAutocompleteEligibility";
+import { coalesceAgentAutocompleteCandidates } from "@/features/agents/lib/agentAutocompleteEligibility";
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembers";
 import { formatMemberName } from "@/features/channels/lib/memberUtils";
@@ -271,18 +268,24 @@ export function MembersSidebar({
         .map((member) => member.displayName?.trim().toLowerCase())
         .filter((label): label is string => Boolean(label)),
     );
-    const managedAgentPubkeys = new Set(managedAgentsByPubkey.keys());
-
     const addCandidate = (candidate: AddMemberSearchCandidate) => {
       const pubkey = normalizePubkey(candidate.pubkey);
+      // Agents are NOT filtered by local ownership here. Who may add an agent
+      // to a channel is the relay's decision: every user carries a
+      // `channel_add_policy` (default `anyone`) and kind:9000 is refused with
+      // `policy:owner_only` / `policy:nobody` when it does not permit the add
+      // (relay `handlers/side_effects.rs`). Pre-filtering to the caller's own
+      // managed agents duplicated that check with strictly less information —
+      // it hid teammates' agents that the relay would happily accept, leaving
+      // no in-app way to add them, while the CLI (`buzz channels add-member`)
+      // could. Refusals surface through the existing errors list below.
       if (
         (candidate.isAgent &&
           memberAgentLabels.has(
             formatAddCandidateName(candidate).toLowerCase(),
           )) ||
         memberPubkeys.has(pubkey) ||
-        isArchivedDiscovery(pubkey) ||
-        !isAgentIdentityInManagedList(candidate, managedAgentPubkeys)
+        isArchivedDiscovery(pubkey)
       ) {
         return;
       }
