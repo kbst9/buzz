@@ -450,6 +450,11 @@ const overrides = new Map([
   // overage from load-bearing per-message plumbing, not generic debt growth.
   // Approved override; still queued to split with the rest of this list.
   ["src/features/messages/ui/MessageThreadPanel.tsx", 1006],
+  // +3 over the 997-line upstream base: LazySettingsScreen gains
+  // activeRelayUrl (Connected Agents definitions are scoped to the active
+  // community relay). Not generic debt growth; queued to split alongside
+  // upstream's next AppShell reduction.
+  ["src/app/AppShell.tsx", 1001],
   // AgentConfigPanel footer fold into ProfileFieldGroup for the config-bridge
   // panel — a small overage from load-bearing UI plumbing, not generic debt
   // growth. Approved override; still queued to split with the rest of this list.
