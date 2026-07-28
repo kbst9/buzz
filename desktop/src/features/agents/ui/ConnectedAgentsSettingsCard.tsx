@@ -407,10 +407,12 @@ function EditAgentDialog({
     return fields;
   }, [about, agent, avatarUrl, baseline, name]);
   const hasChanges = Object.keys(changedFields).length > 0;
+  // data:image/ covers picked emoji avatars (inline SVG data URLs).
   const avatarInvalid =
     avatarUrl.trim() !== "" &&
     !avatarUrl.trim().startsWith("http://") &&
-    !avatarUrl.trim().startsWith("https://");
+    !avatarUrl.trim().startsWith("https://") &&
+    !avatarUrl.trim().startsWith("data:image/");
 
   const handleSave = React.useCallback(async () => {
     if (!agent || !hasChanges) {
@@ -470,7 +472,7 @@ function EditAgentDialog({
   const previewLabel =
     name.trim() || agent?.displayName?.trim() || "Connected agent";
   const statusText = avatarInvalid
-    ? "Avatar URL must start with http(s)://."
+    ? "Avatar must be an upload, emoji, or http(s) URL."
     : saveState === "saved"
       ? "Saved — the agent republished its profile."
       : saveState === "timeout"

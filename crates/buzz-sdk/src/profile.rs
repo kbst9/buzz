@@ -57,7 +57,8 @@ pub struct ProfileOverlay {
     pub name: Option<String>,
     /// Free-text `about` field.
     pub about: Option<String>,
-    /// Avatar URL (`picture`). Must be `http(s)://` when non-empty.
+    /// Avatar URL (`picture`). Must be `http(s)://` or `data:image/`
+    /// (inline emoji avatars) when non-empty.
     pub avatar_url: Option<String>,
     /// NIP-05 identifier (`nip05`).
     pub nip05: Option<String>,
@@ -143,9 +144,15 @@ pub fn merge_profile(
     overlay: &ProfileOverlay,
 ) -> Result<MergedProfile, SdkError> {
     if let Some(url) = overlay.avatar_url.as_deref() {
-        if !url.is_empty() && !url.starts_with("http://") && !url.starts_with("https://") {
+        // data:image/ covers the desktop's generated emoji avatars (inline
+        // SVG data URLs) — self-contained picture values, no host involved.
+        if !url.is_empty()
+            && !url.starts_with("http://")
+            && !url.starts_with("https://")
+            && !url.starts_with("data:image/")
+        {
             return Err(SdkError::InvalidInput(format!(
-                "avatar url must start with http:// or https:// (got {url:?})"
+                "avatar url must be http(s):// or data:image/ (got {url:?})"
             )));
         }
     }
@@ -479,10 +486,20 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_http_avatar() {
+    fn rejects_non_http_avatar_but_accepts_data_image() {
         let err = merge_profile(None, &overlay(None, None, Some("ftp://x/a.png")))
             .expect_err("must reject");
         assert!(matches!(err, SdkError::InvalidInput(_)));
+
+        let merged = merge_profile(
+            None,
+            &overlay(None, None, Some("data:image/svg+xml,%3Csvg%3E%3C/svg%3E")),
+        )
+        .expect("emoji data urls are valid pictures");
+        assert!(content_value(&merged)["picture"]
+            .as_str()
+            .expect("picture")
+            .starts_with("data:image/"));
     }
 
     #[test]
