@@ -817,7 +817,7 @@ pub enum UsersCmd {
         /// Display name (sets name + display_name; "" clears both)
         #[arg(long)]
         name: Option<String>,
-        /// Avatar URL (http(s) only; "" clears)
+        /// Avatar URL (http(s) or data:image/; "" clears)
         #[arg(long)]
         avatar: Option<String>,
         /// Bio / about text ("" clears)

@@ -485,8 +485,8 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_PROFILE_ABOUT")]
     pub profile_about: Option<String>,
 
-    /// Avatar URL (http(s)) for the agent's kind:0 profile (see
-    /// --profile-name).
+    /// Avatar URL (http(s) or data:image/) for the agent's kind:0 profile
+    /// (see --profile-name).
     #[arg(long, env = "BUZZ_ACP_PROFILE_AVATAR_URL")]
     pub profile_avatar_url: Option<String>,
 
