@@ -64,18 +64,26 @@ export function isAgentIdentityInManagedList(
   );
 }
 
+/** The respond_to slice of a kind:10100 relay-directory entry. */
+export type DirectoryAgentRespondPolicy = Pick<
+  RelayAgent,
+  "respondTo" | "respondToAllowlist"
+>;
+
 export function shouldHideAgentFromMentions({
   isAgent,
   isMember,
   pubkey,
+  currentPubkey,
   mentionableAgentPubkeys,
-  directoryAgentPubkeys,
+  directoryAgentsByPubkey,
 }: {
   isAgent: boolean;
   isMember: boolean;
   pubkey: string;
+  currentPubkey?: string | null;
   mentionableAgentPubkeys: ReadonlySet<string>;
-  directoryAgentPubkeys: ReadonlySet<string>;
+  directoryAgentsByPubkey: ReadonlyMap<string, DirectoryAgentRespondPolicy>;
 }) {
   if (!isAgent) return false;
   const normalized = normalizePubkey(pubkey);
@@ -83,18 +91,34 @@ export function shouldHideAgentFromMentions({
   if (mentionableAgentPubkeys.has(normalized)) return false;
   // Non-member, non-invocable => hide (preserves prior behavior).
   if (!isMember) return true;
-  // Member (Option B): hide only when we have an explicit not-invocable
-  // signal — a relay directory (kind:10100) entry that excludes us.
-  // Unknown invocability (not in directory) => show.
+  // Member (Option B): hide only on an explicit won't-respond-to-me signal.
+  // The only kind:10100 fact with trustworthy exclusion semantics is a
+  // populated allowlist that leaves the current user out. Everything else is
+  // unknown, and unknown members show:
+  //  - no directory entry, or `respondTo: null` — `buzz channels
+  //    set-add-policy` publishes kind:10100 without respond_to/channel_ids,
+  //    so directory presence alone says nothing about invocability;
+  //  - "anyone" — a co-member of this channel responds to us even when the
+  //    entry's channel_ids are stale or empty;
+  //  - "owner-only" — ownership is not reliably knowable client-side (an
+  //    agent hosted off this machine may still be ours).
+  // Whether the agent actually answers stays the harness's decision
+  // (respond_to gate, default owner-only) — the same shape as the relay
+  // owning channel adds (kind:9000 + channel_add_policy).
   //
-  // NOTE: this assumes `directoryAgentPubkeys` and `mentionableAgentPubkeys`
-  // share the same source query (`relayAgentsQuery.data`), so directory
-  // presence without membership in `mentionableAgentPubkeys` is a real
-  // explicit-exclusion signal. If a future change sources the directory set
-  // from a different query, an agent that's directory-present but whose
-  // mentionability is still loading could be hidden prematurely — keep the
-  // two sets derived from the same query.
-  return directoryAgentPubkeys.has(normalized);
+  // NOTE: `directoryAgentsByPubkey` and `mentionableAgentPubkeys` must stay
+  // derived from the same source query (`relayAgentsQuery.data`): an
+  // allowlist that includes the current user is meant to be caught by the
+  // invocable check above, so a lagging mentionable set would briefly hide
+  // an agent its own allowlist admits.
+  const directoryEntry = directoryAgentsByPubkey.get(normalized);
+  if (directoryEntry?.respondTo !== "allowlist" || !currentPubkey) {
+    return false;
+  }
+  const normalizedCurrentPubkey = normalizePubkey(currentPubkey);
+  return !directoryEntry.respondToAllowlist.some(
+    (allowed) => normalizePubkey(allowed) === normalizedCurrentPubkey,
+  );
 }
 
 type AgentAutocompleteCandidate = {

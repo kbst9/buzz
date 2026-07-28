@@ -162,14 +162,19 @@ test("isAgentIdentityInManagedList: keeps people and only current managed agent 
   );
 });
 
+function directoryEntry(respondTo, respondToAllowlist = []) {
+  return { respondTo, respondToAllowlist };
+}
+
 test("shouldHideAgentFromMentions: never hides non-agents", () => {
   assert.equal(
     shouldHideAgentFromMentions({
       isAgent: false,
       isMember: false,
       pubkey: PUB_A,
+      currentPubkey: CURRENT_PUBKEY,
       mentionableAgentPubkeys: new Set(),
-      directoryAgentPubkeys: new Set([PUB_A]),
+      directoryAgentsByPubkey: new Map([[PUB_A, directoryEntry("anyone")]]),
     }),
     false,
   );
@@ -181,8 +186,9 @@ test("shouldHideAgentFromMentions: shows invocable agents even when non-member",
       isAgent: true,
       isMember: false,
       pubkey: PUB_A,
+      currentPubkey: CURRENT_PUBKEY,
       mentionableAgentPubkeys: new Set([PUB_A]),
-      directoryAgentPubkeys: new Set([PUB_A]),
+      directoryAgentsByPubkey: new Map([[PUB_A, directoryEntry("anyone")]]),
     }),
     false,
   );
@@ -194,23 +200,43 @@ test("shouldHideAgentFromMentions: hides non-member non-invocable agents", () =>
       isAgent: true,
       isMember: false,
       pubkey: PUB_A,
+      currentPubkey: CURRENT_PUBKEY,
       mentionableAgentPubkeys: new Set(),
-      directoryAgentPubkeys: new Set(),
+      directoryAgentsByPubkey: new Map(),
     }),
     true,
   );
 });
 
-test("shouldHideAgentFromMentions: hides member agents with an explicit not-invocable directory entry (Fizz)", () => {
+test("shouldHideAgentFromMentions: hides member agents whose allowlist excludes the current user", () => {
   assert.equal(
     shouldHideAgentFromMentions({
       isAgent: true,
       isMember: true,
       pubkey: PUB_A,
+      currentPubkey: CURRENT_PUBKEY,
       mentionableAgentPubkeys: new Set(),
-      directoryAgentPubkeys: new Set([PUB_A]),
+      directoryAgentsByPubkey: new Map([
+        [PUB_A, directoryEntry("allowlist", [OTHER_OWNER_PUBKEY])],
+      ]),
     }),
     true,
+  );
+});
+
+test("shouldHideAgentFromMentions: shows member agents whose allowlist includes the current user", () => {
+  assert.equal(
+    shouldHideAgentFromMentions({
+      isAgent: true,
+      isMember: true,
+      pubkey: PUB_A,
+      currentPubkey: CURRENT_PUBKEY,
+      mentionableAgentPubkeys: new Set(),
+      directoryAgentsByPubkey: new Map([
+        [PUB_A, directoryEntry("allowlist", [CURRENT_PUBKEY.toUpperCase()])],
+      ]),
+    }),
+    false,
   );
 });
 
@@ -220,8 +246,55 @@ test("shouldHideAgentFromMentions: shows member agents with unknown invocability
       isAgent: true,
       isMember: true,
       pubkey: PUB_A,
+      currentPubkey: CURRENT_PUBKEY,
       mentionableAgentPubkeys: new Set(),
-      directoryAgentPubkeys: new Set(),
+      directoryAgentsByPubkey: new Map(),
+    }),
+    false,
+  );
+});
+
+test("shouldHideAgentFromMentions: shows member agents with a vacuous directory entry (respondTo null)", () => {
+  // `buzz channels set-add-policy` publishes kind:10100 without
+  // respond_to/channel_ids — directory presence alone must not hide a member.
+  assert.equal(
+    shouldHideAgentFromMentions({
+      isAgent: true,
+      isMember: true,
+      pubkey: PUB_A,
+      currentPubkey: CURRENT_PUBKEY,
+      mentionableAgentPubkeys: new Set(),
+      directoryAgentsByPubkey: new Map([[PUB_A, directoryEntry(null)]]),
+    }),
+    false,
+  );
+});
+
+test("shouldHideAgentFromMentions: shows anyone-mode member agents even with stale channel ids", () => {
+  // "anyone" + empty channel_ids keeps the agent out of the invocable set,
+  // but a co-member of the current channel responds to us regardless.
+  assert.equal(
+    shouldHideAgentFromMentions({
+      isAgent: true,
+      isMember: true,
+      pubkey: PUB_A,
+      currentPubkey: CURRENT_PUBKEY,
+      mentionableAgentPubkeys: new Set(),
+      directoryAgentsByPubkey: new Map([[PUB_A, directoryEntry("anyone")]]),
+    }),
+    false,
+  );
+});
+
+test("shouldHideAgentFromMentions: shows owner-only member agents (harness decides)", () => {
+  assert.equal(
+    shouldHideAgentFromMentions({
+      isAgent: true,
+      isMember: true,
+      pubkey: PUB_A,
+      currentPubkey: CURRENT_PUBKEY,
+      mentionableAgentPubkeys: new Set(),
+      directoryAgentsByPubkey: new Map([[PUB_A, directoryEntry("owner-only")]]),
     }),
     false,
   );
@@ -236,8 +309,11 @@ test("shouldHideAgentFromMentions: normalizes the pubkey before lookup", () => {
       isAgent: true,
       isMember: true,
       pubkey: mixedCase,
+      currentPubkey: CURRENT_PUBKEY,
       mentionableAgentPubkeys: new Set(),
-      directoryAgentPubkeys: new Set([normalized]),
+      directoryAgentsByPubkey: new Map([
+        [normalized, directoryEntry("allowlist", [OTHER_OWNER_PUBKEY])],
+      ]),
     }),
     true,
   );

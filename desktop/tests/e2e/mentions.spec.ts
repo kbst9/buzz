@@ -209,7 +209,9 @@ test("@ trigger prioritizes channel members before runnable personas and other m
 
   const dropdown = autocomplete(page);
   await expect(dropdown).toBeVisible();
-  await expect(dropdown.getByText("alice")).toHaveCount(0);
+  // alice is an agent-flagged member without a local managed record: member
+  // agents are mentionable regardless of local ownership.
+  await expect(dropdown.getByText("alice")).toBeVisible();
   await expect(dropdown.getByText("bob")).toBeVisible();
   await expect(dropdown.getByText("Fizz")).toBeVisible();
   await expect(dropdown.getByText("charlie")).toBeVisible();
@@ -754,9 +756,11 @@ test("managed relay-profile agents with member roles use the agent composer styl
   await expect(agentMentionChip).toHaveText("charlie");
 });
 
-test("other-owned agents without a shared channel are hidden from mentions", async ({
-  page,
-}) => {
+test("other-owned member agents are mentionable", async ({ page }) => {
+  // mira is a member of #general but belongs to another owner and is not in
+  // the viewer's managed list. Membership is the relay-sanctioned signal
+  // (kind:9000 + channel_add_policy), so she must be offered — the
+  // local-ownership gate applies to non-members only.
   await installMockBridge(page, {
     searchProfiles: [
       {
@@ -776,11 +780,11 @@ test("other-owned agents without a shared channel are hidden from mentions", asy
   await input.fill("@mira");
 
   const dropdown = autocomplete(page);
-  await expect(dropdown).not.toBeVisible();
-  await expect(input.locator(".mention-chip")).toHaveCount(0);
+  await expect(dropdown.getByText("mira")).toBeVisible();
+  await expect(dropdown.getByText("agent")).toBeVisible();
 });
 
-test("own profile-only agents are hidden from channel mentions", async ({
+test("member agents outside the managed list are mentionable and insert an agent mention", async ({
   page,
 }) => {
   await installMockBridge(page, { userSearchDelayMs: 1_000 });
@@ -791,7 +795,72 @@ test("own profile-only agents are hidden from channel mentions", async ({
   const input = page.getByTestId("message-input");
   await input.fill("@mira");
 
-  await expect(autocomplete(page)).toHaveCount(0);
+  const dropdown = autocomplete(page);
+  await expect(dropdown.getByText("mira")).toBeVisible();
+  await expect(dropdown.getByText("agent")).toBeVisible();
+  await input.press("Enter");
+
+  // The send flow must classify the non-owned member as an agent mention.
+  const agentMentionChip = input.locator(".agent-mention-highlight", {
+    hasText: "mira",
+  });
+  await expect(agentMentionChip).toBeVisible();
+});
+
+test("member agents with an owner-only directory entry are still offered", async ({
+  page,
+}) => {
+  // An owner-only respond_to gate is enforced by the agent harness, and
+  // ownership is not reliably knowable client-side — a directory entry
+  // saying "owner-only" must not hide a channel member.
+  await installMockBridge(page, {
+    relayAgents: [
+      {
+        pubkey: PROFILE_ONLY_AGENT_PUBKEY,
+        name: "mira",
+        respondTo: "owner-only",
+      },
+    ],
+    userSearchDelayMs: 1_000,
+  });
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const input = page.getByTestId("message-input");
+  await input.fill("@mira");
+
+  const dropdown = autocomplete(page);
+  await expect(dropdown.getByText("mira")).toBeVisible();
+  await expect(dropdown.getByText("agent")).toBeVisible();
+});
+
+test("member agents whose allowlist excludes the viewer stay hidden", async ({
+  page,
+}) => {
+  // The one explicit won't-respond-to-me signal the directory can carry:
+  // a populated allowlist that leaves the viewer out.
+  await installMockBridge(page, {
+    relayAgents: [
+      {
+        pubkey: PROFILE_ONLY_AGENT_PUBKEY,
+        name: "mira",
+        respondTo: "allowlist",
+        respondToAllowlist: [TEST_IDENTITIES.outsider.pubkey],
+      },
+    ],
+    userSearchDelayMs: 1_000,
+  });
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const input = page.getByTestId("message-input");
+  await input.fill("@mira");
+
+  const dropdown = autocomplete(page);
+  await expect(dropdown).not.toBeVisible();
+  await expect(input.locator(".mention-chip")).toHaveCount(0);
 });
 
 test("managed relay agents are visible in channel mentions regardless of relay policy", async ({

@@ -1,5 +1,10 @@
 import { resolveTeamPersonas } from "@/features/agents/lib/teamPersonas";
-import type { AgentPersona, AgentTeam, ChannelRole } from "@/shared/api/types";
+import type {
+  AgentPersona,
+  AgentTeam,
+  ChannelRole,
+  UserSearchResult,
+} from "@/shared/api/types";
 import { truncatePubkey } from "@/shared/lib/pubkey";
 
 export type TeamMentionMember = {
@@ -32,6 +37,63 @@ export function mentionCandidateLabel(candidate: MentionCandidate) {
     candidate.displayName ??
     (candidate.pubkey ? truncatePubkey(candidate.pubkey) : "agent")
   );
+}
+
+export function formatSearchUserDisplayName(user: UserSearchResult) {
+  return user.displayName?.trim() || user.nip05Handle?.trim() || null;
+}
+
+export function formatSearchUserSecondaryLabel(user: UserSearchResult) {
+  const displayName = user.displayName?.trim();
+  const nip05Handle = user.nip05Handle?.trim();
+  if (displayName && nip05Handle) {
+    return nip05Handle;
+  }
+  return null;
+}
+
+export function appendUniqueName(current: string[], name: string): string[] {
+  return current.some(
+    (candidate) => candidate.toLowerCase() === name.toLowerCase(),
+  )
+    ? current
+    : [...current, name];
+}
+
+/**
+ * Merge a later-sourced candidate for the same pubkey into the existing
+ * entry. Field-level preference mirrors candidate source order: the first
+ * candidate wins where both are set, agent-sourced display names win over
+ * human-profile ones, and boolean capabilities accumulate.
+ */
+export function mergeMentionCandidates(
+  current: MentionCandidate,
+  incoming: MentionCandidate,
+  fallbackAgentOwnerPubkey?: string | null,
+): MentionCandidate {
+  return {
+    ...current,
+    avatarUrl: current.avatarUrl ?? incoming.avatarUrl ?? null,
+    displayName:
+      current.isAgent && !incoming.isAgent
+        ? current.displayName
+        : incoming.isAgent && !current.isAgent
+          ? (incoming.displayName ?? current.displayName)
+          : (current.displayName ?? incoming.displayName),
+    isAgent: current.isAgent || incoming.isAgent,
+    isMember: current.isMember || incoming.isMember,
+    personaId: current.personaId ?? incoming.personaId,
+    personaName: current.personaName ?? incoming.personaName ?? null,
+    role: current.role ?? incoming.role ?? null,
+    secondaryLabel: current.secondaryLabel ?? incoming.secondaryLabel ?? null,
+    ownerPubkey:
+      current.ownerPubkey ??
+      incoming.ownerPubkey ??
+      (incoming.isAgent && incoming.pubkey
+        ? (fallbackAgentOwnerPubkey ?? null)
+        : null),
+    isManagedAgent: current.isManagedAgent || incoming.isManagedAgent,
+  };
 }
 
 export function globalSearchIdentityKey(candidate: MentionCandidate) {

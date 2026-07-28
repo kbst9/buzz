@@ -29,7 +29,6 @@ import type {
   AgentPersona,
   ChannelMember,
   ChannelType,
-  UserSearchResult,
 } from "@/shared/api/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { detectPrefixQuery } from "@/shared/lib/detectPrefixQuery";
@@ -41,11 +40,15 @@ import { useDraftMentionRouting } from "./useDraftMentionRouting";
 import { rankMentionCandidates } from "./mentionRanking";
 import { mapMentionCandidateToSuggestion } from "./mentionSuggestionMapping";
 import {
+  appendUniqueName,
   buildTeamMentionCandidates,
+  formatSearchUserDisplayName,
+  formatSearchUserSecondaryLabel,
   formatTeamMention,
   globalSearchIdentityKey,
   type MentionCandidate,
   mentionCandidateLabel,
+  mergeMentionCandidates,
 } from "./mentionCandidates";
 const MENTION_DEBOUNCE_MS = 120;
 const MENTION_SUGGESTION_LIMIT = 50;
@@ -56,24 +59,6 @@ export type PersonaMentionTarget = {
 type UseMentionsOptions = {
   channelType?: ChannelType | null;
 };
-function formatSearchUserDisplayName(user: UserSearchResult) {
-  return user.displayName?.trim() || user.nip05Handle?.trim() || null;
-}
-function formatSearchUserSecondaryLabel(user: UserSearchResult) {
-  const displayName = user.displayName?.trim();
-  const nip05Handle = user.nip05Handle?.trim();
-  if (displayName && nip05Handle) {
-    return nip05Handle;
-  }
-  return null;
-}
-function appendUniqueName(current: string[], name: string): string[] {
-  return current.some(
-    (candidate) => candidate.toLowerCase() === name.toLowerCase(),
-  )
-    ? current
-    : [...current, name];
-}
 export function useMentions(
   channelId: string | null,
   externalMembers?: ChannelMember[],
@@ -179,12 +164,13 @@ export function useMentions(
       ),
     [relayAgentsQuery.data],
   );
-  const directoryAgentPubkeys = React.useMemo(
+  const directoryAgentsByPubkey = React.useMemo(
     () =>
-      new Set(
-        (relayAgentsQuery.data ?? []).map((agent) =>
+      new Map(
+        (relayAgentsQuery.data ?? []).map((agent) => [
           normalizePubkey(agent.pubkey),
-        ),
+          agent,
+        ]),
       ),
     [relayAgentsQuery.data],
   );
@@ -220,7 +206,6 @@ export function useMentions(
     }
     return lookup;
   }, [managedAgentsQuery.data, personasQuery.data]);
-  const knownAgentPubkeys = mentionableAgentPubkeys;
   const activePersonas = React.useMemo(
     () => (personasQuery.data ?? []).filter((persona) => persona.isActive),
     [personasQuery.data],
@@ -246,7 +231,17 @@ export function useMentions(
       if (isArchivedDiscovery(pubkey)) {
         return;
       }
-      if (!isAgentIdentityInManagedList(candidate, managedAgentPubkeys)) {
+      // The local-ownership gate applies to NON-members only. A member agent
+      // was deliberately added to the channel — the relay already vetted that
+      // add (kind:9000 + per-user channel_add_policy, see MembersSidebar) —
+      // so hiding it here would leave a member that can never be mentioned.
+      // Non-member agents keep requiring local ownership (#2149): the managed
+      // list is the only liveness signal for agents surfaced from search or
+      // the relay directory.
+      if (
+        candidate.isMember !== true &&
+        !isAgentIdentityInManagedList(candidate, managedAgentPubkeys)
+      ) {
         return;
       }
       if (
@@ -254,8 +249,9 @@ export function useMentions(
           isAgent: candidate.isAgent === true,
           isMember: candidate.isMember === true,
           pubkey,
+          currentPubkey,
           mentionableAgentPubkeys,
-          directoryAgentPubkeys,
+          directoryAgentsByPubkey,
         })
       ) {
         return;
@@ -266,31 +262,14 @@ export function useMentions(
         return;
       }
 
-      candidatesByPubkey.set(pubkey, {
-        ...current,
-        avatarUrl: current.avatarUrl ?? candidate.avatarUrl ?? null,
-        displayName:
-          current.isAgent && !candidate.isAgent
-            ? current.displayName
-            : candidate.isAgent && !current.isAgent
-              ? (candidate.displayName ?? current.displayName)
-              : (current.displayName ?? candidate.displayName),
-        isAgent: current.isAgent || candidate.isAgent,
-        isMember: current.isMember || candidate.isMember,
-        personaId: current.personaId ?? candidate.personaId,
-        personaName: current.personaName ?? candidate.personaName ?? null,
-        role: current.role ?? candidate.role ?? null,
-        secondaryLabel:
-          current.secondaryLabel ?? candidate.secondaryLabel ?? null,
-        ownerPubkey:
-          current.ownerPubkey ??
-          candidate.ownerPubkey ??
-          (candidate.isAgent && candidate.pubkey
-            ? profiles?.[pubkey]?.ownerPubkey
-            : null) ??
-          null,
-        isManagedAgent: current.isManagedAgent || candidate.isManagedAgent,
-      });
+      candidatesByPubkey.set(
+        pubkey,
+        mergeMentionCandidates(
+          current,
+          { ...candidate, pubkey },
+          profiles?.[pubkey]?.ownerPubkey,
+        ),
+      );
     };
     for (const member of members ?? []) {
       const pubkey = normalizePubkey(member.pubkey);
@@ -415,7 +394,7 @@ export function useMentions(
     userSearchResults,
     canSearchGlobalUsers,
     currentPubkey,
-    directoryAgentPubkeys,
+    directoryAgentsByPubkey,
     isArchivedDiscovery,
     managedAgentNamesByPubkey,
     managedAgentPersonaIds,
@@ -430,6 +409,20 @@ export function useMentions(
     relayAgentNamesByPubkey,
     relayAgentsQuery.data,
   ]);
+
+  // Agent classification for the send flow (`isAgentPubkey`, agent-mention
+  // styling): the invocable set plus every agent candidate that survived the
+  // mention gates. A non-owned member agent must classify as an agent when
+  // its mention is sent, or the send flow would treat it as a human mention.
+  const knownAgentPubkeys = React.useMemo(() => {
+    const pubkeys = new Set(mentionableAgentPubkeys);
+    for (const candidate of mentionCandidates) {
+      if (candidate.isAgent === true && candidate.pubkey) {
+        pubkeys.add(normalizePubkey(candidate.pubkey));
+      }
+    }
+    return pubkeys;
+  }, [mentionableAgentPubkeys, mentionCandidates]);
 
   const mentionCandidatesWithTeams = React.useMemo(
     () => [
