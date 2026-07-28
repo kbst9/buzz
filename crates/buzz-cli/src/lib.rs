@@ -1938,7 +1938,13 @@ mod tests {
         );
         assert_eq!(
             names(&cmd, "users"),
-            vec!["get", "presence", "set-presence", "set-profile"]
+            vec![
+                "get",
+                "get-profile",
+                "presence",
+                "set-presence",
+                "set-profile"
+            ]
         );
         assert_eq!(
             names(&cmd, "workflows"),
@@ -2025,7 +2031,7 @@ mod tests {
             ("repos", 4),
             ("social", 7),
             ("upload", 1),
-            ("users", 4),
+            ("users", 5),
             ("workflows", 8),
         ];
 
