@@ -297,14 +297,15 @@ pub fn profile_info_from_event(event: &Event) -> Result<ProfileInfo, String> {
     let about = v.get("about").and_then(Value::as_str).map(str::to_string);
     let nip05_handle = v.get("nip05").and_then(Value::as_str).map(str::to_string);
 
+    let owner_pubkey = profile_valid_oa_owner_pubkey(event);
     Ok(ProfileInfo {
         pubkey: event.pubkey.to_hex(),
         display_name,
         avatar_url,
         about,
         nip05_handle,
-        owner_pubkey: profile_valid_oa_owner_pubkey(event),
-        is_agent: profile_has_valid_oa_owner(event),
+        is_agent: owner_pubkey.is_some(),
+        owner_pubkey,
         has_profile_event: true,
     })
 }
@@ -611,6 +612,22 @@ mod tests {
             .sign_with_keys(&agent_keys)
             .expect("sign");
         (event, owner_keys.public_key().to_hex())
+    }
+
+    #[test]
+    fn profile_info_is_agent_follows_verified_auth_tag() {
+        let (event, owner_hex) = oa_profile_event(r#"{"name":"Codex"}"#);
+        let info = profile_info_from_event(&event).expect("convert");
+        assert!(info.is_agent);
+        assert_eq!(info.owner_pubkey.as_deref(), Some(owner_hex.as_str()));
+
+        let human = EventBuilder::new(Kind::Metadata, r#"{"name":"Kevin"}"#)
+            .tags(Vec::<Tag>::new())
+            .sign_with_keys(&Keys::generate())
+            .expect("sign");
+        let info = profile_info_from_event(&human).expect("convert");
+        assert!(!info.is_agent);
+        assert_eq!(info.owner_pubkey, None);
     }
 
     #[test]

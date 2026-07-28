@@ -23,7 +23,7 @@ export function buildAddAgentInstructions(input: {
   ownerPubkey: string;
 }): string {
   const { relayUrl, ownerPubkey } = input;
-  return `You are operating a Linux/macOS host that will run a new standalone Buzz agent.
+  return `You are operating a Linux host (with systemd) that will run a new standalone Buzz agent.
 Follow these steps exactly. Full reference: docs/standalone-agents.md in block/buzz.
 
 1. Build the binaries (once per host), from a checkout of the buzz repo:
@@ -87,8 +87,13 @@ then:
    journalctl -u buzz-acp-${unit} -n 20 | grep -i profile
    # expect: profile published (kind:0 sync)
 
-One-off alternative (no restart; env-declared fields win on next restart):
-   sudo bash -c 'set -a; source /etc/buzz-agents/${unit}.env; set +a; buzz users set-profile ${cliFlags}'
+One-off alternative (no restart; env-pinned fields win on next restart).
+Run line by line in a root shell — the env file must not be bash-sourced
+(systemd's parser and bash disagree on quoting):
+   sudo -i
+   export $(grep -E '^BUZZ_(RELAY_URL|PRIVATE_KEY)=' /etc/buzz-agents/${unit}.env | xargs)
+   buzz users set-profile ${cliFlags}
+   exit
 
 Both paths preserve the agent's NIP-OA auth tag automatically.`;
 }

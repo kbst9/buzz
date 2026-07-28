@@ -138,10 +138,10 @@ export function ConnectedAgentsSettingsCard({
             Connected agents
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Always-on agents running their own harness on a server. This app
-            never holds their keys: online agents apply profile edits themselves
-            over the relay, and everything else comes as exact instructions for
-            the machine that does.
+            Agents that live outside this app — standalone harnesses and other
+            members' agents. This app never holds their keys: online agents you
+            own apply profile edits themselves over the relay, and everything
+            else comes as exact instructions for the machine that holds them.
           </p>
         </div>
         <Button
@@ -164,7 +164,7 @@ export function ConnectedAgentsSettingsCard({
         <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {connectedAgents.map((agent) => {
             const presence =
-              presenceQuery.data?.[agent.pubkey.toLowerCase()] ?? null;
+              presenceQuery.data?.[normalizePubkey(agent.pubkey)] ?? null;
             const online = presence === "online";
             const owned = Boolean(
               me &&
@@ -238,7 +238,7 @@ export function ConnectedAgentsSettingsCard({
         agent={editing}
         online={
           editing
-            ? presenceQuery.data?.[editing.pubkey.toLowerCase()] === "online"
+            ? presenceQuery.data?.[normalizePubkey(editing.pubkey)] === "online"
             : false
         }
         onOpenChange={(open) => {
@@ -343,15 +343,29 @@ function EditAgentDialog({
     "idle" | "saving" | "saved" | "timeout" | "error"
   >("idle");
 
+  // Prefill exactly once per opened agent, upgrading only while the user
+  // has not touched the form: a late-resolving or post-save-refetched
+  // baseline must never wipe in-progress typing or the saved confirmation.
+  const prefilledForRef = React.useRef<string | null>(null);
+  const touchedRef = React.useRef(false);
   React.useEffect(() => {
     if (!agent) {
+      prefilledForRef.current = null;
       return;
     }
-    setSaveState("idle");
+    const firstOpen = prefilledForRef.current !== agent.pubkey;
+    if (!firstOpen && (touchedRef.current || saveState !== "idle")) {
+      return;
+    }
+    prefilledForRef.current = agent.pubkey;
+    if (firstOpen) {
+      touchedRef.current = false;
+      setSaveState("idle");
+    }
     setName(baseline?.displayName ?? agent.displayName?.trim() ?? "");
     setAbout(baseline?.about ?? "");
     setAvatarUrl(baseline?.avatarUrl ?? agent.avatarUrl ?? "");
-  }, [agent, baseline]);
+  }, [agent, baseline, saveState]);
 
   const changedFields = React.useMemo(() => {
     if (!agent) {
@@ -373,6 +387,10 @@ function EditAgentDialog({
     return fields;
   }, [about, agent, avatarUrl, baseline, name]);
   const hasChanges = Object.keys(changedFields).length > 0;
+  const avatarInvalid =
+    avatarUrl.trim() !== "" &&
+    !avatarUrl.trim().startsWith("http://") &&
+    !avatarUrl.trim().startsWith("https://");
 
   const handleSave = React.useCallback(async () => {
     if (!agent || !hasChanges) {
@@ -449,7 +467,10 @@ function EditAgentDialog({
             <input
               className={inputClass}
               data-testid="connected-agent-edit-name"
-              onChange={(event) => setName(event.target.value)}
+              onChange={(event) => {
+                touchedRef.current = true;
+                setName(event.target.value);
+              }}
               value={name}
             />
           </label>
@@ -458,7 +479,10 @@ function EditAgentDialog({
             <input
               className={inputClass}
               data-testid="connected-agent-edit-about"
-              onChange={(event) => setAbout(event.target.value)}
+              onChange={(event) => {
+                touchedRef.current = true;
+                setAbout(event.target.value);
+              }}
               value={about}
             />
           </label>
@@ -467,7 +491,10 @@ function EditAgentDialog({
             <input
               className={inputClass}
               data-testid="connected-agent-edit-avatar"
-              onChange={(event) => setAvatarUrl(event.target.value)}
+              onChange={(event) => {
+                touchedRef.current = true;
+                setAvatarUrl(event.target.value);
+              }}
               placeholder="https://…"
               value={avatarUrl}
             />
@@ -476,22 +503,26 @@ function EditAgentDialog({
         <div className="flex items-center gap-3">
           <Button
             data-testid="connected-agent-edit-save"
-            disabled={!online || !hasChanges || saveState === "saving"}
+            disabled={
+              !online || !hasChanges || avatarInvalid || saveState === "saving"
+            }
             onClick={() => void handleSave()}
             size="sm"
           >
             {saveState === "saving" ? "Saving…" : "Save"}
           </Button>
           <span className="text-xs text-muted-foreground" role="status">
-            {saveState === "saved"
-              ? "Saved — the agent republished its profile."
-              : saveState === "timeout"
-                ? "No confirmation from the agent yet — it may be busy; check again shortly or use the host instructions."
-                : saveState === "error"
-                  ? "Sending failed — check the relay connection."
-                  : !online
-                    ? "Agent offline."
-                    : null}
+            {avatarInvalid
+              ? "Avatar URL must start with http(s)://."
+              : saveState === "saved"
+                ? "Saved — the agent republished its profile."
+                : saveState === "timeout"
+                  ? "No confirmation from the agent yet — it may be busy; check again shortly or use the host instructions."
+                  : saveState === "error"
+                    ? "Sending failed — check the relay connection."
+                    : !online
+                      ? "Agent offline."
+                      : null}
           </span>
         </div>
         <details className="rounded-xl border border-border/60 px-3 py-2">
