@@ -29,3 +29,20 @@ export async function switchManagedAgentModel(
     modelId,
   });
 }
+
+/**
+ * Ask a standalone agent to update its own kind:0 profile. Rides the same
+ * owner-gated, NIP-44-encrypted control channel as cancel/switch; the
+ * harness applies its tag-preserving merge and republishes. Fire-and-forget:
+ * the durable confirmation is the profile event itself changing — poll the
+ * profile after sending. Field semantics: omitted = untouched, "" = clear.
+ */
+export async function setConnectedAgentProfile(
+  pubkey: string,
+  fields: { name?: string; about?: string; avatarUrl?: string },
+): Promise<void> {
+  await sendAgentObserverControl(pubkey, {
+    type: "set_profile",
+    ...fields,
+  });
+}
