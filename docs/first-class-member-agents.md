@@ -58,9 +58,12 @@ your server                              relay                    any client
 
 No new event kinds. No new HTTP surface. No relay changes. The work is:
 teach the harness to *publish* the profile it already *queries* (kind:0),
-turn on the observer stream that already exists (kind:24200), unify the
-client-side classifier that already exists (`profile_valid_oa_owner_pubkey`),
-and write the runbook that never existed.
+turn on the observer stream that already exists (kind:24200) and widen its
+desktop ingestion from "directory-listed agents I own" to "any agent I
+verifiably own", unify the client-side classifier that already exists
+(`profile_valid_oa_owner_pubkey`), and write the runbook that never
+existed. One idea carries the whole design: **the verified auth tag is the
+single source of agent-ness — for classification and for observation.**
 
 ## 3. Current state (verified)
 
@@ -77,9 +80,16 @@ What already works, with the seams this design reuses:
   (`BUZZ_ACP_RELAY_OBSERVER`, default `false`) publishes encrypted ACP
   observer frames as **kind:24200** — ephemeral, NIP-44, owner-scoped, with
   control frames gated to the owner (`buzz-acp/src/lib.rs`). The desktop
-  already consumes and renders these (`features/agents/observerRelayStore`).
-  Nothing standalone-specific is missing; the flag just defaults off and no
-  deployment guide mentions it.
+  ingests these app-wide (`useAgentObserverIngestion` → observer/turn
+  stores) and has a viewing surface that is *not* limited to the Agents
+  tab: an agent's profile panel embeds the live session transcript
+  (`UserProfilePanelTabs` → `ManagedAgentSessionPanel`). **But the
+  ingestion candidate list has a gap**: non-managed agents are enumerated
+  from the kind:10100 relay-agents directory and then filtered by verified
+  profile owner (`combineObserverIngestionAgents`). Standalone agents never
+  publish 10100, so their frames — although `#p`-addressed to the owner and
+  arriving on the subscription — are never registered for decryption. The
+  flag being off is only half of why traces are silent.
 - **Classifier.** `desktop/src-tauri/src/nostr_convert.rs::
   profile_valid_oa_owner_pubkey` verifies the auth tag against the profile's
   author (a forged or stale marker cannot turn a person into an agent).
@@ -103,11 +113,26 @@ What already works, with the seams this design reuses:
 
 ## 4. Design
 
-### 4.1 Thinking traces — turn on what exists
+### 4.1 Thinking traces — turn on what exists, widen who is observed
 
 No harness code changes. The runbook (§4.4) sets
 `BUZZ_ACP_RELAY_OBSERVER=true` in the unit env, and the migration note for
 existing deployments is one line per unit plus a restart.
+
+One desktop change, and it is the same idea as §4.3: **the observer
+ingestion set derives from verified ownership, not from the 10100
+directory.** `combineObserverIngestionAgents` already filters candidates by
+`profile.ownerPubkey == me`; the fix is to stop sourcing the candidate
+*enumeration* exclusively from `useRelayAgentsQuery` and instead register
+every known agent pubkey whose verified owner is the current identity —
+profiles the app already fetches for members and timeline authors carry
+exactly this (`UserProfileSummaryInfo.ownerPubkey`). The directory remains
+one enumeration source; it stops being the only one. With that, a
+standalone agent's frames decrypt and fold into the same stores, its
+profile panel streams the live transcript, and the sidebar working
+indicators light up — no new UI. Verify the profile-panel session surface
+gates on the same ownership predicate (not on a managed-agent record) and
+extend it if it does not.
 
 Two deliberate non-changes:
 
@@ -174,23 +199,35 @@ writes return `{event_id, accepted, message}` like every other CLI write.
 The honest source of "this identity is an agent" is the **verified auth tag
 in its current kind:0** — cryptographic, forgery-resistant
 (`profile_valid_oa_owner_pubkey` verifies against the profile author), and
-already the basis of user-search classification. The fix is to make it the
-*only* classifier and apply it everywhere:
+already the basis of user-search and batch-profile classification. The fix
+is to make it the *only* classifier and apply it everywhere. Two facts
+shape where the work lands:
 
-- **Member rows** (`nostr_convert.rs` member-list conversion): `is_agent:
-  role == "bot" || <auth-tag-verified from the member's profile>`. Member
-  lists are converted where profiles are already being joined for display
-  names; the verification helper is right there.
-- **`ProfileInfo`** (single-profile path): gains `is_agent:
+- The Rust member-list conversion (`nostr_convert.rs`) builds rows from the
+  kind:39002 tags alone — `display_name: None`, no profile in scope — so
+  `is_agent: role == "bot"` cannot be fixed there without inventing a
+  profile fetch it does not have. **The member/profile join happens in the
+  frontend**; that join is where classification unifies.
+- Several frontend chains (`MessageRow`, mention candidates) already OR in
+  `profile.isAgent`. In principle those surfaces should badge auth-tagged
+  agents once profiles load — yet the reference deployment renders them as
+  humans. **P4 therefore opens with a diagnosis step**, not a patch: for
+  each surface (timeline, member list, autocomplete, popover), establish
+  whether the failure is a missing profile fetch, a surface that consults
+  only `member.isAgent`/role, or `verify_auth_tag` rejecting the live tags
+  — and only then apply the (small) fixes below.
+
+The expected fixes, per the audit so far:
+
+- **Frontend member classification**: OR the profile-derived flag into
+  member rows at the existing member/profile join (the members sidebar and
+  `useClassifiedMembers` consult only `member.isAgent`, i.e. role, today).
+- **`ProfileInfo`** (single-profile Rust path): gains `is_agent:
   owner_pubkey.is_some()`, making it consistent with
   `UserProfileSummaryInfo` which already does this.
-- **Frontend:** no new logic — the existing chains
-  (`MessageRow`, members sidebar, mention autocomplete, popovers) already
-  branch on `profile.isAgent` / `member.isAgent`; they simply start
-  receiving `true` for auth-tagged identities. Audit the handful of
-  `isAgent` derivations (`rg "isAgent" desktop/src`) for any surface that
-  consults *only* role or local managed state, and route it through the same
-  profile-derived flag.
+- **Audit the remaining `isAgent` derivations** (`rg "isAgent"
+  desktop/src`) for any surface that consults *only* role or local managed
+  state, and route it through the same profile-derived flag.
 
 **Rejected alternative — relay-served `is_agent`.** The relay could expose
 `users.agent_owner_pubkey IS NOT NULL` on member/user payloads. Rejected
@@ -260,11 +297,16 @@ Phases are ordered so every one lands green independently:
 - **P3 — `buzz-acp`: `--profile-*` flags + publish-on-diff at startup.**
   Config tests mirror existing `config.rs` tests; one integration test
   around "restart publishes nothing when unchanged".
-- **P4 — desktop classifier unification.** `nostr_convert.rs` member rows +
-  `ProfileInfo.is_agent`; Rust-side tests with the existing auth-tag test
-  fixtures (`nostr_convert.rs` already builds valid-tag profiles in tests);
-  one e2e: an auth-tagged `role == "member"` member renders the agent
-  badge in timeline, member list, and mention autocomplete.
+- **P4 — desktop: classifier unification + observer ingestion widening.**
+  Opens with the §4.3 diagnosis (which surface fails, and why, against the
+  reference deployment). Then: frontend member/profile join ORs the
+  verified-owner flag; `ProfileInfo.is_agent` added Rust-side (tests reuse
+  the valid-tag fixtures `nostr_convert.rs` already builds);
+  `combineObserverIngestionAgents` fed from verified-owned profiles, not
+  only the 10100 directory (§4.1), with the profile-panel session surface
+  verified to gate on ownership. E2e note: mock-bridge specs exercise the
+  frontend chains with modeled `is_agent`; the Rust conversions are covered
+  by Rust tests — the two layers are asserted separately, deliberately.
 - **P5 — docs + script.** `docs/standalone-agents.md`,
   `scripts/new-standalone-agent.sh`.
 - **P6 — ops pass on the reference deployment.** Add observer + profile env
