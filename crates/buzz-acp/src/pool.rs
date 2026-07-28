@@ -502,6 +502,10 @@ pub struct PromptContext {
     /// after validated file read in `Config::from_cli()`. The compiled-in default
     /// (`include_str!`) is inherently `'static`.
     pub base_prompt: Option<&'static str>,
+    /// Owner-published definition prompt (kind:30177), refreshed at new-session
+    /// birth. Only consulted when `system_prompt` is `None` — a locally pinned
+    /// prompt is authoritative. See `definition_fetch`.
+    pub definition_prompt: crate::definition_fetch::DefinitionPromptCache,
     pub cwd: String,
     /// REST client for pre-prompt context fetches (thread/DM history).
     pub rest_client: RestClient,
@@ -850,6 +854,7 @@ async fn resolve_new_session_channel_context(
 async fn create_session_and_apply_model(
     agent: &mut OwnedAgent,
     ctx: &PromptContext,
+    system_prompt: Option<&str>,
     agent_core: Option<&str>,
     agent_canvas: Option<&str>,
     channel_name: Option<&str>,
@@ -864,7 +869,7 @@ async fn create_session_and_apply_model(
     let combined_system_prompt = with_canvas(
         with_core(
             with_team(
-                framed_system_prompt(&ctx.cwd, ctx.base_prompt, ctx.system_prompt.as_deref()),
+                framed_system_prompt(&ctx.cwd, ctx.base_prompt, system_prompt),
                 ctx.team_instructions.as_deref(),
             ),
             agent_core,
@@ -1467,6 +1472,49 @@ pub async fn run_prompt_task(
         }
     }
 
+    // Owner-published definition prompt ([System]) — same lifecycle as the
+    // core fetch: refreshed only when this turn is about to birth a new
+    // session, bounded, fail-open (a relay outage keeps the last good value,
+    // and session creation is never blocked).
+    //
+    // Skipped entirely when the operator pinned a prompt locally
+    // (BUZZ_ACP_SYSTEM_PROMPT / _FILE / --system-prompt) — env is
+    // authoritative, matching the BUZZ_ACP_PROFILE_* precedence rule. With
+    // no resolved owner there is no definition author to trust, so the
+    // fetch never fires.
+    if ctx.system_prompt.is_none() {
+        if let Some(owner_pk) = ctx.agent_owner_pubkey.as_ref() {
+            let is_new_session_turn = match &source {
+                PromptSource::Channel(cid) => !agent.state.sessions.contains_key(cid),
+                PromptSource::Heartbeat => agent.state.heartbeat_session.is_none(),
+            };
+            if is_new_session_turn {
+                const DEFINITION_FETCH_TIMEOUT: std::time::Duration =
+                    std::time::Duration::from_secs(3);
+                let agent_pubkey = ctx.agent_keys.public_key();
+                let refresh =
+                    ctx.definition_prompt
+                        .refresh(&ctx.rest_client, &agent_pubkey, owner_pk);
+                if tokio::time::timeout(DEFINITION_FETCH_TIMEOUT, refresh)
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(
+                        target: "definition::prompt",
+                        timeout_ms = DEFINITION_FETCH_TIMEOUT.as_millis() as u64,
+                        "definition fetch timed out — keeping cached prompt"
+                    );
+                }
+            }
+        }
+    }
+    // The [System] content for this turn: locally pinned prompt first,
+    // otherwise the owner-published definition (possibly refreshed above).
+    let effective_system_prompt: Option<String> = ctx
+        .system_prompt
+        .clone()
+        .or_else(|| ctx.definition_prompt.get());
+
     // Canvas metadata fetch — same lifecycle as core: once per new channel session,
     // never for heartbeats, cached until session invalidation.
     //
@@ -1532,6 +1580,7 @@ pub async fn run_prompt_task(
                 match create_session_and_apply_model(
                     &mut agent,
                     &ctx,
+                    effective_system_prompt.as_deref(),
                     agent_core.as_deref(),
                     agent_canvas.as_deref(),
                     title_channel.as_deref(),
@@ -1582,7 +1631,16 @@ pub async fn run_prompt_task(
             if let Some(sid) = &agent.state.heartbeat_session {
                 (sid.clone(), false)
             } else {
-                match create_session_and_apply_model(&mut agent, &ctx, None, None, None).await {
+                match create_session_and_apply_model(
+                    &mut agent,
+                    &ctx,
+                    effective_system_prompt.as_deref(),
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                {
                     Ok(sid) => {
                         tracing::info!(
                             target: "pool::session",
@@ -1836,7 +1894,7 @@ pub async fn run_prompt_task(
                 profile_lookup: profile_lookup.as_ref(),
                 has_system_prompt_support: agent.has_system_prompt_support(),
                 base_prompt: ctx.base_prompt,
-                system_prompt: ctx.system_prompt.as_deref(),
+                system_prompt: effective_system_prompt.as_deref(),
                 team_instructions: ctx.team_instructions.as_deref(),
                 agent_canvas: agent_canvas.as_deref(),
             },
@@ -5342,6 +5400,7 @@ mod tests {
             turn_liveness_interval: Duration::ZERO,
             dedup_mode: DedupMode::Drop,
             system_prompt: None,
+            definition_prompt: Default::default(),
             session_title: None,
             team_instructions: None,
             heartbeat_prompt: None,

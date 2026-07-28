@@ -115,22 +115,60 @@ pub(crate) fn retain_agent_record(
     keys: &nostr::Keys,
     record: &ManagedAgentRecord,
 ) -> Result<bool, String> {
-    let owner_pubkey = keys.public_key().to_hex();
-    let existing = get_retained_event(conn, KIND_MANAGED_AGENT, &owner_pubkey, &record.pubkey)?;
+    retain_definition_head(
+        conn,
+        keys,
+        &record.pubkey,
+        build_agent_event(record)?,
+        &record.name,
+    )
+}
 
-    // Build the event first and compare ITS content, so the comparison and
-    // the retained row share one serialization of the projection (mirrors
-    // `migrate_personas_in_dir`). Serializing the projection independently
-    // here would silently diverge if `build_agent_event` ever changed how
-    // it serializes — republishing every agent every boot. Content is
-    // timestamp-independent, so the monotonic bump below never forces a
-    // spurious republish; an unchanged agent is still a true no-op.
-    let event = build_agent_event(record)?
+/// Retain a connected agent's kind:30177 definition from owner-asserted
+/// fields — the interactive path behind the Connected Agents Instructions
+/// editor. Same coordinate scheme as managed records (`d_tag` = agent
+/// pubkey), same diff + bump engine, no `ManagedAgentRecord` involved.
+pub(crate) fn retain_connected_agent_definition(
+    conn: &rusqlite::Connection,
+    keys: &nostr::Keys,
+    agent_pubkey: &str,
+    name: &str,
+    system_prompt: Option<String>,
+) -> Result<bool, String> {
+    retain_definition_head(
+        conn,
+        keys,
+        agent_pubkey,
+        super::agent_events::build_connected_agent_event(agent_pubkey, name, system_prompt)?,
+        name,
+    )
+}
+
+/// Shared diff + monotonic-bump engine for kind:30177 heads.
+///
+/// Builds the event first and compares ITS content, so the comparison and
+/// the retained row share one serialization of the projection (mirrors
+/// `migrate_personas_in_dir`). Serializing the projection independently
+/// here would silently diverge if the builder ever changed how it
+/// serializes — republishing every agent every boot. Content is
+/// timestamp-independent, so the monotonic bump below never forces a
+/// spurious republish; an unchanged agent is still a true no-op.
+fn retain_definition_head(
+    conn: &rusqlite::Connection,
+    keys: &nostr::Keys,
+    d_tag: &str,
+    builder: nostr::EventBuilder,
+    label: &str,
+) -> Result<bool, String> {
+    let owner_pubkey = keys.public_key().to_hex();
+    let existing = get_retained_event(conn, KIND_MANAGED_AGENT, &owner_pubkey, d_tag)?;
+
+    let event = builder
         .custom_created_at(monotonic_created_at(
             existing.as_ref().map(|row| row.created_at),
         ))
         .sign_with_keys(keys)
-        .map_err(|e| format!("failed to sign event for '{}': {e}", record.name))?;
+        .map_err(|e| format!("failed to sign event for '{label}': {e}"))?;
 
     let content = event.content.clone();
     if existing.as_ref().is_some_and(|row| row.content == content) {
@@ -142,14 +180,14 @@ pub(crate) fn retain_agent_record(
         &RetainedEvent {
             kind: KIND_MANAGED_AGENT,
             pubkey: owner_pubkey,
-            d_tag: record.pubkey.clone(),
+            d_tag: d_tag.to_string(),
             content,
             created_at: event.created_at.as_secs() as i64,
             raw_event: event.as_json(),
             pending_sync: true,
         },
     )
-    .map_err(|e| format!("failed to retain '{}': {e}", record.name))?;
+    .map_err(|e| format!("failed to retain '{label}': {e}"))?;
     Ok(true)
 }
 

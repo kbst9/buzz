@@ -804,6 +804,7 @@ pub fn run() {
             set_managed_agent_start_on_app_launch,
             set_managed_agent_auto_restart,
             delete_managed_agent,
+            set_connected_agent_instructions,
             get_managed_agent_log,
             get_agent_models,
             discover_agent_models,

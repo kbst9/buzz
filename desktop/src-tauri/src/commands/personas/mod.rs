@@ -865,8 +865,10 @@ fn apply_inbound_managed_agent(
             local.provider = inbound.provider;
             local.persona_source_version = inbound.persona_source_version;
         }
-        local.parallelism = inbound.parallelism;
-        local.respond_to = inbound.respond_to;
+        // `None` = not carried (connected-agent definitions publish no spawn
+        // knobs) — preserve local, mirroring the team-event `Option` rule.
+        local.parallelism = inbound.parallelism.unwrap_or(local.parallelism);
+        local.respond_to = inbound.respond_to.unwrap_or(local.respond_to);
         local.respond_to_allowlist = inbound.respond_to_allowlist;
     }
 }

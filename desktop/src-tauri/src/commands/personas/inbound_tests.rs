@@ -361,6 +361,47 @@ fn inbound_definition_less_agent_applies_quad() {
     );
 }
 
+/// A minimal connected-agent definition (no spawn knobs on the wire) must
+/// preserve the local record's `parallelism` and `respond_to` — `None`
+/// means "not carried", never "reset to default". Guards the rare case
+/// where a pubkey is both a local record here and a connected-agent
+/// definition published from another device.
+#[test]
+fn inbound_minimal_definition_preserves_local_spawn_knobs() {
+    let keys = nostr::Keys::generate();
+    let event = crate::managed_agents::agent_events::build_connected_agent_event(
+        AGENT_PUBKEY,
+        "Renamed Agent",
+        Some("connected prompt".to_string()),
+    )
+    .unwrap()
+    .sign_with_keys(&keys)
+    .unwrap();
+
+    let content =
+        crate::managed_agents::agent_events::managed_agent_content_from_event(&event).unwrap();
+    let mut agents = vec![local_agent()];
+    let local_parallelism = agents[0].parallelism;
+    let local_respond_to = agents[0].respond_to;
+    apply_inbound_managed_agent(&mut agents, AGENT_PUBKEY, content);
+
+    let a = &agents[0];
+    assert_eq!(a.name, "Renamed Agent");
+    assert_eq!(
+        a.system_prompt,
+        Some("connected prompt".to_string()),
+        "definition-less inbound applies the prompt"
+    );
+    assert_eq!(
+        a.parallelism, local_parallelism,
+        "absent parallelism must preserve local"
+    );
+    assert_eq!(
+        a.respond_to, local_respond_to,
+        "absent respond_to must preserve local"
+    );
+}
+
 #[test]
 fn inbound_managed_agent_no_match_is_noop() {
     let event = foreign_agent_event_with_secrets("someotheragentpubkey");

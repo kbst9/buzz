@@ -159,6 +159,122 @@ fn missing_record_is_never_tombstoned() {
     assert!(survivor.is_some(), "missing record must stay retained");
 }
 
+/// Connected-agent definitions ride the same diff + bump engine: fresh
+/// insert goes pending, an identical re-save is a true no-op, an edit
+/// republishes with a bumped head, and clearing instructions publishes a
+/// promptless definition.
+#[test]
+fn connected_definition_retains_diff_suppresses_and_clears() {
+    let dir = TempDir::new().unwrap();
+    let keys = nostr::Keys::generate();
+    let agent_pubkey = "9".repeat(64);
+    let conn = open_retention_db(&dir.path().join("retention.db")).unwrap();
+
+    // Fresh insert → pending, minimal wire shape.
+    assert!(retain_connected_agent_definition(
+        &conn,
+        &keys,
+        &agent_pubkey,
+        "Claude",
+        Some("You are Claude.".to_string()),
+    )
+    .unwrap());
+    let row = get_retained_event(
+        &conn,
+        KIND_MANAGED_AGENT,
+        &keys.public_key().to_hex(),
+        &agent_pubkey,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(row.pending_sync);
+    assert!(row.content.contains("You are Claude."));
+    assert!(!row.content.contains("parallelism"), "spawn knob leaked");
+    let first_head = row.created_at;
+
+    // Identical re-save → no rewrite, no pending churn.
+    assert!(!retain_connected_agent_definition(
+        &conn,
+        &keys,
+        &agent_pubkey,
+        "Claude",
+        Some("You are Claude.".to_string()),
+    )
+    .unwrap());
+
+    // Edit → republished past the retained head.
+    assert!(retain_connected_agent_definition(
+        &conn,
+        &keys,
+        &agent_pubkey,
+        "Claude",
+        Some("You are Claude, the release captain.".to_string()),
+    )
+    .unwrap());
+    let row = get_retained_event(
+        &conn,
+        KIND_MANAGED_AGENT,
+        &keys.public_key().to_hex(),
+        &agent_pubkey,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(row.content.contains("release captain"));
+    assert!(row.created_at > first_head, "head must bump monotonically");
+
+    // Clear → definition without a prompt (explicit clear for the harness).
+    assert!(
+        retain_connected_agent_definition(&conn, &keys, &agent_pubkey, "Claude", None).unwrap()
+    );
+    let row = get_retained_event(
+        &conn,
+        KIND_MANAGED_AGENT,
+        &keys.public_key().to_hex(),
+        &agent_pubkey,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(!row.content.contains("system_prompt"));
+}
+
+/// A connected-agent definition has no `ManagedAgentRecord` by design — the
+/// boot-time reconcile must leave its retained row untouched, exactly like a
+/// missing managed record.
+#[test]
+fn connected_definition_survives_boot_reconcile() {
+    let dir = TempDir::new().unwrap();
+    let keys = nostr::Keys::generate();
+    let agent_pubkey = "8".repeat(64);
+    {
+        let conn = open_retention_db(&dir.path().join("retention.db")).unwrap();
+        assert!(retain_connected_agent_definition(
+            &conn,
+            &keys,
+            &agent_pubkey,
+            "Claude",
+            Some("You are Claude.".to_string()),
+        )
+        .unwrap());
+    }
+
+    // A boot reconcile over a store that has never heard of this pubkey.
+    write_store(&dir, &[sample_record("a".repeat(64).as_str(), "managed")]);
+    assert_eq!(reconcile_agents_in_dir(dir.path(), &keys).unwrap(), 1);
+
+    let conn = open_retention_db(&dir.path().join("retention.db")).unwrap();
+    let survivor = get_retained_event(
+        &conn,
+        KIND_MANAGED_AGENT,
+        &keys.public_key().to_hex(),
+        &agent_pubkey,
+    )
+    .unwrap();
+    assert!(
+        survivor.is_some(),
+        "connected definition must survive reconcile"
+    );
+}
+
 #[test]
 fn keyless_record_is_skipped() {
     let dir = TempDir::new().unwrap();

@@ -6,6 +6,10 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import {
+  connectedAgentDefinitionQueryKey,
+  useConnectedAgentDefinitionQuery,
+} from "@/features/agents/lib/connectedAgentDefinition";
+import {
   buildAddAgentInstructions,
   buildEditAgentInstructions,
 } from "@/features/agents/lib/connectedAgentInstructions";
@@ -18,6 +22,7 @@ import {
 } from "@/features/profile/hooks";
 import { setConnectedAgentProfile } from "@/shared/api/agentControl";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import { setConnectedAgentInstructions } from "@/shared/api/tauri";
 import { getUserProfile } from "@/shared/api/tauriProfiles";
 import type { Profile, UserSearchResult } from "@/shared/api/types";
 import { AgentCreationPreview } from "@/features/agents/ui/AgentCreationPreview";
@@ -351,15 +356,27 @@ function EditAgentDialog({
   const shouldReduceMotion = useReducedMotion();
   const profileQuery = useUserProfileQuery(agent?.pubkey);
   const baseline = profileQuery.data;
+  // The owner-authored kind:30177 definition backs the Instructions field.
+  // The dialog only edits agents the current user owns, so the definition
+  // author is the agent's owner.
+  const definitionQuery = useConnectedAgentDefinitionQuery(
+    agent?.ownerPubkey ?? undefined,
+    agent?.pubkey,
+  );
+  const definitionBaseline = definitionQuery.data;
   const [name, setName] = React.useState("");
   const [about, setAbout] = React.useState("");
   const [avatarUrl, setAvatarUrl] = React.useState("");
+  const [instructions, setInstructions] = React.useState("");
   const [isAvatarUploadPending, setIsAvatarUploadPending] =
     React.useState(false);
   const [showAdvanced, setShowAdvanced] = React.useState(false);
   const [saveState, setSaveState] = React.useState<
     "idle" | "saving" | "saved" | "timeout" | "error"
   >("idle");
+  // Whether the last completed save included an instructions publish —
+  // steers the "saved" status copy (next-session delivery vs profile ack).
+  const [savedInstructions, setSavedInstructions] = React.useState(false);
 
   // Prefill exactly once per opened agent, upgrading only while the user
   // has not touched the form: a late-resolving or post-save-refetched
@@ -379,13 +396,15 @@ function EditAgentDialog({
     if (firstOpen) {
       touchedRef.current = false;
       setSaveState("idle");
+      setSavedInstructions(false);
       setShowAdvanced(false);
       setIsAvatarUploadPending(false);
     }
     setName(baseline?.displayName ?? agent.displayName?.trim() ?? "");
     setAbout(baseline?.about ?? "");
     setAvatarUrl(baseline?.avatarUrl ?? agent.avatarUrl ?? "");
-  }, [agent, baseline, saveState]);
+    setInstructions(definitionBaseline?.instructions ?? "");
+  }, [agent, baseline, definitionBaseline, saveState]);
 
   const changedFields = React.useMemo(() => {
     if (!agent) {
@@ -407,6 +426,9 @@ function EditAgentDialog({
     return fields;
   }, [about, agent, avatarUrl, baseline, name]);
   const hasChanges = Object.keys(changedFields).length > 0;
+  const instructionsChanged =
+    instructions !== (definitionBaseline?.instructions ?? "");
+  const hasAnyChanges = hasChanges || instructionsChanged;
   // data:image/ covers picked emoji avatars (inline SVG data URLs).
   const avatarInvalid =
     avatarUrl.trim() !== "" &&
@@ -415,10 +437,46 @@ function EditAgentDialog({
     !avatarUrl.trim().startsWith("data:image/");
 
   const handleSave = React.useCallback(async () => {
-    if (!agent || !hasChanges) {
+    if (!agent || !hasAnyChanges) {
       return;
     }
     setSaveState("saving");
+    setSavedInstructions(false);
+
+    // Instructions publish as the owner-signed kind:30177 definition — no
+    // agent participation needed, so this works while the agent is offline.
+    // The retention write is the durable ack; the agent applies it at its
+    // next session.
+    if (instructionsChanged) {
+      try {
+        await setConnectedAgentInstructions({
+          agentPubkey: agent.pubkey,
+          agentName:
+            name.trim() ||
+            agent.displayName?.trim() ||
+            truncatePubkey(agent.pubkey),
+          instructions,
+        });
+      } catch {
+        setSaveState("error");
+        return;
+      }
+      setSavedInstructions(true);
+      await queryClient.invalidateQueries({
+        queryKey: connectedAgentDefinitionQueryKey(
+          agent.ownerPubkey ?? "",
+          agent.pubkey,
+        ),
+      });
+    }
+
+    // Profile fields ride the live control frame, which needs the agent
+    // online; when it isn't, the host instructions under Advanced remain
+    // the profile path and the instructions save above still stands.
+    if (!hasChanges || !online) {
+      setSaveState("saved");
+      return;
+    }
     try {
       await setConnectedAgentProfile(agent.pubkey, changedFields);
     } catch {
@@ -455,7 +513,17 @@ function EditAgentDialog({
       }
     }
     setSaveState("timeout");
-  }, [agent, changedFields, hasChanges, queryClient]);
+  }, [
+    agent,
+    changedFields,
+    hasAnyChanges,
+    hasChanges,
+    instructions,
+    instructionsChanged,
+    name,
+    online,
+    queryClient,
+  ]);
 
   const fallbackInstructions = React.useMemo(() => {
     if (!agent) {
@@ -474,13 +542,19 @@ function EditAgentDialog({
   const statusText = avatarInvalid
     ? "Avatar must be an upload, emoji, or http(s) URL."
     : saveState === "saved"
-      ? "Saved — the agent republished its profile."
+      ? savedInstructions
+        ? `Saved — instructions apply at the agent's next session.${
+            hasChanges && !online
+              ? " Profile edits still need the agent online or the host instructions under Advanced."
+              : ""
+          }`
+        : "Saved — the agent republished its profile."
       : saveState === "timeout"
         ? "No confirmation from the agent yet — it may be busy; check again shortly or use the host instructions under Advanced."
         : saveState === "error"
           ? "Sending failed — check the relay connection."
           : !online
-            ? "Agent offline — use the host instructions under Advanced."
+            ? "Agent offline — profile edits need the host instructions under Advanced; instructions still save from here."
             : null;
 
   return (
@@ -509,11 +583,14 @@ function EditAgentDialog({
               <Button
                 data-testid="connected-agent-edit-save"
                 disabled={
-                  !online ||
-                  !hasChanges ||
+                  !hasAnyChanges ||
                   avatarInvalid ||
                   isAvatarUploadPending ||
-                  saveState === "saving"
+                  saveState === "saving" ||
+                  // Profile-only edits ride the live control frame and need
+                  // the agent online; instructions publish owner-side and
+                  // keep Save enabled regardless of presence.
+                  (!online && !instructionsChanged)
                 }
                 onClick={() => void handleSave()}
                 type="button"
@@ -599,6 +676,36 @@ function EditAgentDialog({
                   value={about}
                 />
               </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label
+                className="text-sm font-medium text-foreground"
+                htmlFor="connected-agent-edit-instructions"
+              >
+                Instructions
+              </label>
+              <div className={cn("px-3 py-2", PERSONA_FIELD_SHELL_CLASS)}>
+                <Textarea
+                  className={cn(
+                    "min-h-24 resize-none px-0 py-0",
+                    PERSONA_FIELD_CONTROL_CLASS,
+                  )}
+                  data-testid="connected-agent-edit-instructions"
+                  disabled={saveState === "saving"}
+                  id="connected-agent-edit-instructions"
+                  onChange={(event) => {
+                    touchedRef.current = true;
+                    setInstructions(event.target.value);
+                  }}
+                  placeholder="What this agent should do and how it should behave"
+                  value={instructions}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Published to the community as this agent's definition — the
+                agent picks it up at its next session, even while offline now.
+              </p>
             </div>
 
             <div className="space-y-3">

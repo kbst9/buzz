@@ -50,9 +50,16 @@ pub struct ManagedAgentEventContent {
     /// snapshot without re-reading the source persona.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persona_source_version: Option<String>,
-    pub parallelism: u32,
-    /// Inbound author gate mode (wire string).
-    pub respond_to: RespondTo,
+    /// Subprocess pool size. `None` means "not carried" (connected-agent
+    /// definitions — the host unit owns spawn knobs), mirroring the
+    /// team-event `Option` rule: absent never clears a local value. Managed
+    /// records always publish `Some`, so their wire bytes are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallelism: Option<u32>,
+    /// Inbound author gate mode (wire string). Same `Option` semantics as
+    /// `parallelism`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub respond_to: Option<RespondTo>,
     /// Allowlisted author pubkeys when `respond_to == Allowlist`. These are
     /// public keys, not secrets.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -100,10 +107,52 @@ pub fn agent_event_content(record: &ManagedAgentRecord) -> ManagedAgentEventCont
         } else {
             record.persona_source_version.clone()
         },
-        parallelism: record.parallelism,
-        respond_to: record.respond_to,
+        parallelism: Some(record.parallelism),
+        respond_to: Some(record.respond_to),
         respond_to_allowlist: record.respond_to_allowlist.clone(),
     }
+}
+
+/// Project a connected (standalone) agent's owner-asserted fields onto the
+/// managed-agent content shape.
+///
+/// The desktop holds no record for a connected agent, so the projection
+/// carries only what the owner can truthfully assert from the app: a display
+/// label and the instructions the standalone harness should follow (buzz-acp
+/// reads `system_prompt` into its `[System]` section at session birth).
+/// Spawn knobs (`parallelism`, `respond_to`) are deliberately absent — the
+/// connected host's unit config owns them, and published guesses would
+/// mislead roster readers.
+pub fn connected_agent_event_content(
+    name: &str,
+    system_prompt: Option<String>,
+) -> ManagedAgentEventContent {
+    ManagedAgentEventContent {
+        name: name.to_string(),
+        persona_id: None,
+        system_prompt,
+        model: None,
+        provider: None,
+        persona_source_version: None,
+        parallelism: None,
+        respond_to: None,
+        respond_to_allowlist: Vec::new(),
+    }
+}
+
+/// Build a kind:30177 event for a connected agent from owner-asserted fields.
+///
+/// Same wire shape as [`build_agent_event`] (`d_tag` = agent pubkey), fed by
+/// [`connected_agent_event_content`] instead of a `ManagedAgentRecord`.
+pub fn build_connected_agent_event(
+    agent_pubkey: &str,
+    name: &str,
+    system_prompt: Option<String>,
+) -> Result<EventBuilder, String> {
+    let content = serde_json::to_string(&connected_agent_event_content(name, system_prompt))
+        .map_err(|e| format!("failed to serialize connected-agent content: {e}"))?;
+    let tags = vec![Tag::parse(["d", agent_pubkey]).map_err(|e| format!("invalid d-tag: {e}"))?];
+    Ok(EventBuilder::new(Kind::Custom(KIND_MANAGED_AGENT as u16), content).tags(tags))
 }
 
 /// Build a kind:30177 event from a `ManagedAgentRecord`.
@@ -328,6 +377,61 @@ mod tests {
         );
     }
 
+    /// Connected-agent projection: only the owner-asserted fields reach the
+    /// wire. Spawn knobs (`parallelism`, `respond_to`) must be absent — the
+    /// connected host's unit config owns them.
+    #[test]
+    fn connected_content_is_minimal_on_the_wire() {
+        let content = connected_agent_event_content("Claude", Some("You are Claude.".to_string()));
+        let json = serde_json::to_string(&content).unwrap();
+        assert!(json.contains("\"name\":\"Claude\""));
+        assert!(json.contains("You are Claude."));
+        assert!(!json.contains("parallelism"), "spawn knob leaked");
+        assert!(!json.contains("respond_to"), "spawn knob leaked");
+        assert!(!json.contains("persona_id"));
+        assert!(!json.contains("\"model\""));
+        assert!(!json.contains("\"provider\""));
+
+        // Clearing instructions publishes a definition without a prompt.
+        let cleared = connected_agent_event_content("Claude", None);
+        let json = serde_json::to_string(&cleared).unwrap();
+        assert!(!json.contains("system_prompt"));
+    }
+
+    /// A minimal connected-agent event parses on the inbound path with the
+    /// spawn knobs reported as "not carried" — old full events (which always
+    /// serialize both) are unaffected because `Some` round-trips identically.
+    #[test]
+    fn minimal_connected_event_parses_with_absent_knobs() {
+        let keys = nostr::Keys::generate();
+        let event = build_connected_agent_event(
+            "agentpubkeyhex",
+            "Claude",
+            Some("You are Claude.".to_string()),
+        )
+        .unwrap()
+        .sign_with_keys(&keys)
+        .unwrap();
+        let content = managed_agent_content_from_event(&event).unwrap();
+        assert_eq!(content.name, "Claude");
+        assert_eq!(content.system_prompt.as_deref(), Some("You are Claude."));
+        assert_eq!(content.parallelism, None);
+        assert_eq!(content.respond_to, None);
+
+        let d = event
+            .tags
+            .iter()
+            .find_map(|t| {
+                let v: Vec<&str> = t.as_slice().iter().map(|s| s.as_str()).collect();
+                (v.first() == Some(&"d"))
+                    .then(|| v.get(1).map(|s| s.to_string()))
+                    .flatten()
+            })
+            .unwrap();
+        assert_eq!(d, "agentpubkeyhex");
+        assert_eq!(event.kind.as_u16() as u32, KIND_MANAGED_AGENT);
+    }
+
     #[test]
     fn projection_is_deterministic() {
         let agent = sample_agent();
@@ -411,8 +515,8 @@ mod tests {
         let parsed = managed_agent_content_from_event(&event).unwrap();
         // The projected fields parse through.
         assert_eq!(parsed.name, "Agent");
-        assert_eq!(parsed.parallelism, 1);
-        assert_eq!(parsed.respond_to, RespondTo::OwnerOnly);
+        assert_eq!(parsed.parallelism, Some(1));
+        assert_eq!(parsed.respond_to, Some(RespondTo::OwnerOnly));
         // Re-serializing the projection contains no injected key.
         let json = serde_json::to_string(&parsed).unwrap();
         assert!(!json.contains("nsec1leak"));

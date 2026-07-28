@@ -865,6 +865,24 @@ export async function listManagedAgents(): Promise<ManagedAgent[]> {
     fromRawManagedAgent,
   );
 }
+/**
+ * Publish (or update) a connected agent's owner-authored kind:30177
+ * definition. The agent's harness reads `system_prompt` from it into its
+ * `[System]` section at each new session — instructions reach the agent
+ * without host access. Empty instructions publish an explicit clear.
+ */
+export async function setConnectedAgentInstructions(input: {
+  agentPubkey: string;
+  agentName: string;
+  instructions: string;
+}): Promise<void> {
+  await invokeTauri<void>("set_connected_agent_instructions", {
+    agentPubkey: input.agentPubkey,
+    agentName: input.agentName,
+    instructions: input.instructions,
+  });
+}
+
 export async function createManagedAgent(input: CreateManagedAgentInput) {
   const response = await invokeTauri<RawCreateManagedAgentResponse>(
     "create_managed_agent",

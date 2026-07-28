@@ -2,6 +2,7 @@
 
 mod acp;
 mod config;
+mod definition_fetch;
 mod engram_fetch;
 mod filter;
 mod observer;
@@ -1698,6 +1699,22 @@ async fn tokio_main() -> Result<()> {
         );
     }
 
+    // [System] precedence: a local prompt (BUZZ_ACP_SYSTEM_PROMPT / _FILE /
+    // --system-prompt) is authoritative and disables the relay-side
+    // definition fetch; without one, the agent follows the owner-published
+    // kind:30177 definition, refreshed at each new session birth.
+    if config.system_prompt.is_some() {
+        tracing::info!(
+            target: "definition::prompt",
+            "system prompt pinned locally — owner-published definition fetch disabled"
+        );
+    } else if startup_owner.is_some() {
+        tracing::info!(
+            target: "definition::prompt",
+            "no local system prompt — following owner-published definition (kind:30177)"
+        );
+    }
+
     let base_prompt_content = config.base_prompt_content.take();
     let ctx = Arc::new(PromptContext {
         mcp_servers: build_mcp_servers(&config),
@@ -1707,6 +1724,7 @@ async fn tokio_main() -> Result<()> {
         turn_liveness_interval: Duration::from_secs(config.turn_liveness_secs),
         dedup_mode: config.dedup_mode,
         system_prompt: config.system_prompt.clone(),
+        definition_prompt: Default::default(),
         session_title: config.session_title.clone(),
         team_instructions: config.team_instructions.clone(),
         base_prompt: if config.no_base_prompt {
