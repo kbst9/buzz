@@ -1,4 +1,5 @@
-import { Cable, Copy, Pencil, Plus } from "lucide-react";
+import { Cable, ChevronDown, Copy, Pencil, Plus } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import * as React from "react";
 
 import { useQueryClient } from "@tanstack/react-query";
@@ -19,7 +20,15 @@ import { setConnectedAgentProfile } from "@/shared/api/agentControl";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { getUserProfile } from "@/shared/api/tauriProfiles";
 import type { Profile, UserSearchResult } from "@/shared/api/types";
+import { AgentCreationPreview } from "@/features/agents/ui/AgentCreationPreview";
+import {
+  PERSONA_FIELD_CONTROL_CLASS,
+  PERSONA_FIELD_SHELL_CLASS,
+} from "@/features/agents/ui/agentConfigOptions";
 import { Button } from "@/shared/ui/button";
+import { ChooserDialogContent } from "@/shared/ui/chooser-dialog-content";
+import { Input } from "@/shared/ui/input";
+import { Textarea } from "@/shared/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -257,6 +266,11 @@ function agentLabel(agent: UserSearchResult) {
   );
 }
 
+const ADVANCED_MOTION_TRANSITION = {
+  duration: 0.18,
+  ease: [0.23, 1, 0.32, 1],
+} as const;
+
 function CopyableInstructions({
   testId,
   text,
@@ -334,11 +348,15 @@ function EditAgentDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const queryClient = useQueryClient();
+  const shouldReduceMotion = useReducedMotion();
   const profileQuery = useUserProfileQuery(agent?.pubkey);
   const baseline = profileQuery.data;
   const [name, setName] = React.useState("");
   const [about, setAbout] = React.useState("");
   const [avatarUrl, setAvatarUrl] = React.useState("");
+  const [isAvatarUploadPending, setIsAvatarUploadPending] =
+    React.useState(false);
+  const [showAdvanced, setShowAdvanced] = React.useState(false);
   const [saveState, setSaveState] = React.useState<
     "idle" | "saving" | "saved" | "timeout" | "error"
   >("idle");
@@ -361,6 +379,8 @@ function EditAgentDialog({
     if (firstOpen) {
       touchedRef.current = false;
       setSaveState("idle");
+      setShowAdvanced(false);
+      setIsAvatarUploadPending(false);
     }
     setName(baseline?.displayName ?? agent.displayName?.trim() ?? "");
     setAbout(baseline?.about ?? "");
@@ -447,96 +467,185 @@ function EditAgentDialog({
     });
   }, [agent, changedFields]);
 
-  const inputClass =
-    "w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs";
+  const previewLabel =
+    name.trim() || agent?.displayName?.trim() || "Connected agent";
+  const statusText = avatarInvalid
+    ? "Avatar URL must start with http(s)://."
+    : saveState === "saved"
+      ? "Saved — the agent republished its profile."
+      : saveState === "timeout"
+        ? "No confirmation from the agent yet — it may be busy; check again shortly or use the host instructions under Advanced."
+        : saveState === "error"
+          ? "Sending failed — check the relay connection."
+          : !online
+            ? "Agent offline — use the host instructions under Advanced."
+            : null;
 
   return (
     <Dialog onOpenChange={onOpenChange} open={agent !== null}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Edit {agent?.displayName ?? "agent"}</DialogTitle>
-          <DialogDescription>
-            {online
-              ? "Saving asks the running agent to republish its own profile — its keys stay on its host, and the ownership tag is preserved automatically."
-              : "This agent is offline, so it can't apply changes itself right now. Use the host instructions below."}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-          <label className="space-y-1 text-sm">
-            <span className="font-medium">Display name</span>
-            <input
-              className={inputClass}
-              data-testid="connected-agent-edit-name"
-              onChange={(event) => {
+      <ChooserDialogContent
+        className="max-w-3xl border-0"
+        contentClassName="pt-3"
+        data-testid="connected-agent-edit-dialog"
+        footerClassName="border-t-0 pt-0"
+        headerClassName="pb-2"
+        title={`Edit ${agent?.displayName?.trim() || "agent"}`}
+        footer={
+          <div className="flex w-full items-center justify-between gap-3">
+            <span className="text-xs text-muted-foreground" role="status">
+              {statusText}
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                disabled={saveState === "saving" || isAvatarUploadPending}
+                onClick={() => onOpenChange(false)}
+                type="button"
+                variant="outline"
+              >
+                Cancel
+              </Button>
+              <Button
+                data-testid="connected-agent-edit-save"
+                disabled={
+                  !online ||
+                  !hasChanges ||
+                  avatarInvalid ||
+                  isAvatarUploadPending ||
+                  saveState === "saving"
+                }
+                onClick={() => void handleSave()}
+                type="button"
+              >
+                {saveState === "saving" ? "Saving..." : "Save changes"}
+              </Button>
+            </div>
+          </div>
+        }
+      >
+        <div className="grid gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
+          <div className="flex flex-col items-center gap-2">
+            <AgentCreationPreview
+              avatarUrl={avatarUrl.trim() || null}
+              disabled={saveState === "saving"}
+              label={previewLabel}
+              onClearAvatar={() => {
                 touchedRef.current = true;
-                setName(event.target.value);
+                setAvatarUrl("");
               }}
-              value={name}
-            />
-          </label>
-          <label className="space-y-1 text-sm">
-            <span className="font-medium">About</span>
-            <input
-              className={inputClass}
-              data-testid="connected-agent-edit-about"
-              onChange={(event) => {
+              onSelectAvatar={(url) => {
                 touchedRef.current = true;
-                setAbout(event.target.value);
+                setAvatarUrl(url);
               }}
-              value={about}
-            />
-          </label>
-          <label className="space-y-1 text-sm">
-            <span className="font-medium">Avatar URL</span>
-            <input
-              className={inputClass}
-              data-testid="connected-agent-edit-avatar"
-              onChange={(event) => {
-                touchedRef.current = true;
-                setAvatarUrl(event.target.value);
-              }}
-              placeholder="https://…"
-              value={avatarUrl}
-            />
-          </label>
-        </div>
-        <div className="flex items-center gap-3">
-          <Button
-            data-testid="connected-agent-edit-save"
-            disabled={
-              !online || !hasChanges || avatarInvalid || saveState === "saving"
-            }
-            onClick={() => void handleSave()}
-            size="sm"
-          >
-            {saveState === "saving" ? "Saving…" : "Save"}
-          </Button>
-          <span className="text-xs text-muted-foreground" role="status">
-            {avatarInvalid
-              ? "Avatar URL must start with http(s)://."
-              : saveState === "saved"
-                ? "Saved — the agent republished its profile."
-                : saveState === "timeout"
-                  ? "No confirmation from the agent yet — it may be busy; check again shortly or use the host instructions."
-                  : saveState === "error"
-                    ? "Sending failed — check the relay connection."
-                    : !online
-                      ? "Agent offline."
-                      : null}
-          </span>
-        </div>
-        <details className="rounded-xl border border-border/60 px-3 py-2">
-          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
-            Do it on the host instead (works offline)
-          </summary>
-          <div className="pt-2">
-            <CopyableInstructions
-              testId="connected-agents-edit-instructions"
-              text={fallbackInstructions}
+              onUploadPendingChange={setIsAvatarUploadPending}
+              testIdPrefix="connected-agent-avatar"
             />
           </div>
-        </details>
-      </DialogContent>
+          <div className="space-y-5">
+            <div className="space-y-1.5">
+              <label
+                className="text-sm font-medium text-foreground"
+                htmlFor="connected-agent-edit-name"
+              >
+                Display name
+              </label>
+              <div
+                className={cn(
+                  "flex min-h-11 items-center px-3",
+                  PERSONA_FIELD_SHELL_CLASS,
+                )}
+              >
+                <Input
+                  autoCorrect="off"
+                  className={cn(
+                    "h-8 px-0 py-0 leading-6",
+                    PERSONA_FIELD_CONTROL_CLASS,
+                  )}
+                  data-testid="connected-agent-edit-name"
+                  disabled={saveState === "saving"}
+                  id="connected-agent-edit-name"
+                  onChange={(event) => {
+                    touchedRef.current = true;
+                    setName(event.target.value);
+                  }}
+                  placeholder="Agent name"
+                  value={name}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label
+                className="text-sm font-medium text-foreground"
+                htmlFor="connected-agent-edit-about"
+              >
+                About
+              </label>
+              <div className={cn("px-3 py-2", PERSONA_FIELD_SHELL_CLASS)}>
+                <Textarea
+                  className={cn(
+                    "min-h-16 resize-none px-0 py-0",
+                    PERSONA_FIELD_CONTROL_CLASS,
+                  )}
+                  data-testid="connected-agent-edit-about"
+                  disabled={saveState === "saving"}
+                  id="connected-agent-edit-about"
+                  onChange={(event) => {
+                    touchedRef.current = true;
+                    setAbout(event.target.value);
+                  }}
+                  placeholder="What this agent does"
+                  value={about}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <button
+                aria-expanded={showAdvanced}
+                className="inline-flex h-9 items-center gap-1.5 text-sm font-medium text-foreground transition-colors hover:text-foreground/80 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                data-testid="connected-agent-edit-advanced"
+                onClick={() => setShowAdvanced((current) => !current)}
+                type="button"
+              >
+                <span>Advanced</span>
+                <ChevronDown
+                  className={cn(
+                    "h-4 w-4 text-muted-foreground transition-transform duration-150 ease-out",
+                    showAdvanced && "rotate-180",
+                  )}
+                />
+              </button>
+              <AnimatePresence initial={false}>
+                {showAdvanced ? (
+                  <motion.div
+                    animate={{ height: "auto", opacity: 1, scale: 1 }}
+                    className="origin-top overflow-hidden"
+                    exit={{ height: 0, opacity: 0, scale: 0.98 }}
+                    initial={{ height: 0, opacity: 0, scale: 0.98 }}
+                    key="connected-agent-advanced"
+                    transition={
+                      shouldReduceMotion
+                        ? { duration: 0 }
+                        : ADVANCED_MOTION_TRANSITION
+                    }
+                  >
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted-foreground">
+                        Apply this edit on the agent's host instead — works
+                        while the agent is offline.
+                      </p>
+                      <CopyableInstructions
+                        testId="connected-agents-edit-instructions"
+                        text={fallbackInstructions}
+                      />
+                    </div>
+                  </motion.div>
+                ) : null}
+              </AnimatePresence>
+            </div>
+          </div>
+        </div>
+      </ChooserDialogContent>
     </Dialog>
   );
 }
