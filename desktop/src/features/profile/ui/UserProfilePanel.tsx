@@ -35,6 +35,7 @@ import {
 import { describeLogFile } from "@/features/agents/ui/agentUi";
 import { AgentDialog } from "@/features/agents/ui/AgentDialog";
 import { ConnectedAgentEditDialog } from "@/features/agents/ui/ConnectedAgentEditDialog";
+import { useConnectedAgentDefinitionQuery } from "@/features/agents/lib/connectedAgentDefinition";
 import { useAgentLifecycleActions } from "@/features/profile/ui/useAgentLifecycleActions";
 import {
   consumePendingOpenEditAgent,
@@ -339,6 +340,13 @@ export function UserProfilePanel({
     (isOwner === true &&
       (managedAgent !== undefined || resolvedPersona !== undefined)) ||
     canEditConnectedAgent;
+  // Owner-authored kind:30177 instructions for an owned connected agent —
+  // fetched owner-side only (same gate as Edit), shared with the edit
+  // dialog's query cache.
+  const connectedAgentDefinitionQuery = useConnectedAgentDefinitionQuery(
+    canEditConnectedAgent ? (ownerPubkey ?? undefined) : undefined,
+    effectivePubkey ?? undefined,
+  );
   const memoryQuery = useAgentMemoryQuery(effectivePubkey, {
     enabled: viewerIsOwner && Boolean(effectivePubkey),
   });
@@ -724,6 +732,7 @@ export function UserProfilePanel({
   const agentInstruction = resolveAgentInstruction(
     managedAgent,
     resolvedPersona,
+    connectedAgentDefinitionQuery.data?.instructions ?? null,
   );
   const canManagePersona = isOwner === true && resolvedPersona !== undefined;
   const canEditPersona = canManagePersona;

@@ -255,9 +255,15 @@ export function resolveOwnerHandle(
 export function resolveAgentInstruction(
   managedAgent: ManagedAgent | undefined,
   persona: AgentPersona | undefined,
+  /** Owner-authored kind:30177 instructions for a connected agent —
+   * consulted only when there is no managed record or persona to read. */
+  connectedInstructions: string | null = null,
 ) {
   return (
-    managedAgent?.systemPrompt?.trim() || persona?.systemPrompt.trim() || null
+    managedAgent?.systemPrompt?.trim() ||
+    persona?.systemPrompt.trim() ||
+    connectedInstructions?.trim() ||
+    null
   );
 }
 
