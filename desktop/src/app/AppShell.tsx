@@ -107,6 +107,7 @@ export function AppShell() {
   useTauriWindowDrag();
   useWebviewScrollBoundaryLock();
   const communitiesHook = useCommunities();
+  const activeCommunityRelayUrl = communitiesHook.activeCommunity?.relayUrl;
   const hasCommunityRail = communitiesHook.communities.length > 1;
   const addCommunityDialog = useAddCommunityDialogState();
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
@@ -781,9 +782,7 @@ export function AppShell() {
                       <div className="flex min-h-0 flex-1 overflow-hidden">
                         <React.Suspense fallback={null}>
                           <LazySettingsScreen
-                            activeRelayUrl={
-                              communitiesHook.activeCommunity?.relayUrl
-                            }
+                            activeRelayUrl={activeCommunityRelayUrl}
                             currentPubkey={identityQuery.data?.pubkey}
                             fallbackDisplayName={
                               identityQuery.data?.displayName
