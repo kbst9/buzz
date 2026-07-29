@@ -217,6 +217,53 @@ envelope:
 - Writable media mounts or raw bucket file listings.
 - Replacing the relay event graph as the source of truth for anything.
 
+## Substrate variants (execution tier)
+
+The contracts in § Contracts consumed are substrate-agnostic; the execution
+tier is swappable. Assessed 2026-07-29:
+
+**A. Rivet agentOS — plan of record.** Self-hostable (gradient stays the
+host). ~22 MB/agent. JS/WASM only → two-tier fleet (hermes native). Needs
+the shim, host-side MCP, and an in-VM git-auth answer (the hard Phase 0
+gates). S3 POSIX-style mounts. Preview maturity is the standing risk.
+
+**B. Cloudflare Sandboxes + Agents SDK — managed variant.** Sandboxes
+(GA 2026-04) are full Linux containers: named/stateful, sleep when idle,
+persistent filesystem with backup/restore snapshot APIs, documented support
+for running Claude Code, process + PTY APIs. A Durable Object per agent
+(Agents SDK) is the supervisor: identity, per-agent SQLite (cursor
+storage), scheduling, wake handling.
+
+- *Simpler than A where A is hardest:* buzz-acp runs **unmodified inside
+  the sandbox**, spawning adapters over stdio exactly as on gradient — no
+  shim, no mcpServers translation, native git + `git-credential-nostr` and
+  native `buzz` CLI work as-is. Four of A's Phase 0 gates vanish. Native
+  binaries run → hermes joins → single-tier fleet.
+- *Changes shape:* the always-on outbound relay WS defeats sandbox sleep —
+  either accept always-on (active-CPU pricing may make an idle WS cheap;
+  measure) or pull Phase 5 forward (durable cursors + NIP-PL wake →
+  webhook → DO → sandbox wake → REST backlog catch-up) as the economics
+  unlock. Workspace durability = persistent sandbox FS + snapshots, not a
+  live S3 mount. The egress proxy holds secrets *outside* the sandbox (LLM
+  keys never enter it) — but the nsec must stay in-sandbox for signing, so
+  conditioned NIP-OA tags become urgent and a remote-signer is the
+  eventual fix.
+- *The regression:* not self-hostable — execution leaves owned infra.
+  Strategic fork vs the self-hosted relay posture.
+- *Not viable:* plain Workers/DOs without Sandboxes — no processes, no
+  native binaries; cannot run buzz-acp or any coding agent.
+- *B's spike gates:* outbound-WS behavior + idle cost; FS persistence
+  across sleep/migration + restore drill; egress allowlist; DO↔sandbox
+  lifecycle wiring via Agents SDK.
+
+**C. Bare containers + JuiceFS — fallback.** podman/systemd per agent +
+egress proxy + JuiceFS workspace volume. Most ops-heavy, zero new-vendor
+risk. This is the Phase 0 kill-criteria fallback.
+
+Decision criteria: self-hosting required → A or C. Fastest path to
+isolated remote execution with the least new code → B. Hostile
+multi-tenancy → whichever passes its spike gates first.
+
 ## References
 
 - agentOS: repo `rivet-dev/agentos`, docs `agentos-sdk.dev` (v0.2, 2026-06)
