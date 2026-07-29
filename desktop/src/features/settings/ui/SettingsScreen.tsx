@@ -3,9 +3,9 @@ import type { NotificationSettings } from "@/features/notifications/hooks";
 import type { SoundName, SoundSlot } from "@/features/notifications/lib/sound";
 import type { SettingsSection } from "@/features/settings/ui/SettingsPanels";
 import { SettingsView } from "@/features/settings/ui/SettingsView";
+import { useCommunities } from "@/features/communities/useCommunities";
 
 type SettingsScreenProps = {
-  activeRelayUrl?: string;
   currentPubkey?: string;
   fallbackDisplayName?: string;
   isUpdatingDesktopNotifications: boolean;
@@ -24,7 +24,6 @@ type SettingsScreenProps = {
 };
 
 export function SettingsScreen({
-  activeRelayUrl,
   currentPubkey,
   fallbackDisplayName,
   isUpdatingDesktopNotifications,
@@ -41,9 +40,13 @@ export function SettingsScreen({
   onSetSoundForSlot,
   section,
 }: SettingsScreenProps) {
+  // Sourced here rather than threaded through AppShell: the Connected Agents
+  // panel scopes definitions to the active community relay, and settings is
+  // the only consumer.
+  const communities = useCommunities();
   return (
     <SettingsView
-      activeRelayUrl={activeRelayUrl}
+      activeRelayUrl={communities.activeCommunity?.relayUrl}
       currentPubkey={currentPubkey}
       fallbackDisplayName={fallbackDisplayName}
       isUpdatingDesktopNotifications={isUpdatingDesktopNotifications}
