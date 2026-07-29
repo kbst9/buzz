@@ -40,6 +40,7 @@ type ChannelScreenHeaderProps = {
   onAddBotOpenChange?: (open: boolean) => void;
   onJoinChannel?: () => Promise<void>;
   onManageChannel: () => void;
+  onToggleFiles?: () => void;
   onToggleMembers: () => void;
 };
 
@@ -60,6 +61,7 @@ export function ChannelScreenHeader({
   transparentChrome = false,
   onJoinChannel,
   onManageChannel,
+  onToggleFiles,
   onToggleMembers,
 }: ChannelScreenHeaderProps) {
   const isGroupDm =
@@ -90,6 +92,7 @@ export function ChannelScreenHeader({
         isAddBotOpen={isAddBotOpen}
         onAddBotOpenChange={onAddBotOpenChange}
         onManageChannel={onManageChannel}
+        onToggleFiles={onToggleFiles}
         onToggleMembers={onToggleMembers}
         variant={actionsVariant}
       />

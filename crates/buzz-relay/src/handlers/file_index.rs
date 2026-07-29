@@ -93,7 +93,11 @@ pub(crate) fn spawn_cascade_retract(
         let target_hex = hex::encode(&target_id);
         let existing = match state
             .db
-            .get_events_by_kind_and_e_tag(tenant.community(), KIND_FILE_METADATA as i32, &target_hex)
+            .get_events_by_kind_and_e_tag(
+                tenant.community(),
+                KIND_FILE_METADATA as i32,
+                &target_hex,
+            )
             .await
         {
             Ok(events) => events,
@@ -296,12 +300,9 @@ async fn retract_entries(
         }
     }
 
-    let event = match EventBuilder::new(
-        Kind::Custom(KIND_DELETION as u16),
-        "file index retraction",
-    )
-    .tags(tags)
-    .sign_with_keys(&state.relay_keypair)
+    let event = match EventBuilder::new(Kind::Custom(KIND_DELETION as u16), "file index retraction")
+        .tags(tags)
+        .sign_with_keys(&state.relay_keypair)
     {
         Ok(event) => event,
         Err(e) => {
@@ -327,4 +328,3 @@ async fn retract_entries(
         }
     }
 }
-

@@ -20,6 +20,7 @@ import { ChannelScreenHeader } from "@/features/channels/ui/ChannelScreenHeader"
 import { ChannelPane } from "@/features/channels/ui/ChannelScreenLazyViews";
 import { WelcomeAgentCreateDialog } from "@/features/channels/ui/WelcomeAgentCreateDialog";
 import { ForumChannelContent } from "@/features/channels/ui/ForumChannelContent";
+import { ChannelFilesSheet } from "@/features/files/ui/ChannelFilesSheet";
 import { MembersSidebar } from "@/features/channels/ui/MembersSidebar";
 import {
   useManagedAgentsQuery,
@@ -139,6 +140,7 @@ export function ChannelScreen({
     widthPx: threadPanelWidthPx,
   } = useThreadPanelWidth();
   const [isMembersSidebarOpen, setIsMembersSidebarOpen] = React.useState(false);
+  const [isFilesSheetOpen, setIsFilesSheetOpen] = React.useState(false);
   const [isAddBotOpen, setIsAddBotOpen] = React.useState(false);
   const [channelContentRef, channelContentWidthPx] =
     useElementWidth<HTMLDivElement>();
@@ -744,6 +746,10 @@ export function ChannelScreen({
     handleCloseAgentSession,
     setProfilePanelPubkey,
   ]);
+  const handleToggleFiles = React.useCallback(
+    () => setIsFilesSheetOpen((prev) => !prev),
+    [],
+  );
   const handleToggleMembers = React.useCallback(
     () => setIsMembersSidebarOpen((prev) => !prev),
     [],
@@ -766,6 +772,7 @@ export function ChannelScreen({
         onAddBotOpenChange={setIsAddBotOpen}
         onJoinChannel={joinChannelMutation.mutateAsync}
         onManageChannel={handleManageChannel}
+        onToggleFiles={handleToggleFiles}
         onToggleMembers={handleToggleMembers}
         showHeaderContent={!isSinglePanelView}
         transparentChrome={activeChannel?.channelType !== "forum"}
@@ -785,6 +792,7 @@ export function ChannelScreen({
       joinChannelMutation.isPending,
       joinChannelMutation.mutateAsync,
       handleManageChannel,
+      handleToggleFiles,
       handleToggleMembers,
       isSinglePanelView,
     ],
@@ -971,6 +979,11 @@ export function ChannelScreen({
           onOpenChange={setIsMembersSidebarOpen}
           onViewActivity={handleOpenAgentSession}
           relayUrl={activeCommunity?.relayUrl}
+        />
+        <ChannelFilesSheet
+          channel={activeChannel}
+          onOpenChange={setIsFilesSheetOpen}
+          open={isFilesSheetOpen}
         />
       </ProfilePanelProvider>
     </AgentSessionProvider>

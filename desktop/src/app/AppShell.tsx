@@ -94,13 +94,9 @@ import { cn } from "@/shared/lib/cn";
 import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
 import { useMessageDeepLinks } from "@/shared/useMessageDeepLinks";
 import { SidebarInset, SidebarProvider } from "@/shared/ui/sidebar";
+import { LazySettingsScreen } from "@/app/LazySettingsScreen";
 import { RelayConnectionOverlay } from "@/app/RelayConnectionOverlay";
 import { useSidebarRelayConnectionCard } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
-
-const LazySettingsScreen = React.lazy(async () => {
-  const module = await import("@/features/settings/ui/SettingsScreen");
-  return { default: module.SettingsScreen };
-});
 
 export function AppShell() {
   useWebviewZoomShortcuts();
@@ -125,6 +121,7 @@ export function AppShell() {
   const {
     goAgents,
     goChannel,
+    goFiles,
     goHome,
     goNewMessage,
     goProjects,
@@ -886,6 +883,7 @@ export function AppShell() {
                           onSelectProjects={() => void goProjects()}
                           onSelectPulse={() => void goPulse()}
                           onSelectSettings={handleOpenSettings}
+                          onSelectFiles={() => void goFiles()}
                           onSelectWorkflows={() => void goWorkflows()}
                           onSetPresenceStatus={(status) =>
                             presenceSession.setStatus(status)

@@ -20,7 +20,17 @@ pub async fn dispatch(
             file_type,
             limit,
             before,
-        } => cmd_files_list(client, &channel, file_type.as_deref(), limit, before, format).await,
+        } => {
+            cmd_files_list(
+                client,
+                &channel,
+                file_type.as_deref(),
+                limit,
+                before,
+                format,
+            )
+            .await
+        }
     }
 }
 

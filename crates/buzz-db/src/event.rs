@@ -1077,9 +1077,7 @@ pub async fn scan_file_index_sources(
     qb.push(" AND (tags @> ");
     qb.push_bind(imeta_probe);
     qb.push(" OR kind = 40003)");
-    qb.push(
-        " AND channel_id IN (SELECT id FROM channels WHERE community_id = ",
-    );
+    qb.push(" AND channel_id IN (SELECT id FROM channels WHERE community_id = ");
     qb.push_bind(community_id.as_uuid());
     qb.push(
         " AND ttl_seconds IS NULL AND channel_type <> 'dm' \
