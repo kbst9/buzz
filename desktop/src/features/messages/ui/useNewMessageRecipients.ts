@@ -6,6 +6,7 @@ import {
 } from "@/features/agents/hooks";
 import {
   coalesceAgentAutocompleteCandidates,
+  collectVerifiedAgentPubkeys,
   getMentionableAgentPubkeys,
   getSharedChannelIds,
 } from "@/features/agents/lib/agentAutocompleteEligibility";
@@ -116,6 +117,10 @@ export function useNewMessageRecipients({
       ),
       relayAgents: relayAgentsQuery.data,
       sharedChannelIds: getSharedChannelIds(channelsQuery.data),
+      // Connected agents: relay members with a verified auth tag are in
+      // neither the managed list nor the 10100 directory, but are valid DM
+      // recipients like any member.
+      verifiedAgentPubkeys: collectVerifiedAgentPubkeys(userSearchResults),
     });
 
     const addCandidate = (

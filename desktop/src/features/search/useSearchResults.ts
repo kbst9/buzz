@@ -323,7 +323,15 @@ export function useSearchResults({
         managedAgentPubkeys.has(pubkey) ||
         relayAgentPubkeys.has(pubkey);
 
-      if (isKnownAgent && !eligibleAgentPubkeys.has(pubkey)) {
+      // A verified profile flag (NIP-OA-derived `isAgent` on user-search
+      // rows) means a real community identity — searchable regardless of
+      // respond policy, like any member. The eligibility drop only applies
+      // to directory/managed pubkeys whose profile carries no valid tag.
+      if (
+        !candidate.isAgent &&
+        isKnownAgent &&
+        !eligibleAgentPubkeys.has(pubkey)
+      ) {
         return;
       }
 
