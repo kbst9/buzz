@@ -390,8 +390,9 @@ export function UserProfilePanel({
         relayAgent,
         managedAgent,
         channelsQuery.data,
+        isBot,
       ),
-    [pubkeyLower, relayAgent, managedAgent, channelsQuery.data],
+    [pubkeyLower, relayAgent, managedAgent, channelsQuery.data, isBot],
   );
 
   const channelIdToName = React.useMemo(() => {

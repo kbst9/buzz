@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  deriveProfileChannels,
   parseProfilePanelTab,
   parseProfilePanelView,
   personaManagedAgentUpdate,
@@ -81,6 +82,77 @@ function runtime(overrides = {}) {
     ...overrides,
   };
 }
+
+function channel(overrides = {}) {
+  return {
+    id: "chan-1",
+    name: "general",
+    channelType: "stream",
+    visibility: "open",
+    description: "",
+    topic: null,
+    purpose: null,
+    memberCount: 0,
+    memberPubkeys: [],
+    lastMessageAt: null,
+    archivedAt: null,
+    participants: [],
+    participantPubkeys: [],
+    isMember: true,
+    ttlSeconds: null,
+    ttlDeadline: null,
+    ...overrides,
+  };
+}
+
+test("deriveProfileChannels lists memberships for a connected agent (bot, no managed record)", () => {
+  const agentPubkey = "ab".repeat(32);
+  const channels = [
+    channel({
+      id: "c1",
+      name: "general",
+      memberPubkeys: [agentPubkey.toUpperCase(), "cd".repeat(32)],
+    }),
+    channel({ id: "c2", name: "random", memberPubkeys: [agentPubkey] }),
+    channel({ id: "c3", name: "quiet", memberPubkeys: ["cd".repeat(32)] }),
+  ];
+
+  assert.deepEqual(
+    deriveProfileChannels(agentPubkey, undefined, undefined, channels, true),
+    [
+      { id: "c1", name: "general" },
+      { id: "c2", name: "random" },
+    ],
+  );
+});
+
+test("deriveProfileChannels leaves human profiles unchanged (no membership scan)", () => {
+  const humanPubkey = "cd".repeat(32);
+  const channels = [
+    channel({ id: "c1", name: "general", memberPubkeys: [humanPubkey] }),
+  ];
+
+  assert.deepEqual(
+    deriveProfileChannels(humanPubkey, undefined, undefined, channels),
+    [],
+  );
+  assert.deepEqual(
+    deriveProfileChannels(humanPubkey, undefined, undefined, channels, false),
+    [],
+  );
+});
+
+test("deriveProfileChannels still scans memberships for managed agents", () => {
+  const managedPubkey = "deadbeef".repeat(8);
+  const channels = [
+    channel({ id: "c1", name: "general", memberPubkeys: [managedPubkey] }),
+  ];
+
+  assert.deepEqual(
+    deriveProfileChannels(managedPubkey, undefined, agent(), channels, true),
+    [{ id: "c1", name: "general" }],
+  );
+});
 
 test("personaManagedAgentUpdate syncs edited persona identity to linked agent", () => {
   assert.deepEqual(personaManagedAgentUpdate(agent(), persona()), {
