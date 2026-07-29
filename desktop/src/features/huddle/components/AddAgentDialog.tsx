@@ -1,7 +1,9 @@
-import { invoke } from "@tauri-apps/api/core";
 import { Bot } from "lucide-react";
 import * as React from "react";
 
+import { useHuddleAgentCandidates } from "@/features/huddle/useHuddleAgentCandidates";
+import { cn } from "@/shared/lib/cn";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -10,12 +12,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
-
-type ManagedAgentSummary = {
-  pubkey: string;
-  name: string;
-  status: string;
-};
 
 type AgentAddResult = {
   ephemeral_added: boolean;
@@ -34,26 +30,23 @@ export function AddAgentDialog({
   onAdd,
   currentAgentPubkeys,
 }: AddAgentDialogProps) {
-  const [agents, setAgents] = React.useState<ManagedAgentSummary[]>([]);
-  const [loading, setLoading] = React.useState(true);
+  // Running managed agents plus connected community agents — the add path
+  // just publishes kind:9000 role=bot, so any verified agent qualifies.
+  const { candidates, isLoading, isError } = useHuddleAgentCandidates();
   const [adding, setAdding] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [warning, setWarning] = React.useState<string | null>(null);
 
-  React.useEffect(() => {
-    invoke<ManagedAgentSummary[]>("list_managed_agents")
-      .then(setAgents)
-      .catch((e: unknown) => {
-        console.error("Failed to load agents:", e);
-        setError("Could not load agents.");
-      })
-      .finally(() => setLoading(false));
-  }, []);
-
-  // Only show running agents that aren't already in the huddle.
-  const runningAgents = agents.filter(
-    (a) => a.status === "running" && !currentAgentPubkeys.includes(a.pubkey),
+  // Only offer agents that aren't already in the huddle.
+  const currentPubkeys = React.useMemo(
+    () => new Set(currentAgentPubkeys.map((pubkey) => normalizePubkey(pubkey))),
+    [currentAgentPubkeys],
   );
+  const availableAgents = candidates.filter(
+    (candidate) => !currentPubkeys.has(candidate.pubkey),
+  );
+
+  const displayError = error ?? (isError ? "Could not load agents." : null);
 
   async function handleAdd(pubkey: string) {
     if (adding) return;
@@ -91,14 +84,14 @@ export function AddAgentDialog({
         <DialogHeader className="border-b px-6 py-4">
           <DialogTitle>Add Agent to Huddle</DialogTitle>
           <DialogDescription>
-            Select a running agent to join the huddle.
+            Select an agent to join the huddle.
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto px-6 py-4">
-          {error && (
+          {displayError && (
             <p className="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {error}
+              {displayError}
             </p>
           )}
 
@@ -115,32 +108,44 @@ export function AddAgentDialog({
             </div>
           )}
 
-          {loading ? (
+          {isLoading ? (
             <p className="py-4 text-center text-sm text-muted-foreground">
               Loading agents…
             </p>
-          ) : runningAgents.length === 0 ? (
+          ) : availableAgents.length === 0 ? (
             <p className="py-4 text-center text-sm text-muted-foreground">
-              {agents.filter((a) => a.status === "running").length > 0
-                ? "All running agents are already in this huddle."
-                : "No running agents found."}
+              {candidates.length > 0
+                ? "All available agents are already in this huddle."
+                : "No agents found."}
             </p>
           ) : (
             <ul className="flex flex-col gap-1">
-              {runningAgents.map((agent) => (
-                <li key={agent.pubkey}>
+              {availableAgents.map((candidate) => (
+                <li key={candidate.pubkey}>
                   <button
                     className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
-                    disabled={adding === agent.pubkey}
-                    onClick={() => void handleAdd(agent.pubkey)}
+                    disabled={adding === candidate.pubkey}
+                    onClick={() => void handleAdd(candidate.pubkey)}
                     type="button"
                   >
                     <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
                     <span className="flex-1 truncate font-medium">
-                      {agent.name}
+                      {candidate.name}
                     </span>
+                    {candidate.source === "connected" && (
+                      <span
+                        aria-label={candidate.online ? "online" : "offline"}
+                        className={cn(
+                          "h-2 w-2 shrink-0 rounded-full",
+                          candidate.online
+                            ? "bg-emerald-500"
+                            : "bg-muted-foreground/40",
+                        )}
+                        role="img"
+                      />
+                    )}
                     <span className="shrink-0 text-xs text-muted-foreground">
-                      {agent.status}
+                      {candidate.source === "managed" ? "running" : "connected"}
                     </span>
                   </button>
                 </li>
