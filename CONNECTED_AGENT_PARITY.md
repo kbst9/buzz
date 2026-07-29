@@ -453,6 +453,13 @@ units (`buzz-acp-{claude,codex,hermes,hermesgpt,threemes}`) have had
 `BUZZ_ACP_RELAY_OBSERVER=true` since 2026-07-28's first-class-member-agents
 rollout.
 
+**2026-07-29:** all five units upgraded to the deploy-tip harness
+(`b86fa114`, includes the kind:30177 instructions fetch) — saved
+Instructions now apply at each agent's next session. Rollback binary:
+`~/buzz-backups/bin-20260729-0350/` on gradient. Ops gotcha recorded: `just
+ci` does not produce release binaries; build `-p buzz-acp --release` at the
+intended commit right before installing.
+
 **Status: VERIFIED end-to-end 2026-07-29** (harness → relay; desktop
 rendering unblocked by T2.1):
 
