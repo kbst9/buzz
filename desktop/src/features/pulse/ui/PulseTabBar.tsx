@@ -1,14 +1,14 @@
 import { Search } from "lucide-react";
 
 import type { PulseTab } from "@/features/pulse/ui/PulseView";
-import type { RelayAgent } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 
 type PulseTabBarProps = {
   activeTab: PulseTab;
+  /** Count of all known agents — managed, kind:10100, and verified connected. */
+  agentCount: number;
   getPanelId: (tab: PulseTab) => string;
   getTabId: (tab: PulseTab) => string;
-  relayAgents: RelayAgent[];
   onTabChange: (tab: PulseTab) => void;
 };
 
@@ -17,9 +17,9 @@ const tabButtonClassName =
 
 export function PulseTabBar({
   activeTab,
+  agentCount,
   getPanelId,
   getTabId,
-  relayAgents,
   onTabChange,
 }: PulseTabBarProps) {
   return (
@@ -102,9 +102,9 @@ export function PulseTabBar({
                 variant="ghost"
               >
                 Agents
-                {relayAgents.length > 0 ? (
+                {agentCount > 0 ? (
                   <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-2xs font-medium text-muted-foreground">
-                    {relayAgents.length}
+                    {agentCount}
                   </span>
                 ) : null}
               </Button>

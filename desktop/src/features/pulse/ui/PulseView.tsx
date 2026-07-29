@@ -5,8 +5,11 @@ import {
   useManagedAgentsQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
+import { collectVerifiedAgentPubkeys } from "@/features/agents/lib/agentAutocompleteEligibility";
 import {
   useContactListQuery,
+  useFlattenedUserSearchResults,
+  useInfiniteUserSearchQuery,
   useUsersBatchQuery,
 } from "@/features/profile/hooks";
 import {
@@ -19,13 +22,18 @@ import {
   useTimelineQuery,
 } from "@/features/pulse/hooks";
 import { groupAgentNotes } from "@/features/pulse/lib/groupAgentNotes";
+import {
+  buildPulseMentionMembers,
+  isAgentNotePubkey,
+  widenAgentPubkeys,
+} from "@/features/pulse/lib/pulseAgents";
 import { usePulseNoteActions } from "@/features/pulse/lib/useNoteActions";
 import { AgentActivityCard } from "@/features/pulse/ui/AgentActivityCard";
 import { ForumComposer } from "@/features/forum/ui/ForumComposer";
 import { NoteCard } from "@/features/pulse/ui/NoteCard";
 import { PulseTabBar } from "@/features/pulse/ui/PulseTabBar";
 import type { UserNote } from "@/shared/api/socialTypes";
-import type { ChannelMember, UserProfileSummary } from "@/shared/api/types";
+import type { UserProfileSummary } from "@/shared/api/types";
 import { Input } from "@/shared/ui/input";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
@@ -118,9 +126,25 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     }
     return [...agentsByPubkey.values()];
   }, [managedAgentsQuery.data, relayAgentsQuery.data]);
+  // Connected agents (verified auth tag, neither managed nor in the
+  // kind:10100 directory) are enumerable only via the community user
+  // directory.
+  const directoryQuery = useInfiniteUserSearchQuery("", {
+    allowEmpty: true,
+    limit: 50,
+  });
+  const directoryUsers = useFlattenedUserSearchResults(directoryQuery.data);
+  const verifiedAgentPubkeys = React.useMemo(
+    () => collectVerifiedAgentPubkeys(directoryUsers),
+    [directoryUsers],
+  );
   const agentPubkeys = React.useMemo(
-    () => relayAgents.map((a) => a.pubkey),
-    [relayAgents],
+    () =>
+      widenAgentPubkeys(
+        relayAgents.map((a) => a.pubkey),
+        verifiedAgentPubkeys,
+      ),
+    [relayAgents, verifiedAgentPubkeys],
   );
   const agentPubkeySet = React.useMemo(
     () => new Set(agentPubkeys),
@@ -164,7 +188,9 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     if (activeTab === "people") {
       // Filter out agent notes from the people timeline unless the user follows them.
       return (peopleQuery.data?.notes ?? []).filter(
-        (n) => !agentPubkeySet.has(n.pubkey) || contactPubkeySet.has(n.pubkey),
+        (n) =>
+          !isAgentNotePubkey(n.pubkey, agentPubkeySet) ||
+          contactPubkeySet.has(n.pubkey),
       );
     }
     if (activeTab === "liked") {
@@ -226,20 +252,11 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     currentProfile?.displayName ??
     (currentPubkey ? truncatePubkey(currentPubkey) : "You");
 
-  const pulseMentionMembers = React.useMemo<ChannelMember[]>(() => {
-    const members: ChannelMember[] = [];
-    for (const pubkey of mentionPubkeys) {
-      const profile = mentionProfiles[pubkey.toLowerCase()];
-      members.push({
-        pubkey,
-        role: "member",
-        isAgent: profile?.isAgent ?? false,
-        joinedAt: "",
-        displayName: profile?.displayName ?? null,
-      });
-    }
-    return members;
-  }, [mentionPubkeys, mentionProfiles]);
+  const pulseMentionMembers = React.useMemo(
+    () =>
+      buildPulseMentionMembers(mentionPubkeys, mentionProfiles, agentPubkeySet),
+    [mentionPubkeys, mentionProfiles, agentPubkeySet],
+  );
 
   const activeQuery =
     activeTab === "everyone"
@@ -309,7 +326,7 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
               composerProfiles={mentionProfiles}
               currentUserDisplayName={currentDisplayName}
               currentUserProfile={currentProfile}
-              isAgent={agentPubkeySet.has(note.pubkey)}
+              isAgent={isAgentNotePubkey(note.pubkey, agentPubkeySet, profiles)}
               isOwnNote={note.pubkey === currentPubkey}
               isReplySending={noteActions.isReplySending}
               isUpvotePending={noteActions.isUpvotePending(note.id)}
@@ -330,10 +347,10 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <PulseTabBar
         activeTab={activeTab}
+        agentCount={agentPubkeys.length}
         getPanelId={pulsePanelId}
         getTabId={pulseTabId}
         onTabChange={setActiveTab}
-        relayAgents={relayAgents}
       />
 
       <div className="mt-0 min-h-0 flex-1 overflow-y-auto" ref={scrollRef}>
