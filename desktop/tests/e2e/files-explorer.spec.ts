@@ -39,27 +39,24 @@ function emitIndexEntry(
   page: import("@playwright/test").Page,
   options: { name: string; id: string; hash: string },
 ) {
-  return page.evaluate(
-    ({ name, id, hash }) => {
-      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
-        channelName: "random",
-        content: name,
-        kind: 1063,
-        id,
-        extraTags: [
-          ["url", `https://relay.example/media/${hash}.pdf`],
-          ["m", "application/pdf"],
-          ["x", hash],
-          ["size", "2048"],
-          ["filename", name],
-          ["e", "3".repeat(64)],
-          ["shared_at", "1700000000"],
-          ["uploader", "deadbeef".repeat(8)],
-        ],
-      });
-    },
-    options,
-  );
+  return page.evaluate(({ name, id, hash }) => {
+    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      channelName: "random",
+      content: name,
+      kind: 1063,
+      id,
+      extraTags: [
+        ["url", `https://relay.example/media/${hash}.pdf`],
+        ["m", "application/pdf"],
+        ["x", hash],
+        ["size", "2048"],
+        ["filename", name],
+        ["e", "3".repeat(64)],
+        ["shared_at", "1700000000"],
+        ["uploader", "deadbeef".repeat(8)],
+      ],
+    });
+  }, options);
 }
 
 test("channel Files drawer lists live index entries and honors retraction", async ({
