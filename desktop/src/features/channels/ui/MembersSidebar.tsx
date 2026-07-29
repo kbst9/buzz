@@ -182,6 +182,44 @@ export function MembersSidebar({
   const memberProfilesQuery = useUsersBatchQuery(allMemberPubkeys, {
     enabled: open && rawMembers.length > 0,
   });
+  // Owners of agent members, for the "managed by {owner}" attribution line on
+  // member rows (mirrors `addSearchOwnerPubkeys` below for add-candidate
+  // rows). The viewer is excluded: `formatOwnerLabel` renders them as "you"
+  // without a profile lookup.
+  const memberOwnerPubkeys = React.useMemo(() => {
+    const profiles = memberProfilesQuery.data?.profiles ?? {};
+    const viewerPubkey = currentPubkey ? normalizePubkey(currentPubkey) : null;
+    return [
+      ...new Set(
+        rawMembers.flatMap((member) => {
+          const ownerPubkey =
+            profiles[normalizePubkey(member.pubkey)]?.ownerPubkey;
+          if (!ownerPubkey) {
+            return [];
+          }
+
+          const normalized = normalizePubkey(ownerPubkey);
+          return normalized === viewerPubkey ? [] : [normalized];
+        }),
+      ),
+    ];
+  }, [currentPubkey, memberProfilesQuery.data?.profiles, rawMembers]);
+  const memberOwnerProfilesQuery = useUsersBatchQuery(memberOwnerPubkeys, {
+    enabled: open && memberOwnerPubkeys.length > 0,
+  });
+  // Owner labels resolve against both lookups: member profiles cover owners
+  // who are themselves in the channel (no extra roundtrip), the dedicated
+  // batch covers owners who are not members.
+  const memberOwnerProfileLookup = React.useMemo(
+    () => ({
+      ...memberProfilesQuery.data?.profiles,
+      ...memberOwnerProfilesQuery.data?.profiles,
+    }),
+    [
+      memberProfilesQuery.data?.profiles,
+      memberOwnerProfilesQuery.data?.profiles,
+    ],
+  );
   const {
     people,
     bots,
@@ -619,6 +657,16 @@ export function MembersSidebar({
       managedAgent?.backend.type === "local" && relayUrl
         ? managedAgentPairAction(managedAgentRuntime)
         : undefined;
+    // Owner attribution for agent rows, mirroring the add-candidate rows
+    // below. Null for humans and for agents whose owner is unknown, so those
+    // rows render exactly as before.
+    const ownerLabel = memberIsBot
+      ? formatOwnerLabel(
+          memberProfile?.ownerPubkey,
+          currentPubkey,
+          memberOwnerProfileLookup,
+        )
+      : null;
     return (
       <div className="content-visibility-auto" key={member.pubkey}>
         <MembersSidebarMemberCard
@@ -663,6 +711,7 @@ export function MembersSidebar({
                 }
               : undefined
           }
+          ownerLabel={ownerLabel}
           pairAction={pairAction}
           presenceStatus={
             memberPresenceQuery.data?.[member.pubkey.toLowerCase()] ?? null

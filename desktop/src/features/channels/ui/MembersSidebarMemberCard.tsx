@@ -71,6 +71,10 @@ type MembersSidebarMemberCardProps = {
   onUnban: (member: ChannelMember) => void;
   onUntimeout: (member: ChannelMember) => void;
   onViewActivity?: (pubkey: string) => void;
+  /** Viewer-relative label of the agent's owner ("you" or a display name).
+   * Rendered as a "managed by {owner}" line on agent rows; ignored for
+   * humans and null when the owner is unknown, so those rows are unchanged. */
+  ownerLabel?: string | null;
   presenceStatus?: PresenceStatus | null;
   profileAvatarUrl?: string | null;
   viewerIsOwner: boolean;
@@ -139,6 +143,7 @@ export function MembersSidebarMemberCard({
   onUnban,
   onUntimeout,
   onViewActivity,
+  ownerLabel,
   presenceStatus,
   profileAvatarUrl,
   viewerIsOwner,
@@ -205,6 +210,14 @@ export function MembersSidebarMemberCard({
             ) : null}
           </div>
         )}
+        {memberIsBot && ownerLabel ? (
+          <span
+            className="block truncate text-xs text-muted-foreground"
+            data-testid={`sidebar-member-owner-${member.pubkey}`}
+          >
+            managed by {ownerLabel}
+          </span>
+        ) : null}
         {managedAgentRuntime || managedAgent ? (
           <Badge
             className="mt-1 normal-case tracking-normal"

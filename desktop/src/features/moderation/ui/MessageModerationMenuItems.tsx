@@ -12,6 +12,7 @@ import {
 } from "@/features/moderation/hooks";
 import { useMyRelayMembershipQuery } from "@/features/community-members/hooks";
 import type { TimelineMessage } from "@/features/messages/types";
+import { resolveMessageModerationItems } from "@/features/moderation/lib/messageModerationItems";
 import { isTimedOut } from "@/features/moderation/lib/restrictionState";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -38,6 +39,11 @@ const TIMEOUT_PRESETS: { label: string; seconds: number }[] = [
  * real signer, and that signer is not the viewer. Actions target
  * `signerPubkey` — the raw signer, never a relay-delegated display author — per
  * the security note on TimelineMessage.
+ *
+ * Agent-authored messages get no ban/timeout entries: agents are exempt from
+ * community moderation (their owner manages their lifecycle), matching the
+ * members sidebar. Kick from channel remains available for agents — see
+ * `resolveMessageModerationItems`.
  */
 export function MessageModerationMenuItems({
   channelId,
@@ -60,9 +66,15 @@ export function MessageModerationMenuItems({
     normalizePubkey(targetPubkey) ===
       normalizePubkey(identityQuery.data.pubkey);
 
-  const enabled = canModerate && targetPubkey != null && !isSelf;
+  const items = resolveMessageModerationItems({
+    authorIsAgent: message.isAgent === true,
+    canModerate,
+    hasChannel: Boolean(channelId),
+    hasTarget: targetPubkey != null,
+    isSelf,
+  });
 
-  const restrictionsQuery = useModerationRestrictionsQuery(enabled);
+  const restrictionsQuery = useModerationRestrictionsQuery(items.restrict);
   const banMutation = useBanMemberMutation();
   const unbanMutation = useUnbanMemberMutation();
   const timeoutMutation = useTimeoutMemberMutation();
@@ -101,12 +113,12 @@ export function MessageModerationMenuItems({
     [],
   );
 
-  if (!enabled || targetPubkey == null) return null;
+  if ((!items.restrict && !items.kick) || targetPubkey == null) return null;
 
   return (
     <>
       <DropdownMenuSeparator />
-      {timedOut ? (
+      {!items.restrict ? null : timedOut ? (
         <DropdownMenuItem
           data-testid={`message-untimeout-${message.id}`}
           disabled={isPending}
@@ -154,7 +166,7 @@ export function MessageModerationMenuItems({
         </DropdownMenuSub>
       )}
 
-      {channelId ? (
+      {items.kick ? (
         <DropdownMenuItem
           className="text-destructive focus:text-destructive"
           data-testid={`message-kick-${message.id}`}
@@ -171,7 +183,7 @@ export function MessageModerationMenuItems({
         </DropdownMenuItem>
       ) : null}
 
-      {isBanned ? (
+      {!items.restrict ? null : isBanned ? (
         <DropdownMenuItem
           data-testid={`message-unban-${message.id}`}
           disabled={isPending}
