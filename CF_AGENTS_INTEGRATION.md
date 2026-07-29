@@ -1,8 +1,9 @@
 # Cloudflare Hosted Agents — Integration Design
 
 > **Fork-local design doc (deploy branch only — never upstream).**
-> Status: draft v1, 2026-07-29. Detailed design for **substrate variant B**
-> of [AGENTOS_HOST_PLAN.md](AGENTOS_HOST_PLAN.md) — Cloudflare Sandboxes +
+> Status: draft v1.1, 2026-07-29 (v1.1: Deploy-button provisioning — no CF
+> credentials anywhere). Detailed design for **substrate variant B** of
+> [AGENTOS_HOST_PLAN.md](AGENTOS_HOST_PLAN.md) — Cloudflare Sandboxes +
 > Agents SDK as the managed execution tier. That doc holds the substrate
 > decision criteria; this one holds the Cloudflare-specific design.
 
@@ -13,8 +14,12 @@ per agent), a **Durable Object per agent** (supervisor: lifecycle, cursor,
 wake endpoint, config), and a **Sandbox per agent** (full Linux container:
 persistent FS, sleeps idle, wakes on request) running the **unmodified
 sprig tree** — buzz-acp → ACP adapter (pi / claude-code / codex) →
-buzz-dev-mcp — exactly as on gradient. Provisioning rides the existing
-desktop provider seam (`buzz-backend-cloudflare`); no block/buzz changes.
+buzz-dev-mcp — exactly as on gradient. **Buzz never holds Cloudflare
+credentials**: the user deploys the host Worker into their own account via
+a Deploy-to-Cloudflare button, and everything afterwards goes through the
+Worker's own NIP-98-authenticated ops API (§ Provisioning). The desktop
+provider seam (`buzz-backend-cloudflare`) stays as a thin client of that
+API; no block/buzz changes.
 
 ```
 CF account (user-owned, connected once)
@@ -42,7 +47,9 @@ a non-issue (real DNS name).
 Original sketch → what the design actually does, and why:
 
 1. **"UI gets a Cloudflare API key input in integrations settings"** —
-   *deferred, and partially blocked by a deliberate contract rule.* The
+   *superseded in v1.1: no Cloudflare credentials exist anywhere in the
+   system (§ Provisioning).* The original v1.0 reasoning stands as context
+   for why they never belonged in the desktop payload: The
    provider payload validator **rejects credential-shaped keys** in
    `provider_config` (any key word-matching `secret|password|token|key|
    credential` — `desktop/src-tauri/src/managed_agents/backend.rs`
@@ -117,6 +124,45 @@ Original sketch → what the design actually does, and why:
    sleeping sandboxes + active-CPU pricing already make idle agents cheap;
    isolates mainly buy cold-start latency at large fleet scale.
 
+## Provisioning: Deploy-to-Cloudflare button (v1.1 — no CF credentials)
+
+Supersedes the token-based provisioning in correction #1 below. The button
+flow removes Cloudflare credentials from every Buzz component:
+
+1. **One-time connect (user's browser, user's account).** The desktop shows
+   a "Deploy to Cloudflare" button → `deploy.workers.cloudflare.com/?url=`
+   pointing at the public `buzz-cf-host` template repo. Cloudflare's flow
+   reads the wrangler config, provisions the declared resources (DO
+   namespace, sandbox/container binding), prompts for template vars —
+   `OWNER_PUBKEY` (copied from Buzz) and `RELAY_URL` — creates the user's
+   own repo copy wired to Workers Builds, and deploys. The user authorizes
+   everything inside their own Cloudflare session; no API token ever
+   reaches Buzz, the provider, or the desktop.
+2. **Pairing.** The user pastes the deployed Worker URL into Buzz. All ops
+   calls are **NIP-98-signed by the owner key and verified against the
+   pinned `OWNER_PUBKEY`** — the same auth machinery as relay REST and git.
+   No bearer tokens exist in the system.
+3. **Runtime needs no Cloudflare API at all.** Per-agent DO creation
+   (`getOrCreate` on the namespace binding) and sandbox creation happen
+   through *bindings inside the Worker* — agent create/start/stop/status/
+   snapshot are ops-API calls, not Cloudflare API calls.
+4. **Secrets path.** The deploy payload (nsec, auth tag, env) transits
+   desktop → ops API over TLS and lands in **DO storage**, injected into
+   the sandbox env at boot. Tradeoff vs Workers Secrets (write-only): DO
+   storage is readable by our own pinned Worker code, which must read it
+   to inject anyway; never written to sandbox FS or snapshots. Documented,
+   acceptable.
+5. **Upgrades — the one real cost of the button.** The button creates a
+   *copy* of the template in the user's repo host, wired to Workers
+   Builds; it will drift from the upstream template. Mitigation: keep the
+   host Worker tiny and stable; version handshake in the ops API so the
+   desktop can show "host v0.3 < current v0.5 — update" with a re-deploy
+   link. This replaces v1.0's "pinned release, redeployed to upgrade."
+
+Floor: Sandboxes/Containers require a paid Workers plan — the button flow
+surfaces this to the user; it's their account and their bill (which is
+exactly the point: bring-your-own-compute).
+
 ## Lifecycle
 
 **v1 — always-on:** sandbox stays awake holding the relay WS (same
@@ -139,19 +185,25 @@ construction (nsec is env-only).
 
 - **P0 — Spike (gates):** build the sandbox image (sprig release + adapters
   + git + buzz CLI); run one throwaway identity end-to-end against prod
-  relay (mention → threaded reply); verify custom-image support, FS
-  persistence across sleep/wake + a restore-from-snapshot drill; measure
-  idle cost of a held WS; verify egress allowlist (relay + LLM only,
-  deny-else); confirm base-URL override works for the chosen adapter.
+  relay (mention → threaded reply); **verify the Deploy button provisions
+  the container/sandbox binding and Workers Builds builds the image**
+  (newest part of the flow — if it can't, fallback is a one-time
+  `wrangler deploy` from the user's machine, which weakens the story);
+  verify custom-image support, FS persistence across sleep/wake + a
+  restore-from-snapshot drill; measure idle cost of a held WS; verify
+  egress allowlist (relay + LLM only, deny-else); confirm base-URL
+  override works for the chosen adapter; exercise NIP-98 ops-API auth
+  against the pinned owner pubkey.
   Kill criteria: custom images unsupported, or held-WS idle cost is
   unacceptable AND wake-path prerequisites are far off.
-- **P1 — Provider:** `buzz-backend-cloudflare` (in the buzz-agentos-host
-  repo or its own): `info` + `deploy` per the backend contract; deploy =
-  ensure host Worker (pinned release) → push secrets → create DO + sandbox
-  → return `agent_id`. Desktop works unchanged.
-- **P2 — Desktop polish:** Integrations settings (token in keyring),
-  "Hosted" grouping in connected agents, status surfaced from the DO ops
-  API.
+- **P1 — Provider + ops API:** the host Worker's ops API (create / start /
+  stop / status / snapshot / version, NIP-98-authed) plus
+  `buzz-backend-cloudflare` as its thin client implementing `info` +
+  `deploy` per the backend contract. Desktop works unchanged.
+- **P2 — Desktop polish:** Deploy-button + pairing UX (paste Worker URL,
+  version handshake surfaced), "Hosted" grouping in connected agents,
+  status from the ops API. No token storage — nothing to keep in the
+  keyring.
 - **P3 — Wake economics:** upstream cursor + NIP-PL webhook work lands →
   flip lifecycle to v2; scale-to-zero.
 - **P4 — Hardening/research:** egress-proxy LLM injection as default;
@@ -168,8 +220,13 @@ construction (nsec is env-only).
   (matters for v2 wake→first-token time).
 - Cloudflare quotas: sandboxes per account, DO storage limits vs fleet
   size, snapshot storage pricing.
-- Whether `wrangler`-based auth or raw API token is the better provider
-  credential mode for non-desktop (headless) provisioning.
+- Deploy-button coverage of container bindings + image build in Workers
+  Builds (P0 gate; docs confirm DO provisioning explicitly, containers
+  ride the same wrangler-config path — verify end-to-end).
+- Wake-webhook authentication (relay NIP-PL delivery → DO endpoint):
+  signed delivery vs per-lease shared secret.
+- DO-storage-for-nsec vs Workers Secrets: revisit if a remote-signer
+  lands (nsec out of the sandbox entirely, per P4).
 
 ## Non-goals
 
