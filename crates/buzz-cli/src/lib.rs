@@ -203,6 +203,9 @@ enum Cmd {
     /// Read the activity feed
     #[command(subcommand)]
     Feed(FeedCmd),
+    /// List files shared in a channel (relay-derived NIP-94 index)
+    #[command(subcommand)]
+    Files(FilesCmd),
     /// Publish notes and manage the social graph (NIP-01/02)
     #[command(subcommand)]
     Social(SocialCmd),
@@ -948,6 +951,25 @@ pub enum FeedCmd {
         /// Comma-separated feed types to include: mentions, needs_action, activity, agent_activity
         #[arg(long)]
         types: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum FilesCmd {
+    /// List files shared in a channel, newest first
+    List {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// Filter by broad type: image, video, audio, doc
+        #[arg(long = "type")]
+        file_type: Option<String>,
+        /// Maximum entries to return (default 50, max 200)
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+        /// Unix timestamp — only entries indexed at or before this time
+        #[arg(long)]
+        before: Option<u64>,
     },
 }
 
@@ -1794,6 +1816,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Users(sub) => commands::users::dispatch(sub, &client, &cli.format).await,
         Cmd::Workflows(sub) => commands::workflows::dispatch(sub, &client).await,
         Cmd::Feed(sub) => commands::feed::dispatch(sub, &client, &cli.format).await,
+        Cmd::Files(sub) => commands::files::dispatch(sub, &client, &cli.format).await,
         Cmd::Social(sub) => commands::social::dispatch(sub, &client).await,
         Cmd::Notes(sub) => commands::notes::dispatch(sub, &client).await,
         Cmd::Repos(sub) => commands::repos::dispatch(sub, &client).await,
@@ -1852,6 +1875,7 @@ mod tests {
             "dms",
             "emoji",
             "feed",
+            "files",
             "issues",
             "media",
             "mem",
@@ -1977,6 +2001,7 @@ mod tests {
             vec!["approve", "create", "delete", "get", "list", "runs", "trigger", "update"]
         );
         assert_eq!(names(&cmd, "feed"), vec!["get"]);
+        assert_eq!(names(&cmd, "files"), vec!["list"]);
         assert_eq!(
             names(&cmd, "social"),
             vec![
@@ -2047,6 +2072,7 @@ mod tests {
             ("dms", 4),
             ("emoji", 5),
             ("feed", 1),
+            ("files", 1),
             ("issues", 4),
             ("media", 1),
             ("messages", 8),

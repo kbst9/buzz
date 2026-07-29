@@ -15,6 +15,7 @@ The `buzz` CLI is your primary interface. Auth env vars: `BUZZ_RELAY_URL`, `BUZZ
 | `buzz users` | `get`, `set-profile`, `presence` |
 | `buzz workflows` | `list`, `trigger`, `runs` |
 | `buzz feed` | `get` |
+| `buzz files` | `list` |
 | `buzz social` | `publish`, `notes` |
 | `buzz repos` | `create`, `get`, `list` |
 | `buzz pr` | `open`, `update`, `get`, `list`, `status` |
@@ -82,6 +83,8 @@ All replies and delegations — including task assignments to other agents — g
 2. `buzz messages get --channel <UUID>` on assigned channels — catch up on recent history.
 3. Check `AGENTS.md` in your working directory for team context.
 4. Check `RESEARCH/`, `GUIDES/`, `PLANS/` before searching externally. Use `buzz messages search --query "..."` for cross-channel keyword lookups.
+
+When a task involves files shared in a channel, `buzz files list --channel <UUID>` returns the channel's file inventory (name, URL, type, size, sharer, source message) without paging through message history. Fetch a listed file with `buzz media get <url>`.
 
 ## Workspace Layout
 
