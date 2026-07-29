@@ -1,3 +1,4 @@
+import { ChevronDown, ChevronRight } from "lucide-react";
 import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
@@ -5,7 +6,6 @@ import {
   selectConnectedAgents,
   synthesizeConnectedAgentRecord,
 } from "@/features/agents/lib/connectedAgentRecords";
-import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import {
   useFlattenedUserSearchResults,
@@ -13,17 +13,17 @@ import {
   useUsersBatchQuery,
 } from "@/features/profile/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import type { PresenceLookup, UserSearchResult } from "@/shared/api/types";
+import type { ManagedAgent, UserSearchResult } from "@/shared/api/types";
 import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
-import { SectionHeader } from "@/shared/ui/PageHeader";
-import { ManagedAgentRow } from "./ManagedAgentRow";
+import { AgentIdentityCard } from "./AgentIdentityCard";
+import { AgentRuntimeAvatarControl } from "./AgentRuntimeAvatarControl";
+import { AGENT_CARD_GRID_CLASS } from "./UnifiedAgentsSection";
 
-const EMPTY_PERSONA_LABELS: Record<string, string> = {};
-const EMPTY_PRESENCE: PresenceLookup = {};
-
-function noopSelectLogAgent() {
-  // Connected agents run outside this app — there is no local log to open.
+function noopStart() {
+  // Connected agents run outside this app — there is nothing to start here.
+  // Never reachable: the runtime avatar control is only rendered while the
+  // agent is online, and the active branch has no start affordance.
 }
 
 /**
@@ -32,11 +32,12 @@ function noopSelectLogAgent() {
  * from the user directory (`isAgent`) minus the managed list.
  *
  * Design requirement (CONNECTED_AGENT_PARITY.md §T4.1): connected agents
- * must look exactly like the other agents on this page — same row
+ * must look exactly like the other agents on this page — same card
  * component, same layout — with only a small Cable icon marking them as
- * connected. Rows therefore render through `ManagedAgentRow` on
- * synthesized `ManagedAgent`-shaped records; managed-only chrome already
- * self-gates on `backend.type === "local"`.
+ * connected. Cards therefore render through `AgentIdentityCard` on the
+ * exact grid the managed identities use, feeding synthesized
+ * `ManagedAgent`-shaped records; managed-only chrome (the start control)
+ * is simply not rendered, mirroring how the card idiom self-gates.
  */
 export function ConnectedAgentsSection() {
   const { openProfilePanel } = useProfilePanel();
@@ -48,7 +49,7 @@ export function ConnectedAgentsSection() {
     limit: 50,
   });
   const directoryUsers = useFlattenedUserSearchResults(directoryQuery.data);
-  const channelsQuery = useChannelsQuery();
+  const [isCollapsed, setIsCollapsed] = React.useState(false);
 
   const managedPubkeys = React.useMemo(
     () =>
@@ -65,7 +66,7 @@ export function ConnectedAgentsSection() {
     [directoryUsers, managedPubkeys, me],
   );
 
-  const rows = React.useMemo(
+  const cards = React.useMemo(
     () =>
       connectedAgents.map((user) => ({
         user,
@@ -96,35 +97,8 @@ export function ConnectedAgentsSection() {
     enabled: ownerPubkeys.length > 0,
   });
 
-  const channelIdToName = React.useMemo(() => {
-    const map: Record<string, string> = {};
-    for (const channel of channelsQuery.data ?? []) {
-      map[channel.id] = channel.name;
-    }
-    return map;
-  }, [channelsQuery.data]);
-
-  const channelsByPubkey = React.useMemo(() => {
-    const connectedPubkeys = new Set(
-      connectedAgents.map((agent) => normalizePubkey(agent.pubkey)),
-    );
-    const map: Record<string, { id: string; name: string }[]> = {};
-    for (const channel of channelsQuery.data ?? []) {
-      for (const memberPubkey of channel.memberPubkeys) {
-        const key = normalizePubkey(memberPubkey);
-        if (!connectedPubkeys.has(key)) continue;
-        if (!map[key]) map[key] = [];
-        if (!map[key].some((entry) => entry.id === channel.id)) {
-          map[key].push({ id: channel.id, name: channel.name });
-        }
-      }
-    }
-    return map;
-  }, [channelsQuery.data, connectedAgents]);
-
   // Owner attribution for agents the viewer does not own (the viewer's own
-  // agents need no line). ManagedAgentRow has no owner slot, so the line
-  // renders in the section's row wrapper rather than restructuring the row.
+  // agents need no line). Rendered in the card's secondary-line slot.
   const ownerLineFor = (user: UserSearchResult): string | null => {
     if (!user.ownerPubkey) {
       return null;
@@ -139,52 +113,90 @@ export function ConnectedAgentsSection() {
     }`;
   };
 
-  if (rows.length === 0) {
+  if (cards.length === 0) {
     return null;
   }
 
   return (
-    <section className="space-y-4" data-testid="agents-connected-section">
-      <SectionHeader
-        description="Agents that live outside this app — standalone harnesses and other members' agents."
-        title="Connected agents"
-      />
-      <div className="divide-y divide-border/50 border-t border-border/50">
-        {rows.map(({ user, agent }) => {
-          const ownerLine = ownerLineFor(user);
-          return (
-            <div
-              data-testid={`connected-agent-row-${agent.pubkey}`}
+    <section
+      className="w-full space-y-2"
+      data-testid="agents-connected-section"
+    >
+      <button
+        className="group flex items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-muted/50"
+        onClick={() => setIsCollapsed((current) => !current)}
+        type="button"
+      >
+        {isCollapsed ? (
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+        ) : (
+          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+        )}
+        <span className="text-sm font-medium">Connected agents</span>
+        <span className="text-xs text-muted-foreground">({cards.length})</span>
+      </button>
+      {!isCollapsed ? (
+        <div className={AGENT_CARD_GRID_CLASS}>
+          {cards.map(({ user, agent }) => (
+            <ConnectedAgentCard
+              agent={agent}
               key={agent.pubkey}
-            >
-              <ManagedAgentRow
-                agent={agent}
-                channelIdToName={channelIdToName}
-                channelNames={
-                  channelsByPubkey[normalizePubkey(agent.pubkey)] ?? []
-                }
-                connected
-                isLogSelected={false}
-                logContent={null}
-                logError={null}
-                logLoading={false}
-                personaLabelsById={EMPTY_PERSONA_LABELS}
-                presenceLoaded={presenceQuery.isSuccess}
-                presenceLookup={presenceQuery.data ?? EMPTY_PRESENCE}
-                onOpenProfile={(pubkey) => {
-                  openProfilePanel?.(pubkey);
-                }}
-                onSelectLogAgent={noopSelectLogAgent}
-              />
-              {ownerLine ? (
-                <p className="-mt-2 pb-3 pl-16 pr-4 text-xs text-muted-foreground">
-                  {ownerLine}
-                </p>
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
+              online={
+                presenceQuery.data?.[normalizePubkey(agent.pubkey)] === "online"
+              }
+              ownerLabel={ownerLineFor(user)}
+              onOpenProfile={(pubkey) => {
+                openProfilePanel?.(pubkey);
+              }}
+            />
+          ))}
+        </div>
+      ) : null}
     </section>
+  );
+}
+
+function ConnectedAgentCard({
+  agent,
+  online,
+  ownerLabel,
+  onOpenProfile,
+}: {
+  agent: ManagedAgent;
+  online: boolean;
+  ownerLabel: string | null;
+  onOpenProfile: (pubkey: string) => void;
+}) {
+  const title = agent.name;
+
+  return (
+    <AgentIdentityCard
+      ariaLabel={`${title} agent profile`}
+      avatar={
+        // Online connected agents get the same active-dot avatar frame as a
+        // running managed agent. Offline ones fall back to the card's plain
+        // avatar rather than the managed start affordance — this app cannot
+        // start an agent it does not host.
+        online ? (
+          <AgentRuntimeAvatarControl
+            activeTestId={`agent-runtime-active-${agent.pubkey}`}
+            avatarUrl={agent.avatarUrl}
+            isActive
+            isStarting={false}
+            label={title}
+            startTestId={`agent-runtime-start-${agent.pubkey}`}
+            onStart={noopStart}
+          />
+        ) : undefined
+      }
+      avatarUrl={agent.avatarUrl}
+      connected
+      dataTestId={`connected-agent-${agent.pubkey}`}
+      label={title}
+      modelLabel={ownerLabel}
+      onClick={() => {
+        onOpenProfile(agent.pubkey);
+      }}
+    />
   );
 }

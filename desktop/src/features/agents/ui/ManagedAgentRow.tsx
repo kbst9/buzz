@@ -2,7 +2,6 @@ import * as React from "react";
 
 import {
   AlertTriangle,
-  Cable,
   ChevronDown,
   ChevronRight,
   RefreshCw,
@@ -33,7 +32,6 @@ export function ManagedAgentRow({
   agent,
   channelIdToName,
   channelNames,
-  connected,
   isLogSelected,
   logContent,
   logError,
@@ -47,12 +45,6 @@ export function ManagedAgentRow({
   agent: ManagedAgent;
   channelIdToName: Record<string, string>;
   channelNames: { id: string; name: string }[];
-  /**
-   * Marks a connected (standalone) agent rendered through this shared row.
-   * Adds only a small Cable icon next to the name — when absent, the render
-   * output is identical to a managed row.
-   */
-  connected?: boolean;
   isLogSelected: boolean;
   logContent: string | null;
   logError: Error | null;
@@ -125,7 +117,6 @@ export function ManagedAgentRow({
                 activeWorkingChannels={activeWorkingChannels}
                 agent={agent}
                 channelNames={channelNames}
-                connected={connected}
                 isExpandable
                 isLogSelected={isLogSelected}
                 personaLabel={personaLabel}
@@ -149,7 +140,6 @@ export function ManagedAgentRow({
                 activeWorkingChannels={activeWorkingChannels}
                 agent={agent}
                 channelNames={channelNames}
-                connected={connected}
                 isExpandable={false}
                 isLogSelected={false}
                 personaLabel={personaLabel}
@@ -208,7 +198,6 @@ function AgentSummary({
   activeWorkingChannels,
   agent,
   channelNames,
-  connected,
   isExpandable,
   isLogSelected,
   personaLabel,
@@ -217,7 +206,6 @@ function AgentSummary({
   activeWorkingChannels: { id: string; name: string; anchorAt: number }[];
   agent: ManagedAgent;
   channelNames: { id: string; name: string }[];
-  connected?: boolean;
   isExpandable: boolean;
   isLogSelected: boolean;
   personaLabel: string | null;
@@ -246,17 +234,6 @@ function AgentSummary({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <p className="truncate font-medium text-foreground">{agent.name}</p>
-            {connected ? (
-              <span
-                className="shrink-0"
-                title="Connected agent — runs outside this app"
-              >
-                <Cable
-                  aria-label="connected agent"
-                  className="h-3.5 w-3.5 text-muted-foreground"
-                />
-              </span>
-            ) : null}
             {personaLabel ? (
               <Badge variant="secondary">{personaLabel}</Badge>
             ) : null}

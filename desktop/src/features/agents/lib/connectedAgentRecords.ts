@@ -53,12 +53,12 @@ export function selectConnectedAgents(
 
 /**
  * Synthesize a `ManagedAgent`-shaped record for a connected (standalone)
- * agent so it renders through the exact same row component as managed
- * agents — the design requirement is identical look, not a separate card.
- * Managed-only chrome (logs, config) self-gates on
+ * agent so it renders through the exact same identity-card component as
+ * managed agents — the design requirement is identical look, not a
+ * separate card design. Managed-only chrome self-gates on
  * `backend.type === "local"`, so the synthetic `provider/connected`
- * backend keeps it off. Follows the `profileActivityAgent` synthesis
- * precedent.
+ * backend keeps it off wherever the record travels. Follows the
+ * `profileActivityAgent` synthesis precedent.
  */
 export function synthesizeConnectedAgentRecord(
   agent: UserSearchResult,
@@ -71,8 +71,7 @@ export function synthesizeConnectedAgentRecord(
     teamId: null,
     relayUrl: "",
     acpCommand: "",
-    // Rendered in the row's runtime column; the harness command of a
-    // standalone agent is unknown to this app.
+    // The harness command of a standalone agent is unknown to this app.
     agentCommand: "—",
     agentCommandOverride: null,
     agentArgs: [],

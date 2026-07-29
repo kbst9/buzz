@@ -1,3 +1,4 @@
+import { Cable } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
@@ -9,6 +10,12 @@ type AgentIdentityCardProps = {
   ariaLabel: string;
   avatar?: ReactNode;
   avatarUrl?: string | null;
+  /**
+   * Marks a connected (standalone) agent rendered through this shared card.
+   * Adds only a small Cable icon next to the label — when absent, the
+   * rendered output is identical to a managed card.
+   */
+  connected?: boolean;
   dataTestId: string;
   label: string;
   modelLabel?: string | null;
@@ -22,6 +29,7 @@ export function AgentIdentityCard({
   ariaLabel,
   avatar,
   avatarUrl,
+  connected,
   dataTestId,
   label,
   modelLabel,
@@ -69,9 +77,26 @@ export function AgentIdentityCard({
       ) : null}
 
       <div className="pointer-events-none absolute right-3 bottom-3 left-3 z-30 flex min-w-0 flex-col gap-0.5 text-left text-sm leading-5">
-        <span className="min-w-0 truncate font-semibold text-foreground tracking-normal">
-          {label}
-        </span>
+        {connected ? (
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="min-w-0 truncate font-semibold text-foreground tracking-normal">
+              {label}
+            </span>
+            <span
+              className="shrink-0"
+              title="Connected agent — runs outside this app"
+            >
+              <Cable
+                aria-label="connected agent"
+                className="h-3.5 w-3.5 text-muted-foreground"
+              />
+            </span>
+          </span>
+        ) : (
+          <span className="min-w-0 truncate font-semibold text-foreground tracking-normal">
+            {label}
+          </span>
+        )}
         {modelLabel ? (
           <span className="min-w-0 truncate text-xs font-normal text-secondary-foreground/75">
             {modelLabel}
