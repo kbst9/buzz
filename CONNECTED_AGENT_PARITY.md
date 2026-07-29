@@ -195,7 +195,19 @@ that should be `viewerIsOwner` (already computed, NIP-OA-derived,
   - Anchor: `desktop/src/features/agents/ui/AgentsView.tsx:153-210`
   - Fix: a "Connected" section reusing the settings-card enumeration
     (share via the T3.1 extraction).
-  - Merge path: **new component file** + one insertion line.
+  - **Design requirement (Kevin): connected agents must look exactly like
+    the other agents on this page — same row component, same layout — with
+    only a small icon marking them as connected** (the `Cable` icon the
+    settings card already uses is the natural glyph). Concretely: render
+    them through `ManagedAgentRow` by synthesizing a `ManagedAgent`-shaped
+    record per connected agent (the `profileActivityAgent.ts:25-43`
+    precedent; e.g. `backend: {type: "provider", id: "connected"}`) —
+    managed-only chrome already self-gates on `backend.type !== "local"`
+    (`ManagedAgentRow.tsx:58`), so the row needs only the icon conditional
+    and an owner line. Do NOT build a separate card design.
+  - Merge path: **new component file** (section + record synthesis) + one
+    insertion line in `AgentsView` + a small icon conditional inside
+    `ManagedAgentRow`.
 - [ ] **T4.2 Pulse treats connected agents as humans.** Agents-tab timeline,
   tab count, People-tab exclusion, "No agents registered yet" copy, and
   NoteCard badges all key off `managed ∪ directory`; composer mentions drop
@@ -321,10 +333,16 @@ fetch (`unwrap_or_default`) and role-gated behavior returns until a refetch
   effect is invisible except that owned connected agents' observer frames
   decrypt from app start instead of after their profile happens to load.
   Risk: startup network cost only; ingestion dedup already handles overlap.
-- **T4.1 (Agents page section)** — Touches: new component + one insertion
-  in `AgentsView.tsx`. Runtime radius: Agents page layout for everyone;
-  read-only listing, actions route to existing editor/dialogs. Risk: nil
-  beyond layout.
+- **T4.1 (Agents page section)** — Touches: new component (section +
+  synthesized `ManagedAgent`-shaped records) + one insertion in
+  `AgentsView.tsx` + a small connected-icon conditional in
+  `ManagedAgentRow.tsx`. Runtime radius: Agents page for everyone;
+  connected rows render through the exact same component as managed ones
+  (per design requirement), so visual drift between the two is structurally
+  impossible; managed-only chrome (logs) already self-gates on
+  `backend.type`. Risk: the `ManagedAgentRow` edit is shared with managed
+  rows — keep it to the icon conditional so managed rendering is
+  byte-identical when the flag is absent.
 - **T4.2 (Pulse)** — Touches: contained edits in `PulseView.tsx` (+
   `PulseTabBar` count; composer half rides F0 in `useMentions`). Runtime
   radius: **visible content re-bucketing for everyone** — connected
