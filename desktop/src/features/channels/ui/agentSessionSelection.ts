@@ -1,14 +1,17 @@
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { BotActivityAgent } from "@/features/channels/ui/BotActivityBar";
 import type { ChannelAgentSessionAgent } from "@/features/channels/ui/useChannelAgentSessions";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 
 export function resolveSelectedAgentSession({
   agentSessionAgents,
+  currentPubkey,
   openAgentSessionPubkey,
   profilePanelPubkey,
   profiles,
 }: {
   agentSessionAgents: ChannelAgentSessionAgent[];
+  currentPubkey?: string | null;
   openAgentSessionPubkey: string | null;
   profilePanelPubkey?: string | null;
   profiles?: UserProfileLookup;
@@ -17,11 +20,26 @@ export function resolveSelectedAgentSession({
     return null;
   }
 
+  // Turn interruption is an owner capability, not a managed-only one: the
+  // cancel control frame (kind:24200) is owner-signed and the harness
+  // verifies it against the NIP-OA owner — a connected agent's owner can
+  // stop a turn exactly like a managed agent's. Ownership comes from the
+  // verified profile ownerPubkey.
+  const profile = profiles?.[openAgentSessionPubkey.toLowerCase()];
+  const viewerOwnsAgent = Boolean(
+    currentPubkey &&
+      profile?.ownerPubkey &&
+      normalizePubkey(profile.ownerPubkey) === normalizePubkey(currentPubkey),
+  );
+
   const listedAgent = agentSessionAgents.find(
     (agent) =>
       agent.pubkey.toLowerCase() === openAgentSessionPubkey.toLowerCase(),
   );
   if (listedAgent) {
+    if (!listedAgent.canInterruptTurn && viewerOwnsAgent) {
+      return { ...listedAgent, canInterruptTurn: true };
+    }
     return listedAgent;
   }
 
@@ -32,13 +50,12 @@ export function resolveSelectedAgentSession({
     return null;
   }
 
-  const profile = profiles?.[openAgentSessionPubkey.toLowerCase()];
   return {
     pubkey: openAgentSessionPubkey,
     name: profile?.displayName?.trim() || "Agent",
     status: "deployed",
     agentSource: "relay",
-    canInterruptTurn: false,
+    canInterruptTurn: viewerOwnsAgent,
   };
 }
 

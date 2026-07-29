@@ -527,11 +527,18 @@ export const ChannelPane = React.memo(function ChannelPane({
     () =>
       agentSessionSelection.resolveSelectedAgentSession({
         agentSessionAgents,
+        currentPubkey,
         openAgentSessionPubkey,
         profilePanelPubkey,
         profiles,
       }),
-    [agentSessionAgents, openAgentSessionPubkey, profilePanelPubkey, profiles],
+    [
+      agentSessionAgents,
+      currentPubkey,
+      openAgentSessionPubkey,
+      profilePanelPubkey,
+      profiles,
+    ],
   );
   const hasSplitAuxiliaryPane =
     useSplitAuxiliaryPane &&

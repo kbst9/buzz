@@ -42,3 +42,83 @@ test("returns null when activity opens over no pane", () => {
     null,
   );
 });
+
+const OWNER = "a".repeat(64);
+const AGENT = "b".repeat(64);
+
+function memberBotAgent(overrides = {}) {
+  return {
+    pubkey: AGENT,
+    name: "Nova",
+    status: "deployed",
+    agentSource: "member-bot",
+    canInterruptTurn: false,
+    ...overrides,
+  };
+}
+
+test("listed connected agent gains canInterruptTurn for its verified owner", async () => {
+  const { resolveSelectedAgentSession } = await import(
+    "./agentSessionSelection.ts"
+  );
+  const resolved = resolveSelectedAgentSession({
+    agentSessionAgents: [memberBotAgent()],
+    currentPubkey: OWNER,
+    openAgentSessionPubkey: AGENT,
+    profiles: { [AGENT]: { ownerPubkey: OWNER } },
+  });
+
+  assert.equal(resolved?.canInterruptTurn, true);
+  assert.equal(resolved?.agentSource, "member-bot");
+});
+
+test("listed connected agent stays non-interruptible for non-owners", async () => {
+  const { resolveSelectedAgentSession } = await import(
+    "./agentSessionSelection.ts"
+  );
+  const resolved = resolveSelectedAgentSession({
+    agentSessionAgents: [memberBotAgent()],
+    currentPubkey: "c".repeat(64),
+    openAgentSessionPubkey: AGENT,
+    profiles: { [AGENT]: { ownerPubkey: OWNER } },
+  });
+
+  assert.equal(resolved?.canInterruptTurn, false);
+});
+
+test("profile-panel fallback agent is interruptible only when viewer-owned", async () => {
+  const { resolveSelectedAgentSession } = await import(
+    "./agentSessionSelection.ts"
+  );
+  const owned = resolveSelectedAgentSession({
+    agentSessionAgents: [],
+    currentPubkey: OWNER,
+    openAgentSessionPubkey: AGENT,
+    profilePanelPubkey: AGENT,
+    profiles: { [AGENT]: { ownerPubkey: OWNER.toUpperCase() } },
+  });
+  const foreign = resolveSelectedAgentSession({
+    agentSessionAgents: [],
+    currentPubkey: "c".repeat(64),
+    openAgentSessionPubkey: AGENT,
+    profilePanelPubkey: AGENT,
+    profiles: { [AGENT]: { ownerPubkey: OWNER } },
+  });
+
+  assert.equal(owned?.canInterruptTurn, true);
+  assert.equal(foreign?.canInterruptTurn, false);
+});
+
+test("managed agents keep canInterruptTurn without profile data", async () => {
+  const { resolveSelectedAgentSession } = await import(
+    "./agentSessionSelection.ts"
+  );
+  const resolved = resolveSelectedAgentSession({
+    agentSessionAgents: [
+      memberBotAgent({ agentSource: "managed", canInterruptTurn: true }),
+    ],
+    openAgentSessionPubkey: AGENT,
+  });
+
+  assert.equal(resolved?.canInterruptTurn, true);
+});
