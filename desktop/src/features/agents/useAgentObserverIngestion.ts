@@ -7,6 +7,7 @@ import {
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
 import { useManagedAgentObserverBridge } from "@/features/agents/observerRelayStore";
+import { useObserverIngestionSeed } from "@/features/agents/useObserverIngestionSeed";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { ManagedAgent, UserProfileSummary } from "@/shared/api/types";
@@ -173,6 +174,10 @@ function useSeenOwnedAgentPubkeys(
  * managed-agent observer coverage during startup.
  */
 export function useAgentObserverIngestion() {
+  // Cold-start seed: primes the batch-profile cache with owned connected
+  // agents from the community directory, so the cache scan below has
+  // candidates before any other surface happens to load their profiles.
+  useObserverIngestionSeed();
   const identityQuery = useIdentityQuery();
   const currentPubkey = identityQuery.data?.pubkey;
 

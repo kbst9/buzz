@@ -47,6 +47,7 @@ import {
   MODAL_SEARCH_SHELL_CLASS,
 } from "@/shared/ui/modalSearchStyles";
 import { MembersSidebarMemberCard } from "./MembersSidebarMemberCard";
+import { useMemberOwnerProfileLookup } from "./useMemberOwnerLabels";
 import { useManagedAgentRuntimesQuery } from "@/features/agents/managedAgentRuntimeHooks";
 import {
   findManagedAgentRuntime,
@@ -182,44 +183,12 @@ export function MembersSidebar({
   const memberProfilesQuery = useUsersBatchQuery(allMemberPubkeys, {
     enabled: open && rawMembers.length > 0,
   });
-  // Owners of agent members, for the "managed by {owner}" attribution line on
-  // member rows (mirrors `addSearchOwnerPubkeys` below for add-candidate
-  // rows). The viewer is excluded: `formatOwnerLabel` renders them as "you"
-  // without a profile lookup.
-  const memberOwnerPubkeys = React.useMemo(() => {
-    const profiles = memberProfilesQuery.data?.profiles ?? {};
-    const viewerPubkey = currentPubkey ? normalizePubkey(currentPubkey) : null;
-    return [
-      ...new Set(
-        rawMembers.flatMap((member) => {
-          const ownerPubkey =
-            profiles[normalizePubkey(member.pubkey)]?.ownerPubkey;
-          if (!ownerPubkey) {
-            return [];
-          }
-
-          const normalized = normalizePubkey(ownerPubkey);
-          return normalized === viewerPubkey ? [] : [normalized];
-        }),
-      ),
-    ];
-  }, [currentPubkey, memberProfilesQuery.data?.profiles, rawMembers]);
-  const memberOwnerProfilesQuery = useUsersBatchQuery(memberOwnerPubkeys, {
-    enabled: open && memberOwnerPubkeys.length > 0,
+  const memberOwnerProfileLookup = useMemberOwnerProfileLookup({
+    currentPubkey,
+    memberProfiles: memberProfilesQuery.data?.profiles,
+    open,
+    rawMembers,
   });
-  // Owner labels resolve against both lookups: member profiles cover owners
-  // who are themselves in the channel (no extra roundtrip), the dedicated
-  // batch covers owners who are not members.
-  const memberOwnerProfileLookup = React.useMemo(
-    () => ({
-      ...memberProfilesQuery.data?.profiles,
-      ...memberOwnerProfilesQuery.data?.profiles,
-    }),
-    [
-      memberProfilesQuery.data?.profiles,
-      memberOwnerProfilesQuery.data?.profiles,
-    ],
-  );
   const {
     people,
     bots,
