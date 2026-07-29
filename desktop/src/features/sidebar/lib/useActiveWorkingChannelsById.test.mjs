@@ -34,4 +34,65 @@ describe("resolveActiveWorkingChannelNames", () => {
 
     assert.deepEqual(resolved.agentNames, ["Ned"]);
   });
+
+  it("falls back to profile names for non-managed agents", () => {
+    const resolved = resolveActiveWorkingChannelNames(
+      {
+        channelId: "chan-1",
+        anchorAt: 0,
+        agentCount: 2,
+        agentPubkeys: ["AAAA", "CCCC"],
+      },
+      [{ pubkey: "aaaa", name: "Ned" }],
+      new Map([["cccc", "Connie"]]),
+    );
+
+    assert.deepEqual(resolved.agentNames, ["Ned", "Connie"]);
+  });
+
+  it("prefers the managed agent name over a profile fallback", () => {
+    const resolved = resolveActiveWorkingChannelNames(
+      {
+        channelId: "chan-1",
+        anchorAt: 0,
+        agentCount: 1,
+        agentPubkeys: ["aaaa"],
+      },
+      [{ pubkey: "AAAA", name: "Ned" }],
+      new Map([["aaaa", "Profile Ned"]]),
+    );
+
+    assert.deepEqual(resolved.agentNames, ["Ned"]);
+  });
+
+  it("omits pubkeys unresolved by both managed agents and profiles", () => {
+    const resolved = resolveActiveWorkingChannelNames(
+      {
+        channelId: "chan-1",
+        anchorAt: 0,
+        agentCount: 3,
+        agentPubkeys: ["aaaa", "cccc", "dddd"],
+      },
+      [{ pubkey: "aaaa", name: "Ned" }],
+      new Map([["cccc", "Connie"]]),
+    );
+
+    assert.deepEqual(resolved.agentNames, ["Ned", "Connie"]);
+  });
+
+  it("resolves entirely unnamed summaries to an empty list without crashing", () => {
+    const resolved = resolveActiveWorkingChannelNames(
+      {
+        channelId: "chan-1",
+        anchorAt: 0,
+        agentCount: 1,
+        agentPubkeys: ["dddd"],
+      },
+      [],
+      new Map(),
+    );
+
+    assert.deepEqual(resolved.agentNames, []);
+    assert.equal(resolved.agentCount, 1);
+  });
 });
