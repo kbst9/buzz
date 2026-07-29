@@ -8,6 +8,7 @@ import { AddAgentToChannelDialog } from "./AddAgentToChannelDialog";
 import { AddTeamToChannelDialog } from "./AddTeamToChannelDialog";
 import { AgentDefaultsDialog } from "./AgentDefaultsDialog";
 import { AgentDialog } from "./AgentDialog";
+import { ConnectedAgentsSection } from "./ConnectedAgentsSection";
 import { PersonaCatalogDialog } from "./PersonaCatalogDialog";
 import { PersonaDeleteDialog } from "./PersonaDeleteDialog";
 import { PersonaShareDialog } from "./PersonaShareDialog";
@@ -208,6 +209,8 @@ export function AgentsView() {
                 void personas.handleImportSnapshotFile(fileBytes, fileName);
               }}
             />
+
+            <ConnectedAgentsSection />
 
             <TeamsSection
               error={
