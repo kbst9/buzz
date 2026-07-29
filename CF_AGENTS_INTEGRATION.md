@@ -1,9 +1,10 @@
 # Cloudflare Hosted Agents — Integration Design
 
 > **Fork-local design doc (deploy branch only — never upstream).**
-> Status: draft v1.2, 2026-07-29 (v1.1: Deploy-button provisioning — no CF
-> credentials anywhere; v1.2: worker-side LLM gateway — no LLM credentials
-> in the sandbox). Detailed design for **substrate variant B** of
+> Status: draft v1.3, 2026-07-29 (v1.1: Deploy-button provisioning — no CF
+> credentials anywhere; v1.2: gateway-side LLM credentials — none in the
+> sandbox; v1.3: relay-side gateway as primary topology — connect a
+> provider once per owner per community). Detailed design for **substrate variant B** of
 > [AGENTOS_HOST_PLAN.md](AGENTOS_HOST_PLAN.md) — Cloudflare Sandboxes +
 > Agents SDK as the managed execution tier. That doc holds the substrate
 > decision criteria; this one holds the Cloudflare-specific design.
@@ -166,13 +167,55 @@ Floor: Sandboxes/Containers require a paid Workers plan — the button flow
 surfaces this to the user; it's their account and their bill (which is
 exactly the point: bring-your-own-compute).
 
-## LLM credential gateway (v1.2 — no LLM credentials in the sandbox, ever)
+## LLM credential gateway (v1.2/v1.3 — no LLM credentials in the sandbox, ever)
 
 Supersedes v1.1's two-mode split (API-key-via-proxy vs OAuth-in-sandbox).
-All LLM traffic leaves the sandbox as a call to the host Worker's
-**gateway endpoint**; credentials of both types — API keys *and*
-subscription-OAuth tokens — live worker-side and are attached in transit.
-The sandbox never holds an LLM credential of any kind.
+All LLM traffic leaves the sandbox as a call to a **gateway endpoint**;
+credentials of both types — API keys *and* subscription-OAuth tokens —
+live gateway-side and are attached in transit. The sandbox never holds an
+LLM credential of any kind.
+
+**v1.3 — gateway topology: relay-side is primary.** The gateway is
+substrate-independent and belongs with the community, not inside each
+user's Worker:
+
+- **Relay gateway (primary).** buzz-relay (or a sidecar crate) exposes
+  `/llm/<provider>/…` as verbatim streaming pass-through. An owner
+  connects a provider **once per community** — desktop/`buzz llm connect`
+  runs the OAuth/device-code dance locally and registers the refresh
+  token with the relay (NIP-98-authed, encrypted at rest, mapped to the
+  owner pubkey). Any agent of that owner, on **any substrate** (CF
+  sandbox, gradient unit, local), authenticates with a per-agent grant;
+  the relay resolves agent → owner (`users.agent_owner_pubkey` — the
+  NIP-OA cascade already in place) → credential + policy (per-agent
+  toggle, budgets) and streams. Grant plumbing: buzz-acp already holds
+  the agent key and an authenticated relay session — it obtains the
+  gateway bearer at boot and hands the adapter the same env shape MeshLLM
+  uses today (`apply_relay_mesh_env`: base URL + placeholder key). This
+  makes the relay gateway a sibling provider to `relay-mesh`, and later
+  community API-key pools slot behind the same abstraction.
+  **This piece is upstream-candidate block/buzz work** (feat branch, like
+  the Phase-5 items in AGENTOS_HOST_PLAN.md) — the first part of this
+  project that clearly belongs in the product, since it also de-secrets
+  gradient's `/etc/buzz-agents/*.env` files.
+- **Worker gateway (trust-minimized variant).** The v1.2 design below,
+  kept for owners who won't hand subscription tokens to the community
+  operator: same adapter contract, credentials in their own CF account.
+  Per-agent config choice, not an architecture fork.
+- **Trust line, stated plainly:** the relay topology means the operator
+  can use (not just store) connected tokens — encryption at rest guards
+  the database, not the operator. Opt-in per owner; self-hosted
+  communities (operator == owner) get it for free. **Never cross-owner
+  credential use** — an owner's token serves only that owner's agents;
+  community-provided compute is a separate, explicit API-key pool.
+- **CF consequences:** the host Worker sheds credential storage, refresh
+  loops, and the streaming proxy — back to pure coordination — and the
+  sandbox egress allowlist collapses to **one host: the relay** (already
+  required). The cumbersome per-deployment login flows disappear;
+  connecting a subscription is one action per owner per community.
+
+The v1.2 mechanics below describe the gateway itself and apply to both
+topologies (the Worker text reads as "gateway"):
 
 - **Adapter side**: base-URL override only (`ANTHROPIC_BASE_URL` /
   OpenAI-compatible base URLs — the documented gateway pattern for
