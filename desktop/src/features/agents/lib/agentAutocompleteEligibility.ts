@@ -35,11 +35,19 @@ export function getMentionableAgentPubkeys({
   managedAgentPubkeys,
   relayAgents,
   sharedChannelIds,
+  verifiedAgentPubkeys,
 }: {
   currentPubkey?: string | null;
   managedAgentPubkeys: Iterable<string>;
   relayAgents: readonly RelayAgent[] | undefined;
   sharedChannelIds: ReadonlySet<string>;
+  /**
+   * Agents classified by their verified NIP-OA auth tag (profile-derived
+   * `isAgent`) — the enumeration source for connected/standalone agents,
+   * which appear in neither the managed list nor the kind:10100 directory.
+   * Callers opt in per surface; omitting it preserves prior behavior.
+   */
+  verifiedAgentPubkeys?: Iterable<string>;
 }) {
   const pubkeys = new Set(
     [...managedAgentPubkeys].map((pubkey) => normalizePubkey(pubkey)),
@@ -51,6 +59,27 @@ export function getMentionableAgentPubkeys({
     }
   }
 
+  for (const pubkey of verifiedAgentPubkeys ?? []) {
+    pubkeys.add(normalizePubkey(pubkey));
+  }
+
+  return pubkeys;
+}
+
+/**
+ * Extract the pubkeys of auth-tag-verified agents from profile-shaped
+ * results (user search, batch profiles). `isAgent` on these is derived
+ * Rust-side from the verified NIP-OA tag, so no client-side spoof risk.
+ */
+export function collectVerifiedAgentPubkeys(
+  users: readonly { pubkey: string; isAgent?: boolean | null }[] | undefined,
+): ReadonlySet<string> {
+  const pubkeys = new Set<string>();
+  for (const user of users ?? []) {
+    if (user.isAgent === true) {
+      pubkeys.add(normalizePubkey(user.pubkey));
+    }
+  }
   return pubkeys;
 }
 

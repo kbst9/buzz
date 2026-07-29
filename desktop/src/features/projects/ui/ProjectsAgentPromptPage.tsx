@@ -31,7 +31,13 @@ import {
   useRichTextEditor,
 } from "@/features/messages/lib/useRichTextEditor";
 import { FormattingToolbar } from "@/features/messages/ui/FormattingToolbar";
-import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
+import { usePresenceQuery } from "@/features/presence/hooks";
+import {
+  useFlattenedUserSearchResults,
+  useInfiniteUserSearchQuery,
+  useProfileQuery,
+  useUsersBatchQuery,
+} from "@/features/profile/hooks";
 import type { Project } from "@/features/projects/hooks";
 import {
   restoreProjectsAgentConversation,
@@ -47,7 +53,7 @@ import { useIdentityQuery } from "@/shared/api/hooks";
 import { sendChannelMessage } from "@/shared/api/tauri";
 import type { Channel } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
-import { normalizePubkey } from "@/shared/lib/pubkey";
+import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -130,6 +136,23 @@ function useAgentCandidates() {
   const managedAgentsQuery = useManagedAgentsQuery();
   const relayAgentsQuery = useRelayAgentsQuery();
   const channelsQuery = useChannelsQuery();
+  // Connected agents (verified auth tag, neither managed nor in the 10100
+  // directory) are enumerable only via the community user directory.
+  const directoryQuery = useInfiniteUserSearchQuery("", {
+    allowEmpty: true,
+    limit: 50,
+  });
+  const directoryUsers = useFlattenedUserSearchResults(directoryQuery.data);
+  const connectedPubkeys = React.useMemo(
+    () =>
+      directoryUsers
+        .filter((user) => user.isAgent === true)
+        .map((user) => normalizePubkey(user.pubkey)),
+    [directoryUsers],
+  );
+  const presenceQuery = usePresenceQuery(connectedPubkeys, {
+    enabled: connectedPubkeys.length > 0,
+  });
 
   return React.useMemo(() => {
     const managed = managedAgentsQuery.data ?? [];
@@ -150,14 +173,30 @@ function useAgentCandidates() {
       isManaged: true,
       isActive: isManagedAgentActive(agent),
     }));
+    const seen = new Set(candidates.map((candidate) => candidate.pubkey));
     for (const agent of relayAgents) {
       const pubkey = normalizePubkey(agent.pubkey);
-      if (managedByPubkey.has(pubkey) || !mentionable.has(pubkey)) continue;
+      if (seen.has(pubkey) || !mentionable.has(pubkey)) continue;
+      seen.add(pubkey);
       candidates.push({
         pubkey,
         name: agent.name,
         isManaged: false,
         isActive: agent.status !== "offline",
+      });
+    }
+    for (const user of directoryUsers) {
+      const pubkey = normalizePubkey(user.pubkey);
+      if (user.isAgent !== true || seen.has(pubkey)) continue;
+      seen.add(pubkey);
+      candidates.push({
+        pubkey,
+        name:
+          user.displayName?.trim() ||
+          user.nip05Handle?.trim() ||
+          truncatePubkey(user.pubkey),
+        isManaged: false,
+        isActive: presenceQuery.data?.[pubkey] === "online",
       });
     }
 
@@ -168,8 +207,10 @@ function useAgentCandidates() {
     });
   }, [
     channelsQuery.data,
+    directoryUsers,
     identityQuery.data?.pubkey,
     managedAgentsQuery.data,
+    presenceQuery.data,
     relayAgentsQuery.data,
   ]);
 }

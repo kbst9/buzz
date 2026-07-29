@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   coalesceAgentAutocompleteCandidates,
+  collectVerifiedAgentPubkeys,
   getMentionableAgentPubkeys,
   getSharedChannelIds,
   isAgentIdentityInManagedList,
@@ -381,4 +382,41 @@ test("coalesceAgentAutocompleteCandidates: leaves non-agents alone", () => {
   const second = makeAgent({ pubkey: PUB_B, isAgent: false });
 
   assert.deepEqual(coalesce([first, second]), [first, second]);
+});
+
+test("getMentionableAgentPubkeys: unions verifiedAgentPubkeys when provided", () => {
+  const result = getMentionableAgentPubkeys({
+    currentPubkey: CURRENT_PUBKEY,
+    managedAgentPubkeys: [PUB_A],
+    relayAgents: [],
+    sharedChannelIds: new Set(),
+    verifiedAgentPubkeys: [PUB_B.toUpperCase(), PUB_C],
+  });
+
+  assert.equal(result.has(PUB_A), true);
+  assert.equal(result.has(PUB_B), true, "verified pubkeys are normalized");
+  assert.equal(result.has(PUB_C), true);
+});
+
+test("getMentionableAgentPubkeys: omitting verifiedAgentPubkeys preserves prior behavior", () => {
+  const result = getMentionableAgentPubkeys({
+    currentPubkey: CURRENT_PUBKEY,
+    managedAgentPubkeys: [PUB_A],
+    relayAgents: [],
+    sharedChannelIds: new Set(),
+  });
+
+  assert.deepEqual([...result], [PUB_A]);
+});
+
+test("collectVerifiedAgentPubkeys: keeps only verified isAgent entries, normalized", () => {
+  const result = collectVerifiedAgentPubkeys([
+    { pubkey: PUB_A.toUpperCase(), isAgent: true },
+    { pubkey: PUB_B, isAgent: false },
+    { pubkey: PUB_C },
+    { pubkey: PUB_D, isAgent: null },
+  ]);
+
+  assert.deepEqual([...result], [PUB_A]);
+  assert.deepEqual([...collectVerifiedAgentPubkeys(undefined)], []);
 });
