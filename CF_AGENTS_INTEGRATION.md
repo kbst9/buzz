@@ -96,7 +96,8 @@ Original sketch → what the design actually does, and why:
    (`ANTHROPIC_BASE_URL`, OpenAI-compatible base URLs — pi/codex/claude
    all support this). v1 fallback: plain env injection (existing per-agent
    `env_vars` flow already merges global < persona < agent); proxy
-   injection is the hardening step. The one secret that MUST enter the
+   injection is the hardening step. Applies to API-key mode only — for
+   OAuth subscription plans see § LLM credential modes. The one secret that MUST enter the
    sandbox is the **nsec** (event signing happens in buzz-acp) — pushed as
    a Worker/DO secret, injected at sandbox boot, never written to the FS
    or snapshots. This is why conditioned NIP-OA tags (expiry, kind scope)
@@ -162,6 +163,53 @@ flow removes Cloudflare credentials from every Buzz component:
 Floor: Sandboxes/Containers require a paid Workers plan — the button flow
 surfaces this to the user; it's their account and their bill (which is
 exactly the point: bring-your-own-compute).
+
+## LLM credential modes (API keys vs OAuth subscriptions)
+
+Two supported modes, chosen per agent. The egress-proxy story applies to
+one of them only — be precise about which property holds where:
+
+**A. API-key mode (fleet/production default).** Key held outside the
+sandbox in the Workers runtime; egress proxy injects it in transit;
+adapter points at the proxy via base-URL override. Sandbox never sees the
+credential. This is the v1.1 hardening path described above.
+
+**B. Subscription-OAuth mode (Claude Pro/Max via Claude Code, ChatGPT
+plans via Codex, xAI device-code via pi).** The adapter CLI owns the
+token lifecycle (refresh dance against the provider's auth endpoint), so
+the credential **must live inside the sandbox** — in `$HOME`
+(`~/.claude`, `~/.codex`, buzz-agent's oauth cache which hard-requires
+`$HOME`), which the persistent sandbox FS provides. The proxy-injection
+property does not apply in this mode; the isolation boundary (per-agent
+sandbox, egress allowlist to the provider's API + auth endpoints) is the
+protection.
+
+Headless login — how tokens get in, in preference order:
+1. **Device-code flows** where the provider supports them (pi's xAI
+   login): agent surfaces code + URL through the ops API into the Buzz
+   UI; user approves from their own browser. Purpose-built for headless.
+2. **Desktop token handoff**: the user is already logged in locally (the
+   desktop probes `claude auth status` / `codex login status` today);
+   push a headless-scoped token (e.g. Claude Code's setup-token flow —
+   prefer that over copying the live credential file, whose refresh
+   rotation can race between laptop and sandbox) through the TLS ops API
+   into the sandbox.
+3. **PTY fallback (universal)**: Sandbox SDK ships interactive web PTYs —
+   surface a terminal in Buzz, run the CLI's own login, use its
+   no-browser URL/paste-code path. Works for any adapter with no
+   per-provider engineering.
+
+Snapshot policy consequence: OAuth tokens sit on the FS, so the snapshot
+exclusion list must cover the adapter auth dirs (`~/.claude`, `~/.codex`,
+`~/.config/buzz-agent/oauth`) — same posture as the nsec: secrets never
+land in snapshots; after a restore-to-new-sandbox, re-auth via 1–3.
+Sleep/wake needs no re-auth (persistent FS carries the tokens).
+
+Reality check for mode B: subscription plans carry per-account usage
+windows (5-hour / weekly caps) and are tied to the account holder. Fine
+for a member's personal agent on their own plan — and it composes
+perfectly with BYO-compute (their CF account, their subscription, their
+limits). Wrong tool for a dense always-on fleet; that's mode A.
 
 ## Lifecycle
 
