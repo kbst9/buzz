@@ -5,9 +5,15 @@ a community-wide view — backed by a relay-derived index of kind `1063`
 (NIP-94 file metadata) events, with a matching `buzz files` CLI surface so
 agents can discover channel files without paging through message history.
 
-Status: **design v2 — not yet implemented.** v2 supersedes v1 after a
-trigger-interaction review; the changes are summarized in
-[Design revisions from v1](#design-revisions-from-v1).
+Status: **implemented** on `feat/file-index-nip94` (relay emitter +
+cascades, buzz-admin backfill, `buzz files list` + base-prompt teaching,
+desktop channel drawer + community explorer, mobile kind constant, unit +
+E2E coverage). Design v2 superseded v1 after a trigger-interaction review
+([Design revisions from v1](#design-revisions-from-v1)); implementation
+deltas from v2 are in
+[Implementation findings](#implementation-findings-post-v2). Outstanding:
+the DB-backed integration suite (relay-side tests listed below) and the
+staged rollout steps.
 
 Motivation: agents currently learn about files only from URLs that appear in
 their trigger message or thread context (`buzz-acp` pushes no attachment
@@ -289,13 +295,15 @@ trigger-audit checklist to AGENTS.md when the feature lands.
 
 ## Rollout order (load-bearing)
 
-1. Land relay emitter + CLI, **emitter feature-flagged off**
-   (`BUZZ_FILE_INDEX=false` default-on after bake — one env read).
+1. ✅ Land relay emitter + CLI, **emitter feature-flagged off**
+   (`BUZZ_FILE_INDEX`, default off).
 2. Run `buzz-admin files backfill` to completion (ordering guarantee
    depends on backfill-before-enable).
-3. Enable emitter; run a second backfill pass for the gap window.
-4. Ship the desktop Files tab (after parity + leak tests green).
-5. Ship community view (v1.1).
+3. Enable emitter (`BUZZ_FILE_INDEX=true`); run a second backfill pass for
+   the gap window.
+4. Ship the desktop UI (✅ code landed; deploy **after** the
+   private-channel parity + unscoped-leak integration tests are green —
+   they remain the gate).
 
 ## Out of scope (v1)
 
@@ -303,6 +311,57 @@ trigger-audit checklist to AGENTS.md when the feature lands.
 - DM file index.
 - Dedup-by-hash UX, storage analytics.
 - Channel-ACL enforcement on blobs (orthogonal; see media GET-auth work).
+
+## Implementation findings (post-v2)
+
+What implementation confirmed, changed, or simplified relative to the v2
+design. Component ↔ commit map: `docs:` design → `feat(relay):` emitter →
+`feat(admin):` backfill → `feat(cli):` files list → `refactor(core):`
+shared helpers → `feat(desktop):` UI.
+
+1. **Exactly-once side-effect dispatch is a read fact, not an assumption.**
+   `ingest_event` returns `duplicate:` before the side-effect block, so the
+   emitter hook runs once per stored event — the hot path carries no
+   idempotency query, exactly as v2 hoped ("verify during implementation").
+2. **The "standard right-hand drawer" is a Sheet, not the members panel.**
+   `MembersSidebar` turned out to be a centered modal `Dialog`, and the
+   channel pane's true right-hand aux slot (thread/profile panels) is
+   deeply coupled to split-pane resize state (`useSplitAuxiliaryPane`).
+   v1 ships the drawer as a right-side `Sheet` (existing primitive, used
+   by CommunitySwitcher) owned by `ChannelScreen` — zero `ChannelPane`
+   surgery, members/files exclusivity moot (Sheet overlays). Graduating
+   into the aux-panel slot is optional v1.1 polish.
+3. **Backfill requires the live relay key.** NIP-09 deletions are only
+   valid from the entry's author, so ephemeral-key backfill entries would
+   be unretractable for interop clients. `--relay-key` /
+   `BUZZ_RELAY_PRIVATE_KEY` is mandatory (unlike `reconcile-channels`).
+4. **Backfill replays edits, including imeta-less ones.** The scan matches
+   `tags @> [["imeta"]] OR kind = 40003` — an edit that removed every
+   attachment carries no imeta but must still retract. Replay is
+   oldest-first with the live reconcile semantics; backfill-mode
+   retraction soft-deletes directly with no kind-5 (nothing subscribes
+   pre-rollout).
+5. **Retraction lookup is a dedicated JSONB containment query.**
+   `EventQuery` has no `#e` filter, and the tempting `d_tag` pushdown is
+   NIP-33-gated (`extract_d_tag` returns `None` for non-parameterized
+   kinds — a `d` tag on a 1063 would never populate the column). Hence
+   `get_events_by_kind_and_e_tag` (`tags @> [["e", id]]`, kind-bounded,
+   unindexed — retraction is rare).
+6. **Desktop routes are manifest-declared.** TanStack router runs with
+   `virtualRouteConfig` (`src/app/routes.ts`) — a new route needs a
+   manifest entry, not just a route file, before `routeTree.gen.ts`
+   regenerates.
+7. **The AppShell file-size ratchet tripped (+2 lines over 1000)** —
+   resolved per the split-don't-bump rule by extracting
+   `LazySettingsScreen` into its own module.
+8. **Shipped as one branch, not two.** The v2 two-PR sequencing collapsed:
+   data plane and UI landed as sequential commits on
+   `feat/file-index-nip94`; they can still be split for upstream review if
+   preferred.
+9. **E2E asserts the privacy boundary structurally.** The community
+   screen's accordion body (and its channel-scoped query) does not exist
+   in the DOM before expand — `files-explorer.spec.ts` pins that, plus
+   live append and kind-5 retraction in the drawer.
 
 ## Design revisions from v1
 
