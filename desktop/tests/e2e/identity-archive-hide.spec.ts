@@ -165,7 +165,7 @@ test.describe("NIP-IA hide archived from discovery", () => {
     ).toBeVisible();
   });
 
-  // Member-adder (ChannelMemberInviteCard) — the invite search excludes
+  // Member-adder (members-sidebar invite search) — the invite search excludes
   // existing channel members, so we test in #agents where Bob is NOT a
   // member (only the mock identity + Charlie are): the ONLY thing that can
   // drop Bob from results is the archive filter. The control run (nothing

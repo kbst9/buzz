@@ -18,8 +18,9 @@ export type ParsedAllowlist = {
 
 /**
  * Parse a free-form pubkey-paste input (one per line, comma-separated, or
- * mixed whitespace) into a normalized allowlist. Matches the splitting
- * pattern used by `ChannelMemberInviteCard` so users have one mental model.
+ * mixed whitespace) into a normalized allowlist. Normalizes pubkeys the same
+ * way (trim + lowercase) as the members-sidebar add-members flow so users
+ * have one mental model.
  *
  * - Splits on `/[\s,]+/`.
  * - Trims and lowercases each entry.
