@@ -121,6 +121,31 @@ pub fn parse_imeta_entries(event: &Event) -> Vec<ImetaEntry> {
     out
 }
 
+/// First well-formed `e` tag value — the kind-40003 edit-target convention
+/// (shared with the relay's `validate_edit_ownership`).
+pub fn first_e_tag_hex(event: &Event) -> Option<String> {
+    event.tags.iter().find_map(|t| {
+        let parts = t.as_slice();
+        if parts.first().map(String::as_str) != Some("e") {
+            return None;
+        }
+        parts
+            .get(1)
+            .filter(|v| v.len() == 64 && v.chars().all(|c| c.is_ascii_hexdigit()))
+            .map(|v| v.to_string())
+    })
+}
+
+/// The `x` tag value of a stored kind-1063 index entry.
+pub fn x_tag_value(event: &Event) -> Option<String> {
+    event.tags.iter().find_map(|t| {
+        let parts = t.as_slice();
+        (parts.first().map(String::as_str) == Some("x"))
+            .then(|| parts.get(1).map(|v| v.to_string()))
+            .flatten()
+    })
+}
+
 /// The blob hashes (`x` values) of an event's well-formed imeta entries.
 ///
 /// Used as the keep-set when reconciling the index after a kind-40003 edit:

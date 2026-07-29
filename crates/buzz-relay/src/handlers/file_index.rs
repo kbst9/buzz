@@ -19,7 +19,9 @@ use nostr::{Event, EventBuilder, Kind, Tag};
 use tracing::warn;
 use uuid::Uuid;
 
-use buzz_core::file_index::{derive_file_index_specs, imeta_hash_set, parse_imeta_entries};
+use buzz_core::file_index::{
+    derive_file_index_specs, first_e_tag_hex, imeta_hash_set, parse_imeta_entries, x_tag_value,
+};
 use buzz_core::kind::{KIND_DELETION, KIND_FILE_METADATA, KIND_STREAM_MESSAGE_EDIT};
 use buzz_core::tenant::TenantContext;
 use buzz_core::StoredEvent;
@@ -326,27 +328,3 @@ async fn retract_entries(
     }
 }
 
-/// First well-formed `e` tag value — the edit-target convention shared with
-/// `validate_edit_ownership`.
-fn first_e_tag_hex(event: &Event) -> Option<String> {
-    event.tags.iter().find_map(|t| {
-        let parts = t.as_slice();
-        if parts.first().map(String::as_str) != Some("e") {
-            return None;
-        }
-        parts
-            .get(1)
-            .filter(|v| v.len() == 64 && v.chars().all(|c| c.is_ascii_hexdigit()))
-            .map(|v| v.to_string())
-    })
-}
-
-/// The `x` tag value of a stored index entry.
-fn x_tag_value(event: &Event) -> Option<String> {
-    event.tags.iter().find_map(|t| {
-        let parts = t.as_slice();
-        (parts.first().map(String::as_str) == Some("x"))
-            .then(|| parts.get(1).map(|v| v.to_string()))
-            .flatten()
-    })
-}
