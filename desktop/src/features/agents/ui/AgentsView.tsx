@@ -361,6 +361,7 @@ export function AgentsView() {
           )}
           isPending={personas.isPending}
           linkedAgentPubkey={personas.personaToShare.linkedAgentPubkey}
+          effectiveAvatarUrl={personas.personaToShare.effectiveAvatarUrl}
           onCatalogShareLevelChange={(shareLevel) => {
             const shareTarget = personas.personaToShare;
             if (!shareTarget) return;
@@ -395,6 +396,7 @@ export function AgentsView() {
               personas.handleExportSnapshot(
                 personas.personaToExportSnapshot.persona,
                 personas.personaToExportSnapshot.linkedAgentPubkey,
+                personas.personaToExportSnapshot.effectiveAvatarUrl,
                 memoryLevel,
                 format,
               );
