@@ -358,6 +358,10 @@ export function UserProfilePanel({
     viewerIsOwner &&
     Boolean(effectivePubkey) &&
     canOpenAgentActivity(effectivePubkey);
+  // Any owned agent with a relay identity can be added to a channel: managed
+  // agents via the attach flow, connected agents via the plain relay
+  // member-add (the add itself stays relay-policed either way).
+  const canAddToChannel = viewerIsOwner && isBot && effectivePubkey !== null;
   const canOpenAgentLogs =
     isOwner === true && managedAgent?.backend.type === "local";
   const canInstantiateAgent =
@@ -804,7 +808,7 @@ export function UserProfilePanel({
     >
       {view === "summary" ? (
         <ProfileSummaryView
-          canAddToChannel={managedAgent !== undefined && isOwner === true}
+          canAddToChannel={canAddToChannel}
           canEditAgent={canEditAgent}
           canInstantiateAgent={canInstantiateAgent}
           canOpenAgentLogs={canOpenAgentLogs}
@@ -886,7 +890,7 @@ export function UserProfilePanel({
       ) : null}
       {view === "channels" ? (
         <ChannelsFocusedView
-          canAddToChannel={managedAgent !== undefined && isOwner === true}
+          canAddToChannel={canAddToChannel}
           channels={profileChannels}
           isActionPending={isAgentActionPending}
           isLoading={channelsQuery.isLoading}
@@ -961,9 +965,14 @@ export function UserProfilePanel({
         onOpenChange={setEditAgentOpen}
       />
     ) : null;
-  const addAgentToChannelDialog = managedAgent ? (
+  const addAgentToChannelDialog = canAddToChannel ? (
     <AddAgentToChannelDialog
-      agent={managedAgent ?? null}
+      agent={
+        managedAgent ??
+        (effectivePubkey
+          ? { pubkey: effectivePubkey, name: displayName }
+          : null)
+      }
       onAdded={handleAddedToChannel}
       onOpenChange={setAddToChannelOpen}
       open={addToChannelOpen}

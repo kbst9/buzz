@@ -1,10 +1,12 @@
 import * as React from "react";
+import { toast } from "sonner";
 
 import {
   type AttachManagedAgentToChannelResult,
   useAttachManagedAgentToChannelMutation,
 } from "@/features/agents/hooks";
 import {
+  useAddChannelMembersMutation,
   useChannelMembersQuery,
   useChannelsQuery,
 } from "@/features/channels/hooks";
@@ -20,13 +22,18 @@ import {
 } from "@/shared/ui/dialog";
 import { CopyButton } from "./CopyButton";
 
+/** Minimal agent identity the dialog needs. A full `ManagedAgent` satisfies
+ * it structurally; connected agents (no local record) pass just these two
+ * fields and get the plain relay member-add instead of the attach flow. */
+export type AddAgentToChannelTarget = Pick<ManagedAgent, "pubkey" | "name">;
+
 export function AddAgentToChannelDialog({
   agent,
   open,
   onAdded,
   onOpenChange,
 }: {
-  agent: ManagedAgent | null;
+  agent: ManagedAgent | AddAgentToChannelTarget | null;
   open: boolean;
   onAdded: (
     channel: Channel,
@@ -40,6 +47,19 @@ export function AddAgentToChannelDialog({
   const attachAgentMutation = useAttachManagedAgentToChannelMutation(
     channelId || null,
   );
+  const addMembersMutation = useAddChannelMembersMutation(channelId || null);
+  // Relay refusals (channel_add_policy) arrive as a per-pubkey errors array
+  // on an otherwise-successful member-add — kept here so they surface in the
+  // dialog's inline error slot like thrown mutation errors do.
+  const [memberAddRefusal, setMemberAddRefusal] = React.useState<string | null>(
+    null,
+  );
+  // Managed agents route through the attach flow (membership + ensure the
+  // community's harness pair is running). Connected agents have no local
+  // record or process — membership is the whole operation.
+  const managedAgent = agent !== null && "backend" in agent ? agent : null;
+  const isSubmitting =
+    attachAgentMutation.isPending || addMembersMutation.isPending;
   const channels = React.useMemo(
     () =>
       (channelsQuery.data ?? []).filter(
@@ -52,6 +72,8 @@ export function AddAgentToChannelDialog({
     setChannelId("");
     setRole("bot");
     attachAgentMutation.reset();
+    addMembersMutation.reset();
+    setMemberAddRefusal(null);
   }
 
   function handleOpenChange(next: boolean) {
@@ -95,13 +117,39 @@ export function AddAgentToChannelDialog({
       return;
     }
 
+    if (managedAgent) {
+      try {
+        const result = await attachAgentMutation.mutateAsync({
+          agent: managedAgent,
+          role,
+        });
+
+        onAdded(selectedChannel, result);
+        handleOpenChange(false);
+      } catch {
+        // React Query stores the error; keep the dialog open and render it inline.
+      }
+      return;
+    }
+
+    // Connected agent: the plain relay member-add (kind:9000) the members
+    // sidebar picker uses. Relay policy governs; refusals come back in the
+    // per-pubkey errors array rather than as a thrown error.
+    setMemberAddRefusal(null);
     try {
-      const result = await attachAgentMutation.mutateAsync({
-        agent,
+      const result = await addMembersMutation.mutateAsync({
+        pubkeys: [agent.pubkey],
         role,
       });
-
-      onAdded(selectedChannel, result);
+      const refusal = result.errors.find(
+        (entry) =>
+          normalizePubkey(entry.pubkey) === normalizePubkey(agent.pubkey),
+      );
+      if (refusal) {
+        setMemberAddRefusal(refusal.error);
+        return;
+      }
+      toast.success(`Added ${agent.name} to ${selectedChannel.name}.`);
       handleOpenChange(false);
     } catch {
       // React Query stores the error; keep the dialog open and render it inline.
@@ -128,9 +176,7 @@ export function AddAgentToChannelDialog({
               </label>
               <select
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
-                disabled={
-                  channels.length === 0 || attachAgentMutation.isPending
-                }
+                disabled={channels.length === 0 || isSubmitting}
                 id="agent-channel-id"
                 onChange={(event) => setChannelId(event.target.value)}
                 value={channelId}
@@ -166,7 +212,7 @@ export function AddAgentToChannelDialog({
               </label>
               <select
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
-                disabled={attachAgentMutation.isPending}
+                disabled={isSubmitting}
                 id="agent-channel-role"
                 onChange={(event) =>
                   setRole(event.target.value as Exclude<ChannelRole, "owner">)
@@ -205,6 +251,18 @@ export function AddAgentToChannelDialog({
                 {attachAgentMutation.error.message}
               </p>
             ) : null}
+
+            {addMembersMutation.error instanceof Error ? (
+              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                {addMembersMutation.error.message}
+              </p>
+            ) : null}
+
+            {memberAddRefusal ? (
+              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                {memberAddRefusal}
+              </p>
+            ) : null}
           </div>
 
           <div className="flex shrink-0 justify-end gap-2 border-t border-border/60 px-6 py-4">
@@ -221,13 +279,13 @@ export function AddAgentToChannelDialog({
                 !agent ||
                 !selectedChannel ||
                 channelsQuery.isLoading ||
-                attachAgentMutation.isPending
+                isSubmitting
               }
               onClick={() => void handleSubmit()}
               size="sm"
               type="button"
             >
-              {attachAgentMutation.isPending
+              {isSubmitting
                 ? "Adding..."
                 : isAlreadyMember
                   ? "Re-add to channel"
