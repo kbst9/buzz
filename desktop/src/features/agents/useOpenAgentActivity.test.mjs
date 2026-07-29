@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  collectAgentMemberChannelIds,
   isChannelOpenable,
   resolveOpenableActivityChannelId,
 } from "./useOpenAgentActivity.ts";
@@ -34,6 +35,64 @@ describe("isChannelOpenable", () => {
 
   it("rejects channels missing from the viewer's channel list", () => {
     assert.equal(isChannelOpenable(undefined), false);
+  });
+});
+
+describe("collectAgentMemberChannelIds", () => {
+  const agentPubkey = "ab".repeat(32);
+
+  it("collects channels listing the agent as a member, case-insensitively", () => {
+    const channels = [
+      {
+        id: "chan-1",
+        memberPubkeys: [agentPubkey.toUpperCase(), "cd".repeat(32)],
+      },
+      { id: "chan-2", memberPubkeys: ["cd".repeat(32)] },
+      { id: "chan-3", memberPubkeys: [agentPubkey] },
+    ];
+
+    assert.deepEqual(collectAgentMemberChannelIds(channels, agentPubkey), [
+      "chan-1",
+      "chan-3",
+    ]);
+  });
+
+  it("returns empty for undefined channels and non-members", () => {
+    assert.deepEqual(collectAgentMemberChannelIds(undefined, agentPubkey), []);
+    assert.deepEqual(
+      collectAgentMemberChannelIds(
+        [{ id: "chan-1", memberPubkeys: [] }],
+        agentPubkey,
+      ),
+      [],
+    );
+  });
+
+  it("resolves the member channel for an idle connected agent (no directory entry, no working state)", () => {
+    // Mirrors resolveChannelId for a connected agent: no kind:10100 entry
+    // (agentChannelIds from membership only) and no working channels — the
+    // membership-derived channel must resolve, so canOpenAgentActivity
+    // (resolveChannelId !== null) holds.
+    const channels = [
+      {
+        id: "chan-1",
+        isMember: true,
+        visibility: "private",
+        memberPubkeys: [agentPubkey],
+      },
+    ];
+    const resolved = resolveOpenableActivityChannelId({
+      agentChannelIds: collectAgentMemberChannelIds(channels, agentPubkey),
+      openableChannelIds: new Set(
+        channels
+          .filter((channel) => isChannelOpenable(channel))
+          .map((channel) => channel.id),
+      ),
+      workingChannelIds: [],
+    });
+
+    assert.notEqual(resolved, null);
+    assert.equal(resolved, "chan-1");
   });
 });
 
