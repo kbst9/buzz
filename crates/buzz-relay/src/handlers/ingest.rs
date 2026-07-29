@@ -2485,6 +2485,11 @@ async fn ingest_event_inner(
         }
     }
 
+    // File index: derive kind-1063 entries for imeta-carrying channel events
+    // (spawned; all gating inside). Runs only on first insert — duplicates
+    // returned above.
+    crate::handlers::file_index::dispatch_from_ingest(tenant, state, &event, kind_u32, channel_id);
+
     // A freshly inserted reply changed its thread's counters (updated in the
     // same transaction as the insert) — push a fresh relay-signed 39005 so
     // subscribed clients can update badge counts without refetching the head

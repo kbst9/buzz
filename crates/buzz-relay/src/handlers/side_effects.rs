@@ -1737,6 +1737,10 @@ async fn handle_delete_event_side_effect(
         emit_live_thread_summary(tenant, state, channel_id, root_id);
     }
 
+    // File index: retract kind-1063 entries referencing the removed message
+    // (spawned, best-effort).
+    super::file_index::spawn_cascade_retract(tenant, state, target_id.clone(), Some(channel_id));
+
     let actor_hex = hex::encode(event.pubkey.to_bytes());
     let mut tombstone = serde_json::json!({
         "type": "message_deleted",
@@ -2258,6 +2262,15 @@ async fn handle_standard_deletion_event(
         if let (Some(root_id), Some(channel_id)) = (root_id, target_event.channel_id) {
             emit_live_thread_summary(tenant, state, channel_id, root_id);
         }
+
+        // File index: retract kind-1063 entries referencing the deleted
+        // message (spawned, best-effort).
+        super::file_index::spawn_cascade_retract(
+            tenant,
+            state,
+            target_id.clone(),
+            target_event.channel_id,
+        );
 
         if u32::from(target_event.event.kind.as_u16()) == KIND_REACTION {
             // Try by reaction_event_id first; fall back to tuple-based removal
