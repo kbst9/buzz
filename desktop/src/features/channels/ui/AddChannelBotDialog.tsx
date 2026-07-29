@@ -12,6 +12,7 @@ import { resolvePersonaRuntime } from "@/features/agents/lib/resolvePersonaRunti
 import { getUsableTeams } from "@/features/agents/lib/teamPersonas";
 import { AddChannelBotPersonasSection } from "@/features/channels/ui/AddChannelBotPersonasSection";
 import { AddChannelBotTeamsSection } from "@/features/channels/ui/AddChannelBotTeamsSection";
+import { AddChannelExistingAgentsSection } from "@/features/channels/ui/AddChannelExistingAgentsSection";
 import { useInChannelPersonaIds } from "@/features/channels/ui/useInChannelPersonaIds";
 import type { AcpRuntime } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
@@ -260,6 +261,11 @@ export function AddChannelBotDialog({
             teams={teams}
           />
         ) : null}
+
+        <AddChannelExistingAgentsSection
+          channelId={channelId}
+          enabled={open && channelId !== null}
+        />
 
         {providers.length === 0 && !providersLoading ? (
           <div className="flex gap-3 rounded-lg border border-warning/30 bg-warning-bg px-4 py-3">
