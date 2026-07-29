@@ -1,6 +1,8 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
 import * as React from "react";
 
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import {
   selectConnectedAgents,
@@ -18,6 +20,7 @@ import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 import { AgentIdentityCard } from "./AgentIdentityCard";
 import { AgentRuntimeAvatarControl } from "./AgentRuntimeAvatarControl";
+import { CreateIdentityCard } from "./CreateIdentityCard";
 import { AGENT_CARD_GRID_CLASS } from "./UnifiedAgentsSection";
 
 function noopStart() {
@@ -41,6 +44,7 @@ function noopStart() {
  */
 export function ConnectedAgentsSection() {
   const { openProfilePanel } = useProfilePanel();
+  const { goSettings } = useAppNavigation();
   const identityQuery = useIdentityQuery();
   const me = identityQuery.data?.pubkey ?? null;
   const managedAgentsQuery = useManagedAgentsQuery();
@@ -113,10 +117,6 @@ export function ConnectedAgentsSection() {
     }`;
   };
 
-  if (cards.length === 0) {
-    return null;
-  }
-
   return (
     <section
       className="w-full space-y-2"
@@ -133,7 +133,11 @@ export function ConnectedAgentsSection() {
           <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
         )}
         <span className="text-sm font-medium">Connected agents</span>
-        <span className="text-xs text-muted-foreground">({cards.length})</span>
+        {cards.length > 0 ? (
+          <span className="text-xs text-muted-foreground">
+            ({cards.length})
+          </span>
+        ) : null}
       </button>
       {!isCollapsed ? (
         <div className={AGENT_CARD_GRID_CLASS}>
@@ -150,6 +154,13 @@ export function ConnectedAgentsSection() {
               }}
             />
           ))}
+          {/* Adding a connected agent means standing up a harness elsewhere —
+              the settings card owns that flow (host instructions). */}
+          <CreateIdentityCard
+            ariaLabel="Add connected agent"
+            dataTestId="add-connected-agent-card"
+            onClick={() => void goSettings("connected-agents")}
+          />
         </div>
       ) : null}
     </section>
