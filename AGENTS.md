@@ -626,9 +626,18 @@ buzz-sync --no-ci    # sync without launching CI
 On conflict it exits with the file list: resolve, `git add -A`, `git commit`,
 rerun. The resolution is remembered. Known hot spots: the buzz-cli
 surface-guard tests in `crates/buzz-cli/src/lib.rs` (names **and** counts —
-union both sides), `desktop/scripts/check-file-sizes.mjs` overrides, and any
-file both sides' agent features touch. Sync often; small deltas conflict
-trivially, stale ones conflict structurally.
+union both sides) and any file both sides' agent features touch. Sync often;
+small deltas conflict trivially, stale ones conflict structurally.
+
+**File-size ratchet on deploy:** the checker (upstream #3352) ratchets
+changed files against `merge-base origin/main HEAD` by default — on `deploy`
+that base is upstream's tip, so fork-carried growth (nostr_convert.rs,
+UserProfilePanel.tsx, tauri.ts, types.ts) re-fails on every run. Deploy
+checks therefore use upstream CI's own delta semantic: `buzz-sync` exports
+`CHECK_FILE_SIZES_BASE=HEAD^1` for its remote `just ci`, and manual runs on
+deploy need the same (`CHECK_FILE_SIZES_BASE=HEAD^1 pnpm run check`).
+Feature branches off `main` keep the default merge-base ratchet — they must
+pass it to be upstreamable.
 
 ### Building and CI
 
