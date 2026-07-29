@@ -34,6 +34,7 @@ import {
 } from "@/features/agents/lib/instanceInputForDefinition";
 import { describeLogFile } from "@/features/agents/ui/agentUi";
 import { AgentDialog } from "@/features/agents/ui/AgentDialog";
+import { ConnectedAgentEditDialog } from "@/features/agents/ui/ConnectedAgentEditDialog";
 import { useAgentLifecycleActions } from "@/features/profile/ui/useAgentLifecycleActions";
 import {
   consumePendingOpenEditAgent,
@@ -96,6 +97,7 @@ import type {
   Channel,
   CreatePersonaInput,
   UpdatePersonaInput,
+  UserSearchResult,
 } from "@/shared/api/types";
 import { UserProfilePanelFrame } from "@/features/profile/ui/UserProfilePanelFrame";
 import { getUserProfilePanelHeaderContent } from "@/features/profile/ui/UserProfilePanelHeaderContent";
@@ -324,9 +326,19 @@ export function UserProfilePanel({
   // Observer ingestion (frame decryption + derived active-turn liveness) is
   // owner-global — mounted once in AppShell via useAgentObserverIngestion —
   // covering both locally managed agents and declared-owned relay agents.
+  // Owned CONNECTED agent (standalone harness — no local record, no persona):
+  // editable through the owner-signed relay paths (kind:30177 definition +
+  // live set_profile control frame), so no key custody is required.
+  const canEditConnectedAgent =
+    viewerIsOwner &&
+    isBot &&
+    managedAgent === undefined &&
+    resolvedPersona === undefined &&
+    effectivePubkey !== null;
   const canEditAgent =
-    isOwner === true &&
-    (managedAgent !== undefined || resolvedPersona !== undefined);
+    (isOwner === true &&
+      (managedAgent !== undefined || resolvedPersona !== undefined)) ||
+    canEditConnectedAgent;
   const memoryQuery = useAgentMemoryQuery(effectivePubkey, {
     enabled: viewerIsOwner && Boolean(effectivePubkey),
   });
@@ -888,6 +900,29 @@ export function UserProfilePanel({
       ) : null}
     </AuxiliaryPanelBody>
   );
+  // UserSearchResult-shaped value for the connected edit dialog, built from
+  // data the panel already holds (the dialog contract mirrors the settings
+  // card's directory rows).
+  const connectedEditAgent = React.useMemo<UserSearchResult | null>(
+    () =>
+      effectivePubkey
+        ? {
+            pubkey: effectivePubkey,
+            displayName: profile?.displayName ?? null,
+            avatarUrl: profile?.avatarUrl ?? null,
+            nip05Handle: profile?.nip05Handle ?? null,
+            ownerPubkey,
+            isAgent: true,
+          }
+        : null,
+    [
+      effectivePubkey,
+      ownerPubkey,
+      profile?.avatarUrl,
+      profile?.displayName,
+      profile?.nip05Handle,
+    ],
+  );
   const editAgentDialog =
     canEditAgent && managedAgent ? (
       <AgentDialog
@@ -908,6 +943,12 @@ export function UserProfilePanel({
           if (!next) setEditAgentFocus(undefined);
         }}
         open={editAgentOpen}
+      />
+    ) : canEditConnectedAgent ? (
+      <ConnectedAgentEditDialog
+        agent={editAgentOpen ? connectedEditAgent : null}
+        online={presenceStatus === "online"}
+        onOpenChange={setEditAgentOpen}
       />
     ) : null;
   const addAgentToChannelDialog = managedAgent ? (
