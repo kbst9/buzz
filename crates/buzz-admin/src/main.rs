@@ -289,7 +289,7 @@ async fn cmd_files_backfill(
 
             if is_edit {
                 for entry in &existing {
-                    let stale = x_tag_value(&entry.event).map_or(true, |x| !keep.contains(&x));
+                    let stale = x_tag_value(&entry.event).is_none_or(|x| !keep.contains(&x));
                     if stale {
                         retracted += 1;
                         if !dry_run {
