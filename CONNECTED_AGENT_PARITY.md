@@ -47,7 +47,8 @@ Status legend: `[ ]` open · `[x]` done (commit) · `[~]` partial · `[–]` won
 
 ## F0 — shared eligibility plumbing (prerequisite for Tier 1)
 
-- [ ] **`getMentionableAgentPubkeys` learns a third input.** Append an
+- [x] **`getMentionableAgentPubkeys` learns a third input.** **Done:**
+  `1f4fa959` (`feat/connected-agent-picker-eligibility`). Append an
   optional `verifiedAgentPubkeys?: ReadonlySet<string>` param (default empty)
   unioned into the result, plus a sibling helper
   `collectVerifiedAgentPubkeys(users)` that extracts auth-tagged agents from
@@ -63,7 +64,8 @@ Status legend: `[ ]` open · `[x]` done (commit) · `[~]` partial · `[–]` won
 
 ## Tier 1 — connected agent unreachable (Pattern A)
 
-- [ ] **T1.1 New-DM recipient picker drops connected agents** (the reported
+- [x] **T1.1 New-DM recipient picker drops connected agents** **Done:**
+  `1f4fa959`. (the reported
   bug). Gate: `candidate.isAgent && !eligibleAgentPubkeys.has(pubkey)`.
   - Anchor: `desktop/src/features/messages/ui/useNewMessageRecipients.ts:131`
   - Fix: feed F0 with `collectVerifiedAgentPubkeys(userSearchResults)`.
@@ -73,13 +75,14 @@ Status legend: `[ ]` open · `[x]` done (commit) · `[~]` partial · `[–]` won
   - Caveat to carry into UX copy someday: buzz-acp DM-hardening means the
     agent replies only to its owner in DMs (`crates/buzz-acp/src/lib.rs:4774`)
     — same as already-listed directory agents, so parity is still correct.
-- [ ] **T1.2 Global search deletes connected agents** — unfindable by name
+- [x] **T1.2 Global search deletes connected agents** **Done:** `1f4fa959`. — unfindable by name
   app-wide; the verified tag is what trips the drop.
   - Anchor: `desktop/src/features/search/useSearchResults.ts:287-328` (drop at `:326`)
   - Fix: same F0 union (search results are `UserSearchResult`s — reuse
     `collectVerifiedAgentPubkeys` on the result set itself).
   - Merge path: **~2 contained lines**; add the first test for this gate.
-- [ ] **T1.3 Huddle "Add Agent" dialog is managed+running only**, though the
+- [x] **T1.3 Huddle "Add Agent" dialog is managed+running only** **Done:**
+  `1791fe13` (`feat/huddle-add-connected-agents`)., though the
   backend is just a kind:9000 `role=bot` publish a standalone harness picks
   up live (`desktop/src-tauri/src/huddle/agents.rs:6-8,84`); TTS/participants/
   remove are already role-based.
@@ -89,8 +92,8 @@ Status legend: `[ ]` open · `[x]` done (commit) · `[~]` partial · `[–]` won
   - Merge path: **new file** `features/huddle/useHuddleAgentCandidates.ts` +
     swap the dialog's `invoke` for the hook (~10 contained lines in a
     low-churn file).
-- [ ] **T1.4 Channel "Add agents" dialog can't add an existing connected
-  agent** — enumerates local personas + teams only, provisions
+- [x] **T1.4 Channel "Add agents" dialog can't add an existing connected
+  agent** **Done:** `b8daa18e` (`feat/channel-add-existing-agents`). — enumerates local personas + teams only, provisions
   `backend: local`.
   - Anchor: `desktop/src/features/channels/ui/AddChannelBotDialog.tsx:65-79,147-158`
   - Fix: an "Existing agents" section listing verified agents (member-add via
@@ -98,7 +101,7 @@ Status legend: `[ ]` open · `[x]` done (commit) · `[~]` partial · `[–]` won
   - Merge path: **new component file** for the section + one insertion point
     in the dialog. Medium; do after F0. (Interim workaround exists: the
     members-sidebar picker already adds connected agents.)
-- [ ] **T1.5 Projects "prompt an agent" picker** — `managed ∪ (directory ∩
+- [x] **T1.5 Projects "prompt an agent" picker** **Done:** `1f4fa959`. — `managed ∪ (directory ∩
   mentionable)`; user search never consulted.
   - Anchor: `desktop/src/features/projects/ui/ProjectsAgentPromptPage.tsx:128-175`
   - Fix: append verified agents (owned first) to `useAgentCandidates`.
@@ -125,7 +128,8 @@ Status legend: `[ ]` open · `[x]` done (commit) · `[~]` partial · `[–]` won
   - Merge path: **two single-token-ish line edits** + a **new test file**
     (`useChannelAgentSessions.test.mjs`). Smallest possible delta in a
     medium-churn file.
-- [ ] **T2.2 "Stop current turn" never offered for owned connected agents.**
+- [x] **T2.2 "Stop current turn" never offered for owned connected agents.**
+  **Done:** `f8593ee1` (`feat/connected-agent-stop-turn`).
   `canInterruptTurn` is hardcoded managed-only, but the actual transport is
   the same owner-gated kind:24200 control frame `set_profile` already uses
   for connected agents (`shared/api/agentControl.ts`).
@@ -144,7 +148,9 @@ in-channel session streaming). These are `managedAgent !== undefined` gates
 that should be `viewerIsOwner` (already computed, NIP-OA-derived,
 `UserProfilePanel.tsx:306,310`):
 
-- [ ] **T3.1 No Edit affordance for an owned connected agent** — the editor
+- [x] **T3.1 No Edit affordance for an owned connected agent** **Done:**
+  `b020cbf3` (`feat/connected-agent-panel-parity`; dialog extracted to
+  `ConnectedAgentEditDialog.tsx`). — the editor
   exists but is reachable only via Settings → Connected agents.
   - Anchor: `UserProfilePanel.tsx:327-329` (`canEditAgent`)
   - Fix: extract `EditAgentDialog` out of `ConnectedAgentsSettingsCard.tsx`
@@ -152,18 +158,21 @@ that should be `viewerIsOwner` (already computed, NIP-OA-derived,
     panel when `viewerIsOwner && !managedAgent`.
   - Merge path: **new file** (extraction) + **~4 lines** in
     `UserProfilePanel.tsx` (hot file — keep it to import/predicate/render).
-- [ ] **T3.2 Owner-published instructions (kind:30177) invisible on the
-  panel.** `useConnectedAgentDefinitionQuery` is consumed only by the
+- [x] **T3.2 Owner-published instructions (kind:30177) invisible on the
+  panel.** **Done:** `d1cc6b3b`. `useConnectedAgentDefinitionQuery` is consumed only by the
   settings card.
   - Anchor: `UserProfilePanelSections.tsx:232-234` (`showInstructionBlock`)
   - Merge path: contained — pass the definition text through the existing
     instruction-block prop rather than adding new sections.
-- [ ] **T3.3 Channels tab always empty (with a misleading empty state).**
+- [x] **T3.3 Channels tab always empty (with a misleading empty state).**
+  **Done:** `67c6e0ed`.
   Membership scan is `if (managedAgent && channels)`-gated even though
   membership is already in `channelsQuery.data`.
   - Anchor: `desktop/src/features/profile/ui/UserProfilePanelUtils.ts:116-147` (gate at `:133`)
   - Merge path: **one-line predicate** (`isBot && channels`) + test.
-- [ ] **T3.4 "Add to channel" hidden for owned connected agents** — same
+- [x] **T3.4 "Add to channel" hidden for owned connected agents** **Done:**
+  `aad9f78b` (dialog generalized to a pubkey target; relay add via the
+  members-sidebar mutation, refusals surfaced inline). — same
   over-restriction the members-picker fix removed elsewhere
   (`MembersSidebar.tsx:276-284` comment).
   - Anchor: `UserProfilePanel.tsx:785,867,913`
@@ -171,14 +180,18 @@ that should be `viewerIsOwner` (already computed, NIP-OA-derived,
     relay member-add (kind:9000) instead of the managed attach flow.
   - Merge path: contained; reuse the existing add-member mutation, no new
     dialog if `AddAgentToChannelDialog` is generalized to a pubkey.
-- [ ] **T3.5 "View activity log" vanishes off channel routes for idle
-  connected agents** — channel resolution comes from the 10100 entry only.
+- [x] **T3.5 "View activity log" vanishes off channel routes for idle
+  connected agents** **Done:** `8dd2e4b4` (membership as a channel-id
+  source via `collectAgentMemberChannelIds`). — channel resolution comes from the 10100 entry only.
   - Anchor: `desktop/src/features/agents/useOpenAgentActivity.ts:89-136`
   - Fix: fold in channel membership (`channels[].memberPubkeys`) as a third
     channel-id source, as `useManagedAgentActions.ts:120-131` does for
     managed agents.
   - Merge path: **contained edit in one hook** + its existing test file.
-- [ ] **T3.6 Observer ingestion cold-start seed.** Ingestion is correctly
+- [x] **T3.6 Observer ingestion cold-start seed.** **Done:** `9ae11b74`
+  (`feat/observer-ingestion-seed`); seed now mounts inside
+  `useAgentObserverIngestion` (size-guard fixup), so the AppShell delta is
+  zero. Ingestion is correctly
   widened to verified-owned profiles but only sees profiles some other
   surface already loaded into the batch cache — frames stay undecrypted
   until then (self-heals; latent).
@@ -191,7 +204,14 @@ that should be `viewerIsOwner` (already computed, NIP-OA-derived,
 
 ## Tier 4 — visibility & cosmetics
 
-- [ ] **T4.1 Agents page shows zero trace of connected agents.**
+- [x] **T4.1 Agents page shows zero trace of connected agents.** **Done:**
+  `5c8eccea` + `2e7d09a8` (`feat/agents-page-connected-section`).
+  **Spec correction discovered while landing:** the live per-agent
+  component on this page is `AgentIdentityCard` (via
+  `UnifiedAgentsSection`), NOT `ManagedAgentRow` — the section renders
+  through `AgentIdentityCard` on the shared grid with an additive
+  `connected` prop (Cable icon); `ManagedAgentRow`/`AgentGroupRows` turned
+  out to be orphaned (see Dead code).
   - Anchor: `desktop/src/features/agents/ui/AgentsView.tsx:153-210`
   - Fix: a "Connected" section reusing the settings-card enumeration
     (share via the T3.1 extraction).
@@ -208,7 +228,10 @@ that should be `viewerIsOwner` (already computed, NIP-OA-derived,
   - Merge path: **new component file** (section + record synthesis) + one
     insertion line in `AgentsView` + a small icon conditional inside
     `ManagedAgentRow`.
-- [ ] **T4.2 Pulse treats connected agents as humans.** Agents-tab timeline,
+- [x] **T4.2 Pulse treats connected agents as humans.** **Done:**
+  `355e016f` (`feat/pulse-connected-agents`, stacked on F0). Tab count now
+  derives from the same widened set as the timeline; release-note the
+  People→Agents re-bucketing. Agents-tab timeline,
   tab count, People-tab exclusion, "No agents registered yet" copy, and
   NoteCard badges all key off `managed ∪ directory`; composer mentions drop
   them (non-member managed-list gate).
@@ -217,12 +240,16 @@ that should be `viewerIsOwner` (already computed, NIP-OA-derived,
   - Merge path: contained edits inside `PulseView` (fold
     `profiles[pk].isAgent` into `agentPubkeySet`; it already fetches the
     profiles); the composer-mention half rides F0.
-- [ ] **T4.3 Sidebar working tooltip degrades to "1 agent working"** — names
+- [x] **T4.3 Sidebar working tooltip degrades to "1 agent working"** **Done:**
+  `9d935652` (`feat/sidebar-working-agent-names`). — names
   resolve from managed agents only.
   - Anchor: `desktop/src/features/sidebar/lib/useActiveWorkingChannelsById.ts:8-33`
   - Merge path: contained — fall back to the batch-profile displayName.
-- [ ] **T4.4 (not connected-specific) member rows lack owner attribution;
+- [x] **T4.4 (not connected-specific) member rows lack owner attribution;
   message-menu Ban/Timeout contradicts the sidebar's agent exemption.**
+  **Done:** `14d4bcf0` (owner line) + `40e3d84b` (restrict items withheld
+  for agent authors; kick retained, mirroring the sidebar). Product
+  sign-off: Kevin's 2026-07-29 "do this all" directive.
   - Anchors: `MembersSidebarMemberCard.tsx:160-238` (owner line),
     `features/moderation/ui/MessageModerationMenuItems.tsx:42-104` vs
     `MembersSidebarMemberCard.tsx:154-155`
@@ -380,9 +407,14 @@ fetch (`unwrap_or_default`) and role-gated behavior returns until a refetch
 
 ## Dead code exposed by the audit (cleanup, separate PR)
 
-`ChannelMemberInviteCard.tsx`, `MembersSidebarAgentControls.tsx`,
-`RecentNotesSection.tsx` — no importers (verified repo-wide). Note the first
-also carries a latent role-defaulting bug; deletion moots it.
+**Done:** `a68e239e` (`chore/remove-orphaned-agent-components`) — all three
+deleted after re-verification (e2e testid references checked; absence
+assertions unaffected); `respondToAllowlist.ts` comment updated.
+
+**New orphans found while landing T4.1** (follow-up, same treatment):
+`ManagedAgentRow.tsx` and `AgentGroupRows.tsx` — the Agents page renders
+`AgentIdentityCard` via `UnifiedAgentsSection`; the row components have no
+live importer. Verify + delete in a future sweep.
 
 ## Already at parity (don't re-fix)
 
