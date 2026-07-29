@@ -27,6 +27,24 @@ export function isChannelOpenable(
 }
 
 /**
+ * Channel ids where the agent appears in the member list, matched
+ * case-insensitively. Connected agents have no kind:10100 directory entry,
+ * so membership (already client-side on every channel row) is their only
+ * channel source while idle.
+ */
+export function collectAgentMemberChannelIds(
+  channels: readonly Pick<Channel, "id" | "memberPubkeys">[] | undefined,
+  agentPubkey: string,
+): string[] {
+  const key = normalizePubkey(agentPubkey);
+  return (channels ?? [])
+    .filter((channel) =>
+      channel.memberPubkeys.some((member) => normalizePubkey(member) === key),
+    )
+    .map((channel) => channel.id);
+}
+
+/**
  * Pick the channel to land in when opening an agent's activity from a
  * non-channel route: the agent's first working channel the viewer can open,
  * else the agent's first member channel the viewer can open, else null.
@@ -98,7 +116,13 @@ export function useOpenAgentActivity() {
           .map((channel) => channel.id),
       );
       return resolveOpenableActivityChannelId({
-        agentChannelIds: relayAgent?.channelIds ?? [],
+        // Directory (kind:10100) channels first, then channel membership —
+        // the latter is the only source for idle connected agents, which
+        // have no directory entry.
+        agentChannelIds: [
+          ...(relayAgent?.channelIds ?? []),
+          ...collectAgentMemberChannelIds(channels, pubkey),
+        ],
         openableChannelIds,
         // Deliberately an unsubscribed snapshot: this callback runs on click
         // (and in canOpenAgentActivity), not in render, so we don't need to

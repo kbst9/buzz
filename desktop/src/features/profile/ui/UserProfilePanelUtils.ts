@@ -118,6 +118,10 @@ export function deriveProfileChannels(
   relayAgent: RelayAgent | undefined,
   managedAgent: ManagedAgent | undefined,
   channels: Channel[] | undefined,
+  /** Scan channel membership for any agent profile — connected agents have
+   * no managed record, but their memberships are already client-side in
+   * `channels[].memberPubkeys`. Human profiles keep the empty list. */
+  isBot = false,
 ): ProfileChannelLink[] {
   const links = new Map<string, ProfileChannelLink>();
   const channelsByName = new Map(
@@ -130,7 +134,7 @@ export function deriveProfileChannels(
     links.set(id, { id, name });
   });
 
-  if (managedAgent && channels) {
+  if ((managedAgent !== undefined || isBot) && channels) {
     for (const channel of channels) {
       const isMember = channel.memberPubkeys.some(
         (memberPubkey) => memberPubkey.toLowerCase() === pubkeyLower,
@@ -255,9 +259,15 @@ export function resolveOwnerHandle(
 export function resolveAgentInstruction(
   managedAgent: ManagedAgent | undefined,
   persona: AgentPersona | undefined,
+  /** Owner-authored kind:30177 instructions for a connected agent —
+   * consulted only when there is no managed record or persona to read. */
+  connectedInstructions: string | null = null,
 ) {
   return (
-    managedAgent?.systemPrompt?.trim() || persona?.systemPrompt.trim() || null
+    managedAgent?.systemPrompt?.trim() ||
+    persona?.systemPrompt.trim() ||
+    connectedInstructions?.trim() ||
+    null
   );
 }
 
