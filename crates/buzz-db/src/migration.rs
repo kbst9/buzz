@@ -1162,7 +1162,11 @@ mod tests {
         run_migrations(&pool)
             .await
             .expect("retry succeeds after operator repair");
-        assert_eq!(applied_versions(&pool).await.last().copied(), Some(25));
+        // Derive the expected head from the MIGRATOR so this doesn't go
+        // stale as additive migrations land (it previously hardcoded the
+        // version and rotted).
+        let latest = MIGRATOR.iter().map(|migration| migration.version).max();
+        assert_eq!(applied_versions(&pool).await.last().copied(), latest);
     }
 
     #[tokio::test]
