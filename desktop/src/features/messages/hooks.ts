@@ -451,13 +451,15 @@ export function useSendMessageMutation(
       }
 
       // `mediaTags` arrives as the merged outgoing tag set (imeta + NIP-30
-      // emoji). Split it so each kind goes to its own validated Tauri arg —
-      // emoji tags must NOT ride the imeta-only `media` channel (that gate
-      // rejects any non-imeta prefix, which silently dropped emoji sends).
+      // emoji + swarm aliases). Split it so each kind goes to its own
+      // validated Tauri arg — emoji/swarm tags must NOT ride the imeta-only
+      // `media` channel (that gate rejects any non-imeta prefix, which
+      // silently dropped emoji sends).
       const {
         mediaTags: imetaTags,
         emojiTags,
         mentionTags,
+        swarmTags,
       } = splitOutgoingTags(mediaTags);
       const recipientPubkeys = messageMentionPubkeys(
         effectiveChannel,
@@ -482,6 +484,7 @@ export function useSendMessageMutation(
           undefined,
           emojiTags,
           mentionTags,
+          swarmTags,
         );
 
         // Build tags matching relay-emitted shape: h, author p, mention ps, reply es, imeta, emoji.
@@ -519,17 +522,20 @@ export function useSendMessageMutation(
             ...imetaTags,
             ...emojiTags,
             ...mentionTags,
+            ...swarmTags,
           ],
           content: content.trim(),
           sig: "",
         };
       }
 
+      // The WebSocket path appends extra tags verbatim, so mention-reference
+      // and swarm tags share its extraTags argument.
       return relayClient.sendMessage(
         effectiveChannel.id,
         content,
         recipientPubkeys,
-        mentionTags,
+        [...mentionTags, ...swarmTags],
       );
     },
     onMutate: async ({

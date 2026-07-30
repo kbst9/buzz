@@ -6,11 +6,13 @@ import { normalizePubkey } from "@/shared/lib/pubkey";
 import type { TeamMentionMember } from "./mentionCandidates";
 
 export type MentionSuggestionCandidate = {
-  kind: "identity" | "persona" | "team";
+  kind: "identity" | "persona" | "team" | "swarm";
   pubkey?: string;
   personaId?: string | null;
   teamId?: string;
   teamMembers?: TeamMentionMember[];
+  swarmId?: string;
+  swarmMemberCount?: number;
   avatarUrl?: string | null;
   isAgent: boolean;
   isMember: boolean;
@@ -43,6 +45,8 @@ export function mapMentionCandidateToSuggestion(opts: {
     personaId: candidate.personaId ?? undefined,
     teamId: candidate.teamId,
     teamMembers: candidate.teamMembers,
+    swarmId: candidate.swarmId,
+    swarmMemberCount: candidate.swarmMemberCount,
     kind: candidate.kind,
     displayName: label,
     avatarUrl:

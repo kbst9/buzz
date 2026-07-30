@@ -708,10 +708,18 @@ export function useMentionSendFlow({
           pendingImeta,
           spoileredAttachmentUrls,
         );
-        const outgoingTags = mergeOutgoingTags(
+        const baseOutgoingTags = mergeOutgoingTags(
           mediaTags,
           buildCustomEmojiTags(finalContent, customEmoji),
         );
+        // Swarm aliasing (§2.1): ["swarm", <id>] tags for swarm mentions in
+        // the text ride the merged outgoing tag set like imeta/emoji tags;
+        // splitOutgoingTags routes them to their validated send channel.
+        const swarmTags = mentions.extractSwarmMentionTags(trimmed);
+        const outgoingTags =
+          swarmTags.length > 0
+            ? [...(baseOutgoingTags ?? []), ...swarmTags]
+            : baseOutgoingTags;
         const nonMemberPubkeys = getNonMemberMentionPubkeys(pubkeys);
         let promptNonMemberPubkeys = nonMemberPubkeys.filter(
           (pubkey) =>
@@ -773,6 +781,7 @@ export function useMentionSendFlow({
       getNonMemberMentionPubkeys,
       getDmThreadAgentMentionError,
       mentions.extractMentionPubkeys,
+      mentions.extractSwarmMentionTags,
       mentions.isAgentPubkey,
       mentions.isManagedAgentPubkey,
       onPrepareSendChannel,

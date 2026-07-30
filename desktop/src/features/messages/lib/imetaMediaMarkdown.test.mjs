@@ -667,12 +667,26 @@ const MENTION_REF = [
   "1111111111111111111111111111111111111111111111111111111111111111",
 ];
 
-test("splitOutgoingTags: undefined input yields three empty arrays", () => {
+test("splitOutgoingTags: undefined input yields four empty arrays", () => {
   assert.deepEqual(splitOutgoingTags(undefined), {
     mediaTags: [],
     emojiTags: [],
     mentionTags: [],
+    swarmTags: [],
   });
+});
+
+test("splitOutgoingTags: routes swarm-aliasing tags to their own channel", () => {
+  const swarmTag = ["swarm", "swarm-42"];
+  const { mediaTags, emojiTags, mentionTags, swarmTags } = splitOutgoingTags([
+    IMETA,
+    swarmTag,
+    EMOJI_A,
+  ]);
+  assert.deepEqual(mediaTags, [IMETA]);
+  assert.deepEqual(emojiTags, [EMOJI_A]);
+  assert.deepEqual(mentionTags, []);
+  assert.deepEqual(swarmTags, [swarmTag]);
 });
 
 test("splitOutgoingTags: separates emoji tags from imeta tags", () => {

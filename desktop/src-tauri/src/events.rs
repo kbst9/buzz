@@ -93,6 +93,30 @@ fn mention_reference_tags(mentions: &[Vec<String>], tags: &mut Vec<Tag>) -> Resu
     Ok(())
 }
 
+/// Validate swarm-aliasing reference tags (docs/swarms.md §2.1) into
+/// `["swarm", <swarm-id>]` tags. Mirrors `mention_reference_tags`: any tag
+/// whose first element is not "swarm" is rejected so this channel cannot be
+/// used to smuggle forged "h", "e", or "p" tags.
+pub fn swarm_reference_tags(swarm_tags: &[Vec<String>]) -> Result<Vec<Tag>, String> {
+    let mut tags = Vec::with_capacity(swarm_tags.len());
+    for swarm_tag in swarm_tags {
+        if swarm_tag.first().map(String::as_str) != Some("swarm") {
+            return Err(format!(
+                "swarm tags must use 'swarm' prefix (got {:?})",
+                swarm_tag.first()
+            ));
+        }
+        let Some(swarm_id) = swarm_tag.get(1) else {
+            return Err("swarm tag missing swarm id".into());
+        };
+        if swarm_id.trim().is_empty() {
+            return Err("swarm tag id must not be empty".into());
+        }
+        tags.push(tag(vec!["swarm", swarm_id])?);
+    }
+    Ok(tags)
+}
+
 /// Validate and append imeta tags. Rejects any tag whose first element is not "imeta"
 /// to prevent injection of arbitrary tags (e.g., forged "h", "e", or "p" tags).
 fn imeta_tags(media_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), String> {
