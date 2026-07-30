@@ -27,6 +27,11 @@ export type MintedInvite = {
   url: string;
   maxUses: number | null;
   usesRemaining: number | null;
+  /**
+   * For agent-typed invites: the hex pubkey (the minter) every claimant is
+   * attributed to relay-side. `null` for plain member invites.
+   */
+  agentOwner: string | null;
 };
 
 export type JoinPolicy = {
@@ -190,15 +195,23 @@ export async function acceptJoinPolicy(
   return ((await response.json()) as { receipt: string }).receipt;
 }
 
-/** Mint an invite code on the active community's relay (owner/admin only). */
+/**
+ * Mint an invite code on the active community's relay (owner/admin only).
+ *
+ * `agent: true` mints an agent-typed invite: single-use, and the claiming
+ * keypair is attributed to the minter via `users.agent_owner_pubkey` at
+ * claim time — the invite-based standalone-agent provisioning path.
+ */
 export async function mintInvite(options?: {
   ttlSecs?: number;
   maxUses?: number | null;
+  agent?: boolean;
 }): Promise<MintedInvite> {
   const base = await getRelayHttpUrl();
   const payload: Record<string, unknown> = {};
   if (options?.ttlSecs != null) payload.ttl_secs = options.ttlSecs;
   if (options?.maxUses != null) payload.max_uses = options.maxUses;
+  if (options?.agent) payload.agent = true;
   const body = JSON.stringify(payload);
   const raw = await invitePost<{
     code: string;
@@ -206,6 +219,7 @@ export async function mintInvite(options?: {
     url: string;
     max_uses: number | null;
     uses_remaining: number | null;
+    agent_owner?: string | null;
   }>(base, "/api/invites", body);
   return {
     code: raw.code,
@@ -213,6 +227,7 @@ export async function mintInvite(options?: {
     url: raw.url,
     maxUses: raw.max_uses,
     usesRemaining: raw.uses_remaining,
+    agentOwner: raw.agent_owner ?? null,
   };
 }
 
