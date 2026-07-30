@@ -304,7 +304,11 @@ pub enum SwarmTurnMode {
 /// member roster, reporting policy. `mode` swaps only the lead framing:
 /// [`SwarmTurnMode::ReportReceived`] frames the turn as evaluating a member
 /// report and omits the assignment/reporting sentences.
-pub fn render_swarm_leader_section(swarm: &LeaderSwarm, mode: SwarmTurnMode) -> String {
+pub fn render_swarm_leader_section(
+    swarm: &LeaderSwarm,
+    mode: SwarmTurnMode,
+    unreachable: &[String],
+) -> String {
     let name = swarm
         .content
         .name
@@ -359,7 +363,8 @@ pub fn render_swarm_leader_section(swarm: &LeaderSwarm, mode: SwarmTurnMode) -> 
 
     out.push_str("\nSwarm members:\n");
     for member in swarm.content.members.iter().flatten() {
-        let meta = swarm.member_meta.get(&member.pubkey.to_lowercase());
+        let pubkey_lower = member.pubkey.to_lowercase();
+        let meta = swarm.member_meta.get(&pubkey_lower);
         let display = meta
             .and_then(|m| m.display_name.as_deref())
             .unwrap_or("unknown");
@@ -374,6 +379,12 @@ pub fn render_swarm_leader_section(swarm: &LeaderSwarm, mode: SwarmTurnMode) -> 
         }
         if let Some(about) = meta.and_then(|m| m.about.as_deref()) {
             out.push_str(&format!(" — bio: {about}"));
+        }
+        if unreachable.contains(&pubkey_lower) {
+            out.push_str(
+                " — NOT REACHABLE in this channel (the relay declined adding them); \
+                 do NOT assign this member here — say so if they were the best fit",
+            );
         }
         out.push('\n');
     }
@@ -522,7 +533,7 @@ mod tests {
             content,
             member_meta: meta,
         };
-        let section = render_swarm_leader_section(&swarm, SwarmTurnMode::Assigned);
+        let section = render_swarm_leader_section(&swarm, SwarmTurnMode::Assigned, &[]);
         assert!(section.starts_with("[Swarm Leader]"));
         assert!(section.contains("devswarm"));
         assert!(section.contains("exactly ONE member"));
@@ -546,7 +557,7 @@ mod tests {
             content,
             member_meta: HashMap::new(),
         };
-        let section = render_swarm_leader_section(&swarm, SwarmTurnMode::Assigned);
+        let section = render_swarm_leader_section(&swarm, SwarmTurnMode::Assigned, &[]);
         assert!(!section.contains("Reporting is ON"));
         assert!(!section.contains("Evaluation criteria"));
         assert!(section.contains("pubkey"));
@@ -561,7 +572,7 @@ mod tests {
             content: swarm_content(&leader, &member),
             member_meta: HashMap::new(),
         };
-        let section = render_swarm_leader_section(&swarm, SwarmTurnMode::ReportReceived);
+        let section = render_swarm_leader_section(&swarm, SwarmTurnMode::ReportReceived, &[]);
         assert!(section.starts_with("[Swarm Leader]"));
         assert!(section.contains("this is their report"));
         assert!(section.contains("Do NOT redo the work yourself."));
@@ -574,5 +585,23 @@ mod tests {
         assert!(!section.contains("exactly ONE member"));
         assert!(!section.contains("Reporting is ON"));
         assert!(!section.contains("end every assignment"));
+    }
+
+    #[test]
+    fn render_marks_unreachable_members() {
+        let leader = Keys::generate();
+        let member = Keys::generate();
+        let content = swarm_content(&leader, &member);
+        let swarm = LeaderSwarm {
+            id: "s-1".into(),
+            content,
+            member_meta: HashMap::new(),
+        };
+        let unreachable = vec![member.public_key().to_hex().to_lowercase()];
+        let section = render_swarm_leader_section(&swarm, SwarmTurnMode::Assigned, &unreachable);
+        assert!(section.contains("NOT REACHABLE in this channel"));
+
+        let clear = render_swarm_leader_section(&swarm, SwarmTurnMode::Assigned, &[]);
+        assert!(!clear.contains("NOT REACHABLE"));
     }
 }

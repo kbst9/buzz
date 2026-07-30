@@ -1942,7 +1942,7 @@ pub async fn run_prompt_task(
         // an assignment watch fired on a member report (docs/swarms.md §8):
         // no mention, no tag, only the consumed-once mark left by the watch
         // branch. Plain mentions stay plain.
-        let swarm_section: Option<String> = b.events.last().and_then(|last| {
+        let swarm_turn = b.events.last().and_then(|last| {
             let event = &last.event;
             let (swarm_id, mode) = match crate::swarm_fetch::event_swarm_tag(event) {
                 Some(id)
@@ -1963,10 +1963,34 @@ pub async fn run_prompt_task(
                 mode = ?mode,
                 "swarm-addressed turn — entering leader mode"
             );
-            Some(crate::swarm_fetch::render_swarm_leader_section(
-                &swarm, mode,
-            ))
+            Some((swarm, mode))
         });
+        let swarm_section: Option<String> = match swarm_turn {
+            Some((swarm, mode)) => {
+                // Swarm self-deployment (docs/swarms.md): on an ASSIGNED
+                // turn, members missing from this channel are added before
+                // the model runs, so the upcoming assignment mention is
+                // actually deliverable. Report turns need no deployment.
+                let unreachable = match mode {
+                    crate::swarm_fetch::SwarmTurnMode::Assigned => {
+                        crate::swarm_deploy::ensure_members_reachable(
+                            &ctx.rest_client,
+                            &ctx.agent_keys,
+                            b.channel_id,
+                            &swarm,
+                        )
+                        .await
+                    }
+                    crate::swarm_fetch::SwarmTurnMode::ReportReceived => Vec::new(),
+                };
+                Some(crate::swarm_fetch::render_swarm_leader_section(
+                    &swarm,
+                    mode,
+                    &unreachable,
+                ))
+            }
+            None => None,
+        };
 
         crate::queue::format_prompt(
             b,

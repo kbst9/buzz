@@ -11,6 +11,7 @@ mod pool_lifecycle;
 mod queue;
 mod relay;
 mod setup_mode;
+mod swarm_deploy;
 mod swarm_fetch;
 mod swarm_watch;
 mod usage;
