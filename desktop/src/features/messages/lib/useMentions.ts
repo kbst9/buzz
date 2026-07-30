@@ -19,6 +19,7 @@ import {
   isAgentIdentityInManagedList,
   shouldHideAgentFromMentions,
 } from "@/features/agents/lib/agentAutocompleteEligibility";
+import { useSwarmsQuery } from "@/features/agents/lib/swarmDefinition";
 import {
   useInfiniteUserSearchQuery,
   useUsersBatchQuery,
@@ -50,6 +51,10 @@ import {
   mentionCandidateLabel,
   mergeMentionCandidates,
 } from "./mentionCandidates";
+import {
+  buildSwarmMentionCandidates,
+  buildSwarmMentionTags,
+} from "./swarmMentionCandidates";
 const MENTION_DEBOUNCE_MS = 120;
 const MENTION_SUGGESTION_LIMIT = 50;
 export type PersonaMentionTarget = {
@@ -77,8 +82,10 @@ export function useMentions(
   selectedAgentMentionNamesRef.current = selectedAgentMentionNames;
   const mentionMapRef = React.useRef<Map<string, string>>(new Map());
   const personaMentionMapRef = React.useRef<Map<string, string>>(new Map());
+  // Swarm aliasing (§2.1): inserted swarm display name → swarm id. The
+  // leader pubkey rides mentionMapRef; this map only feeds the swarm tag.
+  const swarmMentionMapRef = React.useRef<Map<string, string>>(new Map());
   const previousSuggestionsRef = React.useRef<MentionSuggestion[]>([]);
-  void options?.channelType;
   const mentionSearchQuery = mentionQuery?.trim() ?? "";
   const canSearchGlobalPeople = mentionSearchQuery.length > 0;
   const identityQuery = useIdentityQuery();
@@ -93,6 +100,13 @@ export function useMentions(
   const channelsQuery = useChannelsQuery();
   const personasQuery = usePersonasQuery();
   const teamsQuery = useTeamsQuery();
+  // Swarm aliasing is offered only in channel composers (never DMs), so the
+  // owner-swarms fetch stays disabled everywhere else.
+  const swarmsQuery = useSwarmsQuery(
+    options?.channelType === "stream"
+      ? (currentPubkey ?? undefined)
+      : undefined,
+  );
   const managedAgentDirectoryReady =
     managedAgentsQuery.data !== undefined ||
     !managedAgentsQuery.isLoading ||
@@ -410,10 +424,43 @@ export function useMentions(
     relayAgentsQuery.data,
   ]);
 
+  // Swarm aliasing (§2.1): one candidate per owned swarm whose leader this
+  // channel can reach. Selecting one inserts the swarm name and routes the
+  // LEADER's p-tag through the ordinary mention map plus a ["swarm", id] tag.
+  const swarmMentionCandidates = React.useMemo(
+    () =>
+      buildSwarmMentionCandidates({
+        swarms: swarmsQuery.data ?? [],
+        channelType: options?.channelType ?? null,
+        currentPubkey,
+        directoryAgentsByPubkey,
+        memberPubkeys,
+        mentionableAgentPubkeys,
+        resolveLeaderLabel: (pubkey) =>
+          managedAgentNamesByPubkey.get(pubkey) ??
+          relayAgentNamesByPubkey.get(pubkey) ??
+          profiles?.[pubkey]?.displayName?.trim() ??
+          null,
+      }),
+    [
+      currentPubkey,
+      directoryAgentsByPubkey,
+      managedAgentNamesByPubkey,
+      memberPubkeys,
+      mentionableAgentPubkeys,
+      options?.channelType,
+      profiles,
+      relayAgentNamesByPubkey,
+      swarmsQuery.data,
+    ],
+  );
+
   // Agent classification for the send flow (`isAgentPubkey`, agent-mention
   // styling): the invocable set plus every agent candidate that survived the
   // mention gates. A non-owned member agent must classify as an agent when
   // its mention is sent, or the send flow would treat it as a human mention.
+  // Swarm leaders join the set so an aliased mention styles and routes as an
+  // agent mention even when the leader has no candidate row of its own.
   const knownAgentPubkeys = React.useMemo(() => {
     const pubkeys = new Set(mentionableAgentPubkeys);
     for (const candidate of mentionCandidates) {
@@ -421,10 +468,15 @@ export function useMentions(
         pubkeys.add(normalizePubkey(candidate.pubkey));
       }
     }
+    for (const candidate of swarmMentionCandidates) {
+      if (candidate.pubkey) {
+        pubkeys.add(normalizePubkey(candidate.pubkey));
+      }
+    }
     return pubkeys;
-  }, [mentionableAgentPubkeys, mentionCandidates]);
+  }, [mentionableAgentPubkeys, mentionCandidates, swarmMentionCandidates]);
 
-  const mentionCandidatesWithTeams = React.useMemo(
+  const mentionCandidatesWithGroups = React.useMemo(
     () => [
       ...mentionCandidates,
       ...buildTeamMentionCandidates(
@@ -432,8 +484,14 @@ export function useMentions(
         personasQuery.data ?? [],
         mentionCandidates,
       ),
+      ...swarmMentionCandidates,
     ],
-    [mentionCandidates, personasQuery.data, teamsQuery.data],
+    [
+      mentionCandidates,
+      personasQuery.data,
+      swarmMentionCandidates,
+      teamsQuery.data,
+    ],
   );
 
   const ownerPubkeys = React.useMemo(
@@ -454,7 +512,7 @@ export function useMentions(
     const names: string[] = [];
     const seen = new Set<string>();
 
-    for (const candidate of mentionCandidatesWithTeams) {
+    for (const candidate of mentionCandidatesWithGroups) {
       for (const name of [
         candidate.displayName,
         candidate.personaName,
@@ -469,7 +527,7 @@ export function useMentions(
     }
 
     return names;
-  }, [mentionCandidatesWithTeams]);
+  }, [mentionCandidatesWithGroups]);
 
   const highlightNames = React.useMemo<string[]>(() => {
     const names: string[] = [];
@@ -532,7 +590,7 @@ export function useMentions(
     }
 
     return rankMentionCandidates(
-      mentionCandidatesWithTeams,
+      mentionCandidatesWithGroups,
       mentionQuery,
       activePersonaIds,
     )
@@ -550,7 +608,7 @@ export function useMentions(
   }, [
     activePersonaIds,
     currentPubkey,
-    mentionCandidatesWithTeams,
+    mentionCandidatesWithGroups,
     mentionQuery,
     options?.channelType,
     ownerProfilesQuery.data?.profiles,
@@ -616,6 +674,7 @@ export function useMentions(
 
       const mentions = mentionMapRef.current;
       const personaMentions = personaMentionMapRef.current;
+      const swarmMentions = swarmMentionMapRef.current;
       const selectedMentions = teamMembers ?? [suggestion];
       for (const selected of selectedMentions) {
         if (selected.kind === "persona" && selected.personaId) {
@@ -624,6 +683,20 @@ export function useMentions(
         } else if (selected.pubkey) {
           mentions.set(selected.displayName, selected.pubkey);
           personaMentions.delete(selected.displayName);
+        }
+      }
+      // Swarm aliasing (§2.1): the leader's pubkey landed in the mention map
+      // above; remember the swarm id so the send adds the ["swarm", id] tag.
+      // Any other kind reclaiming the same display name clears a stale entry.
+      if (
+        suggestion.kind === "swarm" &&
+        suggestion.swarmId &&
+        suggestion.pubkey
+      ) {
+        swarmMentions.set(displayName, suggestion.swarmId);
+      } else {
+        for (const selected of selectedMentions) {
+          swarmMentions.delete(selected.displayName);
         }
       }
       setSelectedMentionNames((current) => {
@@ -657,6 +730,7 @@ export function useMentions(
       }
       trimMapToSize(mentions, 200);
       trimMapToSize(personaMentions, 200);
+      trimMapToSize(swarmMentions, 200);
       setMentionQuery(null);
       setMentionSelectedIndex(0);
 
@@ -681,6 +755,7 @@ export function useMentions(
 
       mentionMapRef.current.set(trimmedName, pubkey);
       personaMentionMapRef.current.delete(trimmedName);
+      swarmMentionMapRef.current.delete(trimmedName);
       trimMapToSize(mentionMapRef.current, 200);
 
       setSelectedMentionNames((current) =>
@@ -824,6 +899,14 @@ export function useMentions(
     [mentionCandidates],
   );
 
+  // The ["swarm", <id>] tags for swarm mentions still present in the text —
+  // the emission half of §2.1 (the leader's p-tag rides the mention map).
+  const extractSwarmMentionTags = React.useCallback(
+    (text: string): string[][] =>
+      buildSwarmMentionTags(text, swarmMentionMapRef.current),
+    [],
+  );
+
   const extractMentionPersonas = React.useCallback(
     (text: string): PersonaMentionTarget[] => {
       const targets: PersonaMentionTarget[] = [];
@@ -863,6 +946,7 @@ export function useMentions(
     cancelMentionAutocomplete();
     mentionMapRef.current.clear();
     personaMentionMapRef.current.clear();
+    swarmMentionMapRef.current.clear();
     selectedAgentMentionNamesRef.current = [];
     setSelectedMentionNames([]);
     setSelectedAgentMentionNames([]);
@@ -872,6 +956,7 @@ export function useMentions(
     useDraftMentionRouting({
       mentionMapRef,
       personaMentionMapRef,
+      swarmMentionMapRef,
       selectedAgentNamesRef: selectedAgentMentionNamesRef,
       cancelAutocomplete: cancelMentionAutocomplete,
       setSelectedNames: setSelectedMentionNames,
@@ -918,7 +1003,7 @@ export function useMentions(
             latestValueRef,
             latestCursorRef,
             searchableNamesLowerRef,
-            candidates: mentionCandidatesWithTeams,
+            candidates: mentionCandidatesWithGroups,
             activePersonaIds,
             channelType: options?.channelType,
             currentPubkey,
@@ -952,7 +1037,7 @@ export function useMentions(
       cancelMentionAutocomplete,
       currentPubkey,
       isMentionOpen,
-      mentionCandidatesWithTeams,
+      mentionCandidatesWithGroups,
       mentionSelectedIndex,
       options?.channelType,
       ownerProfilesQuery.data?.profiles,
@@ -966,6 +1051,7 @@ export function useMentions(
     clearMentions,
     extractMentionPersonas,
     extractMentionPubkeys,
+    extractSwarmMentionTags,
     getDraftMentionRefs,
     getMentionDisplayName,
     handleMentionKeyDown,

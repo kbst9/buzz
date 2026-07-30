@@ -11,6 +11,7 @@ mod pool_lifecycle;
 mod queue;
 mod relay;
 mod setup_mode;
+mod swarm_fetch;
 mod usage;
 
 pub use usage::TurnUsage;
@@ -1723,6 +1724,7 @@ async fn tokio_main() -> Result<()> {
         dedup_mode: config.dedup_mode,
         system_prompt: config.system_prompt.clone(),
         definition_prompt: Default::default(),
+        swarms: Default::default(),
         session_title: config.session_title.clone(),
         team_instructions: config.team_instructions.clone(),
         base_prompt: if config.no_base_prompt {

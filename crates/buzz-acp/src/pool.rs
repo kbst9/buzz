@@ -524,6 +524,8 @@ pub struct PromptContext {
     /// birth. Only consulted when `system_prompt` is `None` — a locally pinned
     /// prompt is authoritative. See `definition_fetch`.
     pub definition_prompt: crate::definition_fetch::DefinitionPromptCache,
+    /// Swarms this agent leads (kind:30178), for swarm-addressed turns.
+    pub swarms: crate::swarm_fetch::SwarmDirectoryCache,
     pub cwd: String,
     /// REST client for pre-prompt context fetches (thread/DM history).
     pub rest_client: RestClient,
@@ -1526,6 +1528,33 @@ pub async fn run_prompt_task(
             }
         }
     }
+    // Swarm directory refresh rides the same new-session seam as the
+    // definition fetch, but is NOT gated on a pinned system prompt —
+    // leading a swarm is orthogonal to how the agent's own prompt is
+    // sourced. Same fail-open discipline.
+    if let Some(owner_pk) = ctx.agent_owner_pubkey.as_ref() {
+        let is_new_session_turn = match &source {
+            PromptSource::Channel(cid) => !agent.state.sessions.contains_key(cid),
+            PromptSource::Heartbeat => agent.state.heartbeat_session.is_none(),
+        };
+        if is_new_session_turn {
+            const SWARM_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+            let agent_pubkey = ctx.agent_keys.public_key();
+            let refresh = ctx
+                .swarms
+                .refresh(&ctx.rest_client, &agent_pubkey, owner_pk);
+            if tokio::time::timeout(SWARM_FETCH_TIMEOUT, refresh)
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    target: "swarm::directory",
+                    "swarm fetch timed out — keeping cached directory"
+                );
+            }
+        }
+    }
+
     // The [System] content for this turn: locally pinned prompt first,
     // otherwise the owner-published definition (possibly refreshed above).
     let effective_system_prompt: Option<String> = ctx
@@ -1903,6 +1932,25 @@ pub async fn run_prompt_task(
             );
         }
 
+        // Swarm-addressed turn detection (docs/swarms.md): the triggering
+        // event must both p-tag this agent and carry a ["swarm", <id>] tag
+        // naming a swarm this agent leads. Plain mentions stay plain.
+        let swarm_section: Option<String> = b.events.last().and_then(|last| {
+            let event = &last.event;
+            let swarm_id = crate::swarm_fetch::event_swarm_tag(event)?;
+            if !crate::swarm_fetch::event_mentions(event, &ctx.agent_keys.public_key()) {
+                return None;
+            }
+            let swarm = ctx.swarms.get(&swarm_id)?;
+            tracing::info!(
+                target: "swarm::leader",
+                swarm = %swarm_id,
+                channel = %b.channel_id,
+                "swarm-addressed turn — entering leader mode"
+            );
+            Some(crate::swarm_fetch::render_swarm_leader_section(&swarm))
+        });
+
         crate::queue::format_prompt(
             b,
             &crate::queue::FormatPromptArgs {
@@ -1915,6 +1963,7 @@ pub async fn run_prompt_task(
                 system_prompt: effective_system_prompt.as_deref(),
                 team_instructions: ctx.team_instructions.as_deref(),
                 agent_canvas: agent_canvas.as_deref(),
+                swarm_context: swarm_section.as_deref(),
             },
         )
     } else {
@@ -5438,6 +5487,7 @@ mod tests {
             dedup_mode: DedupMode::Drop,
             system_prompt: None,
             definition_prompt: Default::default(),
+            swarms: Default::default(),
             session_title: None,
             team_instructions: None,
             heartbeat_prompt: None,

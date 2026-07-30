@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Bot, Users } from "lucide-react";
+import { Bot, Network, Users } from "lucide-react";
 import type { TeamMentionMember } from "@/features/messages/lib/mentionCandidates";
 
 import { Badge } from "@/shared/ui/badge";
@@ -18,7 +18,10 @@ export type MentionSuggestion = {
   personaId?: string;
   teamId?: string;
   teamMembers?: TeamMentionMember[];
-  kind?: "identity" | "persona" | "team";
+  /** Swarm aliasing (§2.1): set on `kind: "swarm"` rows; `pubkey` is the leader. */
+  swarmId?: string;
+  swarmMemberCount?: number;
+  kind?: "identity" | "persona" | "team" | "swarm";
   displayName: string;
   avatarUrl?: string | null;
   isAgent?: boolean;
@@ -95,7 +98,12 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
         style={POPOVER_SHADOW_STYLE}
       >
         {suggestions.map((suggestion, index) => {
+          // Swarm rows carry the LEADER's pubkey, which may also appear as
+          // its own identity row — key swarms by their definition id first.
           const suggestionKey =
+            (suggestion.kind === "swarm" && suggestion.swarmId
+              ? `swarm-${suggestion.swarmId}`
+              : null) ??
             suggestion.pubkey ??
             (suggestion.personaId ? `persona-${suggestion.personaId}` : null) ??
             (suggestion.teamId ? `team-${suggestion.teamId}` : null) ??
@@ -129,6 +137,14 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                 <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
                   <Users aria-hidden="true" className="h-4 w-4" />
                 </span>
+              ) : suggestion.kind === "swarm" ? (
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                  <Network
+                    aria-hidden="true"
+                    className="h-4 w-4"
+                    data-testid="mention-swarm-icon"
+                  />
+                </span>
               ) : (
                 <UserAvatar
                   avatarUrl={suggestion.avatarUrl ?? null}
@@ -161,6 +177,11 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                       <span className="inline-flex shrink-0 items-center gap-1">
                         <Users aria-hidden="true" className="h-3.5 w-3.5" />
                         team · {suggestion.teamMembers?.length ?? 0} agents
+                      </span>
+                    ) : suggestion.kind === "swarm" ? (
+                      <span className="inline-flex shrink-0 items-center gap-1">
+                        <Network aria-hidden="true" className="h-3.5 w-3.5" />
+                        swarm · {suggestion.swarmMemberCount ?? 0} agents
                       </span>
                     ) : suggestion.isAgent ? (
                       <span className="inline-flex shrink-0 items-center gap-1">

@@ -15,11 +15,14 @@ export type TeamMentionMember = {
 };
 
 export type MentionCandidate = {
-  kind: "identity" | "persona" | "team";
+  kind: "identity" | "persona" | "team" | "swarm";
   pubkey?: string;
   personaId?: string;
   teamId?: string;
   teamMembers?: TeamMentionMember[];
+  /** Swarm aliasing (§2.1): the definition id behind a `kind: "swarm"` row. */
+  swarmId?: string;
+  swarmMemberCount?: number;
   displayName: string | null;
   avatarUrl?: string | null;
   isMember: boolean;

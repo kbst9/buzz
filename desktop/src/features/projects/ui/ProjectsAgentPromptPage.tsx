@@ -20,6 +20,7 @@ import {
   getSharedChannelIds,
 } from "@/features/agents/lib/agentAutocompleteEligibility";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
+import { useVerifiedAgents } from "@/features/agents/lib/useVerifiedAgents";
 import { useChannelsQuery, useOpenDmMutation } from "@/features/channels/hooks";
 import {
   useChannelMessagesQuery,
@@ -32,12 +33,7 @@ import {
 } from "@/features/messages/lib/useRichTextEditor";
 import { FormattingToolbar } from "@/features/messages/ui/FormattingToolbar";
 import { usePresenceQuery } from "@/features/presence/hooks";
-import {
-  useFlattenedUserSearchResults,
-  useInfiniteUserSearchQuery,
-  useProfileQuery,
-  useUsersBatchQuery,
-} from "@/features/profile/hooks";
+import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
 import type { Project } from "@/features/projects/hooks";
 import {
   restoreProjectsAgentConversation,
@@ -137,12 +133,9 @@ function useAgentCandidates() {
   const relayAgentsQuery = useRelayAgentsQuery();
   const channelsQuery = useChannelsQuery();
   // Connected agents (verified auth tag, neither managed nor in the 10100
-  // directory) are enumerable only via the community user directory.
-  const directoryQuery = useInfiniteUserSearchQuery("", {
-    allowEmpty: true,
-    limit: 50,
-  });
-  const directoryUsers = useFlattenedUserSearchResults(directoryQuery.data);
+  // directory) are enumerable only via the community user directory — the
+  // shared verified-agent enumeration.
+  const { directoryUsers } = useVerifiedAgents();
   const connectedPubkeys = React.useMemo(
     () =>
       directoryUsers

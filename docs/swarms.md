@@ -24,10 +24,17 @@ upstream PR later. Teams stays exactly as it is.
 
 ## 2. Simplicity keystones (the load-bearing decisions)
 
-1. **The leader IS the swarm's address.** No virtual identities, no new
-   dispatch: "@Leader" fires the leader's turn via the existing mention
-   machinery, and its harness detects it leads a swarm. A leader is
-   swarm-dedicated by convention (any direct mention activates leader mode).
+1. **The swarm is addressed by mention aliasing — no new identity.**
+   "@devswarm" is a first-class mention-autocomplete candidate; selecting it
+   emits the *leader's* p-tag plus a `["swarm", "<swarm-id>"]` tag on the
+   message (and "@devswarm" as the visible text). The leader's harness
+   enters leader mode only when its own mention arrives WITH a swarm tag
+   naming a definition it leads; a plain "@Leader" mention stays ordinary
+   agent behavior. This kills three birds: swarms initiate from channels,
+   no keypair/custody/presence questions ever arise, and leaders no longer
+   need to be swarm-dedicated. (Clients without swarm awareness can still
+   address a swarm by mentioning the leader and adding the tag — or just
+   talk to the leader directly.)
 2. **Members are completely swarm-unaware.** No member-side harness or
    schema changes. Delegation is a normal in-thread mention from the leader
    (fires the member's turn today); report-back is a *sentence in the
@@ -36,9 +43,12 @@ upstream PR later. Teams stays exactly as it is.
    carry only an `e` tag — no auto p-tag of the parent author
    (`crates/buzz-sdk/src/builders.rs:734`) — so nothing re-fires without an
    explicit mention.
-3. **One new event kind, zero relay changes.** The swarm definition is an
+3. **One new event kind, one relay match-arm.** The swarm definition is an
    owner-signed parameterized-replaceable event, published and fetched
-   exactly like the 30177 agent definition.
+   exactly like the 30177 agent definition. The relay's ingest scope map
+   rejects unknown kinds, so 30178 is registered there with the same
+   UsersWrite shape as its NIP-AP siblings (see §7 P1.5 for the
+   deployment consequence).
 4. **v1 constraints:** same-owner members only (the sibling rule admits the
    leader through every member's respond gate automatically); model names in
    the roster are best-effort (see §5 gap); cross-owner swarms are a later
@@ -164,11 +174,21 @@ Plus-card at the end of the grid opens the create dialog.
 
 - **P1 — schema:** `buzz-core` kind + registry; `buzz-sdk` builders/parse
   with Option discipline. Unit tests: round-trip, unknown-field
-  preservation, absent-field never-wipe.
+  preservation, absent-field never-wipe. **Done** (`feat/swarms`).
+- **P1.5 — relay acceptance (discovered while landing):** the ingest scope
+  map REJECTS unknown kinds (`handlers/ingest.rs::required_scope_for_kind`),
+  so 30178 needed explicit acceptance (UsersWrite + h-tag immunity, same as
+  persona/team/managed-agent). **Done** (`f1b3fe24`). **Deployment
+  consequence:** the production relay runs the pinned upstream image —
+  swarm publishes bounce with "unknown kind" until the relay runs a build
+  containing this arm. Options: build + pin a fork relay image on the prod
+  host, or upstream this one-liner and wait for the next official image.
+  Owner's call; nothing else in the feature is blocked by it (everything
+  ships dormant).
 - **P2 — harness:** fetch + trigger predicate + assembly in `buzz-acp`
   (mirrors the 30177 fetch seams). Tests: no-swarm no-op; injection only on
   direct mention; assembly order; report-back sentence toggled by
-  `report_back`.
+  `report_back`. **Done** (`feat/swarms`; 1,158 crate tests green).
 - **P3 — desktop:** section + dialog + publish path + tests as above.
 - **P4 — verify on the reference deployment:** define a swarm over two
   gradient agents, mention the leader in a channel, watch: leader assigns
@@ -191,12 +211,12 @@ with no restarts anywhere.
 
 ## 9. Open questions (non-blocking)
 
-- Swarm display identity: v1 renders the leader's avatar for the swarm; if
-  "@Swarm" should ever feel like its own entity, that's a schema-level
-  decision (dedicated keypair vs. leader aliasing) to take before v2.
-- Should the leader's *assignment* messages carry a machine-readable tag
-  (e.g. `["swarm", <id>]`) for future UI (swarm activity view)? Cheap to
-  add at P2 time; invisible otherwise.
+- ~~Swarm display identity~~ **Resolved (Kevin, 2026-07-29): swarms are
+  addressable via mention aliasing (§2.1)** — "@devswarm" initiates from
+  any channel the leader can hear; no dedicated identity.
+- The `["swarm", <id>]` tag now exists on *initiating* messages by design;
+  whether the leader's assignment replies should also carry it (swarm
+  activity view) stays open — cheap to add later.
 - CLI surface (`buzz swarms get/set`) — follows the AGENTS.md rule
   (agent-facing ops live in buzz-cli); natural P5 if operators want to
   define swarms from the box.

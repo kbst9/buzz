@@ -3,7 +3,7 @@
 //! key for them; everything here is owner-signed and rides the same
 //! retention flush pipe as managed-agent events.
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 
 use crate::{
     app_state::AppState,
@@ -11,6 +11,7 @@ use crate::{
         load_managed_agents, managed_agents_base_dir, reconcile::retain_connected_agent_definition,
         retention::open_retention_db,
     },
+    relay::{submit_event, SubmitEventResponse},
 };
 
 /// Publish (or update) a connected agent's owner-authored kind:30177
@@ -73,4 +74,23 @@ pub async fn set_connected_agent_instructions(
     })
     .await
     .map_err(|e| format!("spawn_blocking failed: {e}"))?
+}
+
+/// Publish (or update) an owner-authored kind:30178 SWARM definition — the
+/// save path behind the Swarms section's create/edit dialog.
+///
+/// `content_json` is the serialized swarm content (buzz-sdk `SwarmContent`
+/// field names); `swarm_id` is the stable d-tag. The event is signed with
+/// the active identity and submitted through the shared relay submit path,
+/// so the leader's harness picks the definition up at its next session —
+/// no agent participation needed, works while the leader is offline.
+#[tauri::command]
+pub async fn publish_swarm_definition(
+    swarm_id: String,
+    content_json: String,
+    state: State<'_, AppState>,
+) -> Result<SubmitEventResponse, String> {
+    let content = buzz_sdk_pkg::swarm::parse_swarm_content(&content_json)?;
+    let builder = buzz_sdk_pkg::swarm::build_swarm_definition(swarm_id.trim(), &content)?;
+    submit_event(builder, &state).await
 }

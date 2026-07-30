@@ -11,6 +11,8 @@ import {
 export function useDraftMentionRouting(params: {
   mentionMapRef: React.MutableRefObject<Map<string, string>>;
   personaMentionMapRef: React.MutableRefObject<Map<string, string>>;
+  /** Swarm display name → swarm id (§2.1); snapshotted alongside pubkeys. */
+  swarmMentionMapRef: React.MutableRefObject<Map<string, string>>;
   selectedAgentNamesRef: React.MutableRefObject<string[]>;
   cancelAutocomplete: () => void;
   setSelectedNames: (names: string[]) => void;
@@ -25,8 +27,13 @@ export function useDraftMentionRouting(params: {
         content,
         params.mentionMapRef.current,
         params.selectedAgentNamesRef.current,
+        params.swarmMentionMapRef.current,
       ),
-    [params.mentionMapRef, params.selectedAgentNamesRef],
+    [
+      params.mentionMapRef,
+      params.selectedAgentNamesRef,
+      params.swarmMentionMapRef,
+    ],
   );
   const restoreDraftMentionRefs = React.useCallback(
     (refs: readonly DraftMentionRef[]) => {
@@ -35,6 +42,7 @@ export function useDraftMentionRouting(params: {
         refs,
         params.mentionMapRef.current,
         params.personaMentionMapRef.current,
+        params.swarmMentionMapRef.current,
       );
       trimMapToSize(params.mentionMapRef.current, 200);
       params.selectedAgentNamesRef.current = agentNames;
