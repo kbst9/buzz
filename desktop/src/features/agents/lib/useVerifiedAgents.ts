@@ -58,6 +58,14 @@ export type UseVerifiedAgentsResult = {
   managedPubkeys: ReadonlySet<string>;
 };
 
+/**
+ * Upper bound on auto-fetched directory pages (pages × limit rows). Agents
+ * sort among ALL community rows, so a single page silently truncates any
+ * agent past the first 50 — communities with accumulated identities lost
+ * later-alphabet agents from every picker fed by this hook.
+ */
+const MAX_DIRECTORY_PAGES = 10;
+
 export function useVerifiedAgents(
   options?: UseVerifiedAgentsOptions,
 ): UseVerifiedAgentsResult {
@@ -67,6 +75,16 @@ export function useVerifiedAgents(
     limit: VERIFIED_AGENT_DIRECTORY_LIMIT,
   });
   const directoryUsers = useFlattenedUserSearchResults(directoryQuery.data);
+
+  // Exhaust the directory (bounded) instead of stopping at page one — the
+  // enumeration is only correct once every community row has been seen.
+  const { fetchNextPage, hasNextPage, isFetchingNextPage } = directoryQuery;
+  const pageCount = directoryQuery.data?.pages.length ?? 0;
+  React.useEffect(() => {
+    if (hasNextPage && !isFetchingNextPage && pageCount < MAX_DIRECTORY_PAGES) {
+      void fetchNextPage();
+    }
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage, pageCount]);
   const managedAgentsQuery = useManagedAgentsQuery();
 
   const managedPubkeys = React.useMemo(

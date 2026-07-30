@@ -252,3 +252,58 @@ test("swarmDisplayName prefers the stored name, falls back to {Leader}'s swarm",
   assert.equal(swarmDisplayName("Build crew", "Beeatrice"), "Build crew");
   assert.equal(swarmDisplayName("   ", "Beeatrice"), "Beeatrice's swarm");
 });
+
+test("combineSwarmAgentOptions: same-owner duplicate names collapse, managed preferred", () => {
+  const OWNER = "f".repeat(64);
+  const options = combineSwarmAgentOptions(
+    [{ pubkey: "1".repeat(64), name: "Fizz", avatarUrl: "managed.png" }],
+    [
+      {
+        pubkey: "2".repeat(64),
+        displayName: "Fizz",
+        nip05Handle: null,
+        avatarUrl: "old-fizz.png",
+        ownerPubkey: OWNER,
+      },
+      {
+        pubkey: "3".repeat(64),
+        displayName: "Bumble",
+        nip05Handle: null,
+        avatarUrl: null,
+        ownerPubkey: OWNER,
+      },
+    ],
+    { currentPubkey: OWNER },
+  );
+
+  const labels = options.map((option) => option.label);
+  assert.deepEqual(labels, ["Bumble", "Fizz"]);
+  const fizz = options.find((option) => option.label === "Fizz");
+  assert.equal(fizz.pubkey, "1".repeat(64), "managed instance wins");
+  assert.equal(fizz.avatarUrl, "managed.png");
+});
+
+test("combineSwarmAgentOptions: cross-owner same names stay separate", () => {
+  const options = combineSwarmAgentOptions(
+    [],
+    [
+      {
+        pubkey: "4".repeat(64),
+        displayName: "Hermes",
+        nip05Handle: null,
+        avatarUrl: null,
+        ownerPubkey: "a".repeat(64),
+      },
+      {
+        pubkey: "5".repeat(64),
+        displayName: "Hermes",
+        nip05Handle: null,
+        avatarUrl: null,
+        ownerPubkey: "b".repeat(64),
+      },
+    ],
+    { currentPubkey: "a".repeat(64) },
+  );
+
+  assert.equal(options.length, 2);
+});

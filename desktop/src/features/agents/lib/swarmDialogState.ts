@@ -5,6 +5,7 @@
  * the pubkey normalizer so node tests can exercise everything directly.
  */
 
+import { coalesceAgentAutocompleteCandidates } from "@/features/agents/lib/agentAutocompleteEligibility";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 import type { SwarmMemberDefinition } from "./swarmDefinitionContent";
 
@@ -35,28 +36,47 @@ type VerifiedAgentLike = {
   displayName: string | null;
   nip05Handle: string | null;
   avatarUrl: string | null;
+  ownerPubkey?: string | null;
 };
 
 /**
  * Merge managed and verified (connected) agents into one dropdown option
  * list — any agent is eligible as leader or member. Deduped by normalized
- * pubkey; the managed record's name wins for identities present in both.
+ * pubkey (the managed record wins for identities present in both), then
+ * identity-coalesced: same-owner duplicates sharing a display name collapse
+ * to one option, preferring the managed instance — the same rule the DM and
+ * member pickers apply (same-owner same-name agent fleets are proven live).
+ * Cross-owner agents that merely share a name stay separate options.
  * Sorted by label for a stable dropdown order.
  */
 export function combineSwarmAgentOptions(
   managedAgents: readonly ManagedAgentLike[],
   verifiedAgents: readonly VerifiedAgentLike[],
+  options?: { currentPubkey?: string | null },
 ): SwarmAgentOption[] {
-  const byPubkey = new Map<string, SwarmAgentOption>();
+  type Candidate = SwarmAgentOption & {
+    displayName: string;
+    ownerPubkey: string | null;
+    isAgent: true;
+    isManagedAgent: boolean;
+  };
+
+  const currentPubkey = options?.currentPubkey ?? null;
+  const byPubkey = new Map<string, Candidate>();
   for (const agent of managedAgents) {
     const pubkey = normalizePubkey(agent.pubkey);
     if (!pubkey || byPubkey.has(pubkey)) {
       continue;
     }
+    const label = agent.name.trim() || truncatePubkey(pubkey);
     byPubkey.set(pubkey, {
       pubkey,
-      label: agent.name.trim() || truncatePubkey(pubkey),
+      label,
       avatarUrl: agent.avatarUrl,
+      displayName: label,
+      ownerPubkey: currentPubkey ? normalizePubkey(currentPubkey) : null,
+      isAgent: true,
+      isManagedAgent: true,
     });
   }
   for (const agent of verifiedAgents) {
@@ -64,18 +84,34 @@ export function combineSwarmAgentOptions(
     if (!pubkey || byPubkey.has(pubkey)) {
       continue;
     }
+    const label =
+      agent.displayName?.trim() ||
+      agent.nip05Handle?.trim() ||
+      truncatePubkey(pubkey);
     byPubkey.set(pubkey, {
       pubkey,
-      label:
-        agent.displayName?.trim() ||
-        agent.nip05Handle?.trim() ||
-        truncatePubkey(pubkey),
+      label,
       avatarUrl: agent.avatarUrl,
+      displayName: label,
+      ownerPubkey: agent.ownerPubkey
+        ? normalizePubkey(agent.ownerPubkey)
+        : null,
+      isAgent: true,
+      isManagedAgent: false,
     });
   }
-  return [...byPubkey.values()].sort((left, right) =>
-    left.label.localeCompare(right.label),
+
+  const coalesced = coalesceAgentAutocompleteCandidates(
+    [...byPubkey.values()],
+    {
+      currentPubkey,
+      getLabel: (candidate) => candidate.displayName,
+    },
   );
+
+  return coalesced
+    .map(({ pubkey, label, avatarUrl }) => ({ pubkey, label, avatarUrl }))
+    .sort((left, right) => left.label.localeCompare(right.label));
 }
 
 /**

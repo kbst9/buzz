@@ -117,8 +117,9 @@ export function SwarmDialog({
       combineSwarmAgentOptions(
         managedAgentsQuery.data ?? [],
         verifiedAgents.agents,
+        { currentPubkey: me },
       ),
-    [managedAgentsQuery.data, verifiedAgents.agents],
+    [managedAgentsQuery.data, me, verifiedAgents.agents],
   );
   const leaderOption = agentOptions.find(
     (option) => option.pubkey === leaderPubkey,
