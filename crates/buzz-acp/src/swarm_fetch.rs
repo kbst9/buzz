@@ -18,7 +18,7 @@ use std::sync::RwLock;
 
 use buzz_core::kind::KIND_SWARM;
 use buzz_sdk::swarm::{parse_swarm_content, SwarmContent, SWARM_TAG};
-use nostr::{Alphabet, Event, PublicKey, SingleLetterTag};
+use nostr::{Event, PublicKey};
 
 use crate::relay::RestClient;
 
@@ -273,7 +273,7 @@ async fn fetch_member_meta(
                 .filter(|a| !a.is_empty()),
         };
         let key = event.pubkey.to_hex();
-        let ts = event.created_at.as_u64();
+        let ts = event.created_at.as_secs();
         match newest.get(&key) {
             Some((existing_ts, _)) if *existing_ts >= ts => {}
             _ => {
@@ -287,12 +287,24 @@ async fn fetch_member_meta(
         .collect()
 }
 
+/// How a swarm-leader turn was triggered — picks the section framing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwarmTurnMode {
+    /// The triggering event addressed the swarm (mention + swarm tag).
+    Assigned,
+    /// An assignment watch fired: a member reported back in a supervised
+    /// thread (docs/swarms.md §8).
+    ReportReceived,
+}
+
 /// Render the `[Swarm Leader]` section for a swarm-addressed turn.
 ///
 /// Assembly order inside the section (high → low priority, per
 /// docs/swarms.md §4): built-in leader template, owner instructions,
-/// member roster, reporting policy.
-pub fn render_swarm_leader_section(swarm: &LeaderSwarm) -> String {
+/// member roster, reporting policy. `mode` swaps only the lead framing:
+/// [`SwarmTurnMode::ReportReceived`] frames the turn as evaluating a member
+/// report and omits the assignment/reporting sentences.
+pub fn render_swarm_leader_section(swarm: &LeaderSwarm, mode: SwarmTurnMode) -> String {
     let name = swarm
         .content
         .name
@@ -304,21 +316,34 @@ pub fn render_swarm_leader_section(swarm: &LeaderSwarm) -> String {
 
     let mut out = String::new();
     out.push_str("[Swarm Leader]\n");
-    out.push_str(&format!(
-        "This message addresses the swarm \"{name}\", which you lead. Your job is to \
-         attribute the task to exactly ONE member below by @-mentioning them in a reply \
-         in this thread — NEVER do the work yourself. Restate the task crisply for the \
-         member you pick. If a member already answered in this thread, evaluate or \
-         reassign with feedback instead of redoing the work.\n"
-    ));
-    if report_back {
-        out.push_str(
-            "Reporting is ON: end every assignment by instructing the member to reply in \
-             this thread and @-mention you when the work is complete. When a member reports \
-             back, evaluate the result against the evaluation criteria below, then either \
-             confirm completion to the original requester or reassign with concrete \
-             feedback.\n",
-        );
+    match mode {
+        SwarmTurnMode::Assigned => {
+            out.push_str(&format!(
+                "This message addresses the swarm \"{name}\", which you lead. Your job is to \
+                 attribute the task to exactly ONE member below by @-mentioning them in a reply \
+                 in this thread — NEVER do the work yourself. Restate the task crisply for the \
+                 member you pick. If a member already answered in this thread, evaluate or \
+                 reassign with feedback instead of redoing the work.\n"
+            ));
+            if report_back {
+                out.push_str(
+                    "Reporting is ON: end every assignment by requiring the member to reply IN \
+                     THIS THREAD when the work is complete — their reply is picked up \
+                     automatically; do NOT ask them to mention you. When a member reports back, \
+                     evaluate the result against the evaluation criteria below, then either \
+                     confirm completion to the original requester or reassign with concrete \
+                     feedback.\n",
+                );
+            }
+        }
+        SwarmTurnMode::ReportReceived => {
+            out.push_str(
+                "A member you assigned in this thread has replied — this is their report. \
+                 Evaluate it against the evaluation criteria below, then either confirm \
+                 completion to the original requester or reassign to a member with concrete \
+                 feedback. Do NOT redo the work yourself.\n",
+            );
+        }
     }
     if let Some(instructions) = swarm
         .content
@@ -497,7 +522,7 @@ mod tests {
             content,
             member_meta: meta,
         };
-        let section = render_swarm_leader_section(&swarm);
+        let section = render_swarm_leader_section(&swarm, SwarmTurnMode::Assigned);
         assert!(section.starts_with("[Swarm Leader]"));
         assert!(section.contains("devswarm"));
         assert!(section.contains("exactly ONE member"));
@@ -521,9 +546,33 @@ mod tests {
             content,
             member_meta: HashMap::new(),
         };
-        let section = render_swarm_leader_section(&swarm);
+        let section = render_swarm_leader_section(&swarm, SwarmTurnMode::Assigned);
         assert!(!section.contains("Reporting is ON"));
         assert!(!section.contains("Evaluation criteria"));
         assert!(section.contains("pubkey"));
+    }
+
+    #[test]
+    fn render_report_received_frames_evaluation_not_assignment() {
+        let leader = Keys::generate();
+        let member = Keys::generate();
+        let swarm = LeaderSwarm {
+            id: "s-1".into(),
+            content: swarm_content(&leader, &member),
+            member_meta: HashMap::new(),
+        };
+        let section = render_swarm_leader_section(&swarm, SwarmTurnMode::ReportReceived);
+        assert!(section.starts_with("[Swarm Leader]"));
+        assert!(section.contains("this is their report"));
+        assert!(section.contains("Do NOT redo the work yourself."));
+        // Criteria + roster + owner instructions ride along unchanged.
+        assert!(section.contains("Evaluation criteria:"));
+        assert!(section.contains("Tests pass."));
+        assert!(section.contains("Swarm members:"));
+        assert!(section.contains("Small diffs only."));
+        // The assignment/reporting sentences are Assigned-mode only.
+        assert!(!section.contains("exactly ONE member"));
+        assert!(!section.contains("Reporting is ON"));
+        assert!(!section.contains("end every assignment"));
     }
 }
