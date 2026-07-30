@@ -20,6 +20,7 @@ import {
   memberRowsFromDefinition,
   removeMemberRow,
   rowsToMembers,
+  type SwarmAgentOption,
   type SwarmMemberRow,
   updateMemberRow,
   validateSwarmDraft,
@@ -40,6 +41,24 @@ import { Switch } from "@/shared/ui/switch";
 import { Textarea } from "@/shared/ui/textarea";
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey } from "@/shared/lib/pubkey";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
+
+/** Dropdown option with the agent's avatar beside its name. */
+function agentDropdownOption(option: SwarmAgentOption) {
+  return {
+    label: (
+      <span className="flex min-w-0 items-center gap-2">
+        <UserAvatar
+          avatarUrl={option.avatarUrl ?? null}
+          className="h-5 w-5 shrink-0"
+          displayName={option.label}
+        />
+        <span className="truncate">{option.label}</span>
+      </span>
+    ),
+    value: option.pubkey,
+  };
+}
 
 export type SwarmDialogState =
   | { mode: "create" }
@@ -251,17 +270,29 @@ export function SwarmDialog({
             <AgentDropdownSelect
               ariaRequired
               disabled={isSaving}
-              emptyOptionsLabel="No agents available"
+              emptyOptionsLabel={
+                verifiedAgents.directoryQuery.isLoading
+                  ? "Loading community agents…"
+                  : verifiedAgents.directoryQuery.isError
+                    ? "Couldn't load community agents"
+                    : "No agents available"
+              }
               id="swarm-leader"
               onValueChange={handleLeaderChange}
-              options={agentOptions.map((option) => ({
-                label: option.label,
-                value: option.pubkey,
-              }))}
+              options={agentOptions.map(agentDropdownOption)}
               placeholder="Select leader"
               testId="swarm-leader"
               value={leaderPubkey}
             />
+            {verifiedAgents.directoryQuery.isError ? (
+              // The dropdown silently degrading to managed-only is
+              // indistinguishable from "no connected agents exist" — name
+              // the failure so it can be reported and retried.
+              <p className="text-xs text-destructive">
+                Couldn't load the community agent directory — only local agents
+                are listed. Reopen the dialog to retry.
+              </p>
+            ) : null}
           </div>
           <div className="space-y-1.5">
             <label
@@ -411,46 +442,23 @@ function SwarmMemberRowFields({
   onDescriptionChange: (description: string) => void;
   onPubkeyChange: (pubkey: string) => void;
   onRemove: () => void;
-  options: { pubkey: string; label: string }[];
+  options: readonly SwarmAgentOption[];
   row: SwarmMemberRow;
   warning: string | null;
 }) {
   return (
     <div data-testid={`swarm-member-row-${row.key}`}>
       <div className="flex items-center gap-2">
-        <div className="w-56 shrink-0">
+        <div className="min-w-0 flex-1">
           <AgentDropdownSelect
             disabled={disabled}
             emptyOptionsLabel="No agents left to add"
             id={`swarm-member-${row.key}-agent`}
             onValueChange={onPubkeyChange}
-            options={options.map((option) => ({
-              label: option.label,
-              value: option.pubkey,
-            }))}
+            options={options.map(agentDropdownOption)}
             placeholder="Select agent"
             testId={`swarm-member-${row.key}-agent`}
             value={row.pubkey}
-          />
-        </div>
-        <div
-          className={cn(
-            "flex min-h-9 flex-1 items-center px-3",
-            PERSONA_FIELD_SHELL_CLASS,
-          )}
-        >
-          <Input
-            aria-label="Member task description"
-            autoCorrect="off"
-            className={cn(
-              "h-8 px-0 py-0 leading-6",
-              PERSONA_FIELD_CONTROL_CLASS,
-            )}
-            data-testid={`swarm-member-${row.key}-description`}
-            disabled={disabled}
-            onChange={(event) => onDescriptionChange(event.target.value)}
-            placeholder={MEMBER_DESCRIPTION_PLACEHOLDER}
-            value={row.description}
           />
         </div>
         <button
@@ -463,6 +471,21 @@ function SwarmMemberRowFields({
         >
           <X className="h-4 w-4" />
         </button>
+      </div>
+      <div className={cn("mt-2 px-3 py-2", PERSONA_FIELD_SHELL_CLASS)}>
+        <Textarea
+          aria-label="Member task description"
+          className={cn(
+            "min-h-16 resize-none px-0 py-0",
+            PERSONA_FIELD_CONTROL_CLASS,
+          )}
+          data-testid={`swarm-member-${row.key}-description`}
+          disabled={disabled}
+          onChange={(event) => onDescriptionChange(event.target.value)}
+          placeholder={MEMBER_DESCRIPTION_PLACEHOLDER}
+          rows={3}
+          value={row.description}
+        />
       </div>
       {warning ? (
         <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
