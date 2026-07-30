@@ -942,6 +942,7 @@ async fn publish_relay_observer_event(
 /// Maximum age (seconds) for an observer control frame to be considered fresh.
 const OBSERVER_CONTROL_FRESHNESS_SECS: i64 = 300;
 
+#[allow(clippy::too_many_arguments)]
 fn handle_relay_observer_control_event(
     keys: &nostr::Keys,
     event: nostr::Event,

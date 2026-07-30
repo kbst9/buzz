@@ -379,7 +379,9 @@ mod tests {
             &agent.public_key(),
             Some(&current),
             &overlay(None, None, Some("https://x.example/a.png")),
-            AgentOwnership::AuthTag { fallback: Some(&auth) },
+            AgentOwnership::AuthTag {
+                fallback: Some(&auth),
+            },
         )
         .expect("merge");
 
@@ -413,7 +415,9 @@ mod tests {
             &agent.public_key(),
             Some(&current),
             &ProfileOverlay::default(),
-            AgentOwnership::AuthTag { fallback: Some(&fallback) },
+            AgentOwnership::AuthTag {
+                fallback: Some(&fallback),
+            },
         )
         .expect("merge");
 
@@ -439,7 +443,9 @@ mod tests {
             &agent.public_key(),
             Some(&current),
             &ProfileOverlay::default(),
-            AgentOwnership::AuthTag { fallback: Some(&fallback) },
+            AgentOwnership::AuthTag {
+                fallback: Some(&fallback),
+            },
         )
         .expect("merge");
 
@@ -500,7 +506,10 @@ mod tests {
             Some("Hermes")
         );
         assert!(
-            !merged.tags.iter().any(|tag| tag.first().map(String::as_str) == Some("auth")),
+            !merged
+                .tags
+                .iter()
+                .any(|tag| tag.first().map(String::as_str) == Some("auth")),
             "no auth tag must be fabricated"
         );
     }
@@ -539,7 +548,9 @@ mod tests {
             &agent.public_key(),
             None,
             &overlay(Some("Hermes"), Some("chatty"), None),
-            AgentOwnership::AuthTag { fallback: Some(&fallback) },
+            AgentOwnership::AuthTag {
+                fallback: Some(&fallback),
+            },
         )
         .expect("merge");
         let value = content_value(&merged);
@@ -595,7 +606,7 @@ mod tests {
                 fallback: Some(&fallback),
             },
         )
-            .expect("merge");
+        .expect("merge");
         assert!(first.changed);
 
         let published = CurrentProfile {
@@ -606,7 +617,9 @@ mod tests {
             &agent.public_key(),
             Some(&published),
             &overlay,
-            AgentOwnership::AuthTag { fallback: Some(&fallback) },
+            AgentOwnership::AuthTag {
+                fallback: Some(&fallback),
+            },
         )
         .expect("merge");
         assert!(
@@ -654,7 +667,9 @@ mod tests {
             &agent.public_key(),
             Some(&current),
             &overlay(Some("Hermes"), None, None),
-            AgentOwnership::AuthTag { fallback: Some(&auth) },
+            AgentOwnership::AuthTag {
+                fallback: Some(&auth),
+            },
         )
         .expect("merge");
         let value = content_value(&merged);
@@ -670,7 +685,9 @@ mod tests {
             &agent.public_key(),
             None,
             &overlay(Some("Hermes"), None, None),
-            AgentOwnership::AuthTag { fallback: Some(&auth) },
+            AgentOwnership::AuthTag {
+                fallback: Some(&auth),
+            },
         )
         .expect("merge");
 
