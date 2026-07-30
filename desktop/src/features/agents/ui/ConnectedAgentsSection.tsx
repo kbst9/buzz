@@ -3,17 +3,13 @@ import * as React from "react";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 
-import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import {
   selectConnectedAgents,
   synthesizeConnectedAgentRecord,
 } from "@/features/agents/lib/connectedAgentRecords";
+import { useVerifiedAgents } from "@/features/agents/lib/useVerifiedAgents";
 import { usePresenceQuery } from "@/features/presence/hooks";
-import {
-  useFlattenedUserSearchResults,
-  useInfiniteUserSearchQuery,
-  useUsersBatchQuery,
-} from "@/features/profile/hooks";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { ManagedAgent, UserSearchResult } from "@/shared/api/types";
 import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
@@ -47,23 +43,10 @@ export function ConnectedAgentsSection() {
   const { goSettings } = useAppNavigation();
   const identityQuery = useIdentityQuery();
   const me = identityQuery.data?.pubkey ?? null;
-  const managedAgentsQuery = useManagedAgentsQuery();
-  const directoryQuery = useInfiniteUserSearchQuery("", {
-    allowEmpty: true,
-    limit: 50,
-  });
-  const directoryUsers = useFlattenedUserSearchResults(directoryQuery.data);
+  // Shared verified-agent enumeration; `selectConnectedAgents` keeps this
+  // section's own filter/sort over the raw directory rows.
+  const { directoryUsers, managedPubkeys } = useVerifiedAgents();
   const [isCollapsed, setIsCollapsed] = React.useState(false);
-
-  const managedPubkeys = React.useMemo(
-    () =>
-      new Set(
-        (managedAgentsQuery.data ?? []).map((agent) =>
-          normalizePubkey(agent.pubkey),
-        ),
-      ),
-    [managedAgentsQuery.data],
-  );
 
   const connectedAgents = React.useMemo(
     () => selectConnectedAgents(directoryUsers, managedPubkeys, me),

@@ -1,18 +1,14 @@
 import { Cable, Pencil, Plus } from "lucide-react";
 import * as React from "react";
 
-import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import { buildAddAgentInstructions } from "@/features/agents/lib/connectedAgentInstructions";
+import { useVerifiedAgents } from "@/features/agents/lib/useVerifiedAgents";
 import {
   ConnectedAgentEditDialog,
   CopyableInstructions,
 } from "@/features/agents/ui/ConnectedAgentEditDialog";
 import { usePresenceQuery } from "@/features/presence/hooks";
-import {
-  useFlattenedUserSearchResults,
-  useInfiniteUserSearchQuery,
-  useUsersBatchQuery,
-} from "@/features/profile/hooks";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { UserSearchResult } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
@@ -43,36 +39,15 @@ export function ConnectedAgentsSettingsCard({
 }) {
   const identityQuery = useIdentityQuery();
   const me = currentPubkey ?? identityQuery.data?.pubkey;
-  const managedAgentsQuery = useManagedAgentsQuery();
-  const directoryQuery = useInfiniteUserSearchQuery("", {
-    allowEmpty: true,
-    limit: 50,
+  // Shared verified-agent enumeration; managed identities stay under the
+  // Agents tab instead of being re-offered as connected here.
+  const { agents: verifiedAgents, directoryQuery } = useVerifiedAgents({
+    excludeManaged: true,
   });
-  const directoryUsers = useFlattenedUserSearchResults(directoryQuery.data);
-
-  const managedPubkeys = React.useMemo(
-    () =>
-      new Set(
-        (managedAgentsQuery.data ?? []).map((agent) =>
-          normalizePubkey(agent.pubkey),
-        ),
-      ),
-    [managedAgentsQuery.data],
-  );
 
   const connectedAgents = React.useMemo(() => {
-    const seen = new Set<string>();
-    const agents: UserSearchResult[] = [];
-    for (const user of directoryUsers) {
-      const pubkey = normalizePubkey(user.pubkey);
-      if (!user.isAgent || managedPubkeys.has(pubkey) || seen.has(pubkey)) {
-        continue;
-      }
-      seen.add(pubkey);
-      agents.push(user);
-    }
     const mine = me ? normalizePubkey(me) : null;
-    return agents.sort((left, right) => {
+    return [...verifiedAgents].sort((left, right) => {
       const leftMine =
         mine && left.ownerPubkey && normalizePubkey(left.ownerPubkey) === mine;
       const rightMine =
@@ -84,7 +59,7 @@ export function ConnectedAgentsSettingsCard({
       }
       return agentLabel(left).localeCompare(agentLabel(right));
     });
-  }, [directoryUsers, managedPubkeys, me]);
+  }, [me, verifiedAgents]);
 
   const agentPubkeys = React.useMemo(
     () => connectedAgents.map((agent) => agent.pubkey),
