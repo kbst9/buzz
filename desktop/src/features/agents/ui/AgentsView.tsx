@@ -19,6 +19,7 @@ import { TeamSnapshotImportDialog } from "./TeamSnapshotImportDialog";
 import { TeamShareDialog } from "./TeamShareDialog";
 import { SecretRevealDialog } from "./SecretRevealDialog";
 import { TeamDeleteDialog } from "./TeamDeleteDialog";
+import { SwarmsSection } from "./SwarmsSection";
 import { TeamDialog } from "./TeamDialog";
 import { TeamsSection } from "./TeamsSection";
 import {
@@ -236,6 +237,8 @@ export function AgentsView() {
               personas={personas.libraryPersonas}
               teams={teamActions.teams}
             />
+
+            <SwarmsSection />
           </div>
         </div>
       </div>
