@@ -736,9 +736,6 @@ export function ChannelScreen({
   }, [
     isFilesPanelOpen,
     setOpenThreadHeadId,
-    setExpandedThreadReplyIds,
-    setThreadScrollTargetId,
-    setThreadReplyTargetId,
     handleCloseAgentSession,
     setProfilePanelPubkey,
     setChannelManagementOpen,
