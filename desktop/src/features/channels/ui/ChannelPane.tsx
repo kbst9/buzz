@@ -29,6 +29,7 @@ import { useComposerHeightPadding } from "@/features/messages/ui/useComposerHeig
 import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
 import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
+import { ChannelFilesAuxiliaryPanel } from "@/features/files/ui/ChannelFilesAuxiliaryPanel";
 import { ChannelManagementAuxiliaryPanel } from "@/features/channels/ui/ChannelManagementAuxiliaryPanel";
 import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
 import { ThreadViewModeToggle } from "@/features/channels/ui/ThreadViewModeToggle";
@@ -80,6 +81,8 @@ export const ChannelPane = React.memo(function ChannelPane({
   channelManagementOpen = false,
   currentPubkey,
   editTarget = null,
+  filesPanelOpen = false,
+  onCloseFilesPanel,
   fetchOlder,
   header,
   hasOlderMessages,
@@ -543,6 +546,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   const hasSplitAuxiliaryPane =
     useSplitAuxiliaryPane &&
     (channelManagementOpen ||
+      filesPanelOpen ||
       Boolean(threadHeadMessage) ||
       shouldShowThreadSkeleton ||
       Boolean(activeChannel && selectedAgent) ||
@@ -836,6 +840,19 @@ export const ChannelPane = React.memo(function ChannelPane({
             key="channel-management-panel"
             onChannelManagementDeleted={onChannelManagementDeleted}
             onCloseChannelManagement={onCloseChannelManagement}
+            onResetThreadPanelWidth={onResetThreadPanelWidth}
+            onThreadPanelResizeStart={onThreadPanelResizeStart}
+            threadPanelWidthPx={threadPanelWidthPx}
+            useSplitAuxiliaryPane={useSplitAuxiliaryPane}
+            transparentChrome={hasSplitAuxiliaryPane}
+          />
+        ) : filesPanelOpen && activeChannel ? (
+          <ChannelFilesAuxiliaryPanel
+            activeChannel={activeChannel}
+            canResetThreadPanelWidth={canResetThreadPanelWidth}
+            isSinglePanelView={isSinglePanelView}
+            key="channel-files-panel"
+            onCloseFilesPanel={onCloseFilesPanel}
             onResetThreadPanelWidth={onResetThreadPanelWidth}
             onThreadPanelResizeStart={onThreadPanelResizeStart}
             threadPanelWidthPx={threadPanelWidthPx}

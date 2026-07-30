@@ -37,6 +37,8 @@ export type ChannelPaneProps = {
   channelFind: ReturnType<typeof useChannelFind>;
   channelManagementOpen?: boolean;
   currentPubkey?: string;
+  filesPanelOpen?: boolean;
+  onCloseFilesPanel?: () => void;
   editTarget?: {
     author: string;
     body: string;
