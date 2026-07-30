@@ -526,6 +526,10 @@ pub struct PromptContext {
     pub definition_prompt: crate::definition_fetch::DefinitionPromptCache,
     /// Swarms this agent leads (kind:30178), for swarm-addressed turns.
     pub swarms: crate::swarm_fetch::SwarmDirectoryCache,
+    /// Fired assignment-watch marks (docs/swarms.md §8): event id → swarm id,
+    /// consumed once so a watch-fired member report renders the
+    /// REPORT-RECEIVED leader section despite carrying no swarm tag.
+    pub swarm_watch_marks: crate::swarm_watch::WatchFiredMarks,
     pub cwd: String,
     /// REST client for pre-prompt context fetches (thread/DM history).
     pub rest_client: RestClient,
@@ -1932,23 +1936,36 @@ pub async fn run_prompt_task(
             );
         }
 
-        // Swarm-addressed turn detection (docs/swarms.md): the triggering
-        // event must both p-tag this agent and carry a ["swarm", <id>] tag
-        // naming a swarm this agent leads. Plain mentions stay plain.
+        // Swarm-addressed turn detection (docs/swarms.md): tag path — the
+        // triggering event both p-tags this agent and carries a
+        // ["swarm", <id>] tag naming a swarm this agent leads. Watch path —
+        // an assignment watch fired on a member report (docs/swarms.md §8):
+        // no mention, no tag, only the consumed-once mark left by the watch
+        // branch. Plain mentions stay plain.
         let swarm_section: Option<String> = b.events.last().and_then(|last| {
             let event = &last.event;
-            let swarm_id = crate::swarm_fetch::event_swarm_tag(event)?;
-            if !crate::swarm_fetch::event_mentions(event, &ctx.agent_keys.public_key()) {
-                return None;
-            }
+            let (swarm_id, mode) = match crate::swarm_fetch::event_swarm_tag(event) {
+                Some(id)
+                    if crate::swarm_fetch::event_mentions(event, &ctx.agent_keys.public_key()) =>
+                {
+                    (id, crate::swarm_fetch::SwarmTurnMode::Assigned)
+                }
+                _ => {
+                    let id = ctx.swarm_watch_marks.take(&event.id.to_hex())?;
+                    (id, crate::swarm_fetch::SwarmTurnMode::ReportReceived)
+                }
+            };
             let swarm = ctx.swarms.get(&swarm_id)?;
             tracing::info!(
                 target: "swarm::leader",
                 swarm = %swarm_id,
                 channel = %b.channel_id,
+                mode = ?mode,
                 "swarm-addressed turn — entering leader mode"
             );
-            Some(crate::swarm_fetch::render_swarm_leader_section(&swarm))
+            Some(crate::swarm_fetch::render_swarm_leader_section(
+                &swarm, mode,
+            ))
         });
 
         crate::queue::format_prompt(
@@ -5488,6 +5505,7 @@ mod tests {
             system_prompt: None,
             definition_prompt: Default::default(),
             swarms: Default::default(),
+            swarm_watch_marks: Default::default(),
             session_title: None,
             team_instructions: None,
             heartbeat_prompt: None,

@@ -12,6 +12,7 @@ mod queue;
 mod relay;
 mod setup_mode;
 mod swarm_fetch;
+mod swarm_watch;
 mod usage;
 
 pub use usage::TurnUsage;
@@ -1547,6 +1548,10 @@ async fn tokio_main() -> Result<()> {
     let mut relay_observer_control_rx = None;
     let mut relay_observer_publisher_task = None;
     let mut relay_observer_publisher = None;
+    // Swarm assignment watches (docs/swarms.md §8): watched-thread events
+    // arrive on a dedicated channel, bypassing the mention filter for
+    // exactly the threads with an open watch.
+    let mut swarm_watch_rx = relay.take_swarm_watch_rx();
     // Owner CONTROL reception (cancel/switch/set_profile) is not telemetry:
     // it is subscribed whenever an owner is resolved, independent of the
     // --relay-observer flag. The flag gates only the outbound frame
@@ -1715,6 +1720,11 @@ async fn tokio_main() -> Result<()> {
     }
 
     let base_prompt_content = config.base_prompt_content.take();
+    // Assignment watches (docs/swarms.md §8): the registry is loop-owned
+    // state; the fired-watch marks cross into the prompt path via the ctx so
+    // a watch-fired member report renders the REPORT-RECEIVED leader section.
+    let swarm_watch_marks = crate::swarm_watch::WatchFiredMarks::default();
+    let mut swarm_watches = crate::swarm_watch::WatchRegistry::default();
     let ctx = Arc::new(PromptContext {
         mcp_servers: build_mcp_servers(&config),
         initial_message: config.initial_message.clone(),
@@ -1725,6 +1735,7 @@ async fn tokio_main() -> Result<()> {
         system_prompt: config.system_prompt.clone(),
         definition_prompt: Default::default(),
         swarms: Default::default(),
+        swarm_watch_marks: swarm_watch_marks.clone(),
         session_title: config.session_title.clone(),
         team_instructions: config.team_instructions.clone(),
         base_prompt: if config.no_base_prompt {
@@ -1792,6 +1803,13 @@ async fn tokio_main() -> Result<()> {
     };
     let mut typing_channels: HashMap<Uuid, ThreadTags> = HashMap::new();
     let mut presence_task: Option<tokio::task::JoinHandle<()>> = None;
+
+    // Swarm assignment-watch expiry sweep (docs/swarms.md §8): unanswered
+    // watches time out after WATCH_TTL. v1 logs and closes — no nudge turn.
+    let mut swarm_watch_expiry = {
+        let interval = Duration::from_secs(60);
+        tokio::time::interval_at(tokio::time::Instant::now() + interval, interval)
+    };
 
     // Runs at the TOP of every loop iteration via Instant check — cannot be
     // starved by the biased select. Slot refill spawns background tasks so
@@ -2092,6 +2110,43 @@ async fn tokio_main() -> Result<()> {
                     }
                     None
                 }
+                watch_event = async {
+                    match swarm_watch_rx.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    let _ = result_rx;
+                    match watch_event {
+                        Some(watched) => {
+                            // Fire step (docs/swarms.md §8): a member report in
+                            // a supervised thread queues an evaluation turn.
+                            let queued = handle_swarm_watch_report(
+                                &mut relay,
+                                &mut swarm_watches,
+                                &mut queue,
+                                &ctx,
+                                &config,
+                                &owner_cache,
+                                &pubkey_hex,
+                                watched,
+                            )
+                            .await;
+                            if queued && pool_ready {
+                                for (channel_id, thread_tags) in
+                                    dispatch_pending(&mut pool, &mut queue, &ctx)
+                                {
+                                    typing_channels.insert(channel_id, thread_tags);
+                                }
+                            }
+                        }
+                        None => {
+                            swarm_watch_rx = None;
+                            tracing::warn!("swarm watch channel closed");
+                        }
+                    }
+                    None
+                }
                 // Remaining branches don't touch pool — evaluated when pool is idle.
                 buzz_event = relay.next_event() => {
                     let _ = result_rx; // end split borrow before relay handling
@@ -2216,6 +2271,13 @@ async fn tokio_main() -> Result<()> {
                             }
 
                             if config.ignore_self && buzz_event.event.pubkey.to_hex() == pubkey_hex {
+                                // Assignment-watch arm hook (docs/swarms.md §8):
+                                // a self-authored assignment into a swarm-tagged
+                                // thread arms a live watch on that thread before
+                                // the event is dropped below.
+                                if ctx.swarms.leads_any() {
+                                    maybe_arm_swarm_watch(&mut relay, &mut swarm_watches, &ctx, &buzz_event).await;
+                                }
                                 tracing::debug!(channel_id = %buzz_event.channel_id, "dropping self-authored event");
                                 continue;
                             }
@@ -2458,6 +2520,18 @@ async fn tokio_main() -> Result<()> {
                         }
                         None => {
                             tracing::warn!("relay event stream ended — requesting reconnect");
+                            // Watch subscriptions are live-only and died with
+                            // the socket (docs/swarms.md §8) — drop the armed
+                            // watches now rather than letting the expiry sweep
+                            // mis-report them half an hour later.
+                            let dropped = swarm_watches.drain_all();
+                            if !dropped.is_empty() {
+                                tracing::warn!(
+                                    target: "swarm::watch",
+                                    count = dropped.len(),
+                                    "dropping assignment watches — relay connection lost"
+                                );
+                            }
                             if let Err(e) = relay.reconnect().await {
                                 tracing::error!("relay background task is gone: {e} — exiting");
                                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -2530,6 +2604,28 @@ async fn tokio_main() -> Result<()> {
                                 tracing::debug!("typing indicator dropped for {ch}: {e}");
                             }
                         }
+                    }
+                    None
+                }
+                _ = swarm_watch_expiry.tick() => {
+                    let _ = result_rx;
+                    if swarm_watches.is_empty() {
+                        continue;
+                    }
+                    for expired in swarm_watches.expire(std::time::Instant::now()) {
+                        let sub_id = crate::swarm_watch::watch_sub_id(
+                            expired.channel_id,
+                            &expired.thread_root,
+                        );
+                        if let Err(e) = relay.close_swarm_watch(&sub_id).await {
+                            tracing::debug!("failed to close expired swarm watch: {e}");
+                        }
+                        tracing::warn!(
+                            target: "swarm::watch",
+                            swarm = %expired.swarm_id,
+                            thread = %expired.thread_root,
+                            "assignment watch expired without a report"
+                        );
                     }
                     None
                 }
@@ -2937,6 +3033,209 @@ fn is_owner_control_command(
     kind_u32 == KIND_STREAM_MESSAGE
         && event.content.trim() == command
         && event_mentions_agent(event, agent_pubkey_hex)
+}
+
+// ── swarm assignment watches ──────────────────────────────────────────────────
+
+/// Fetch a single event by id (hex) with a short timeout.
+///
+/// Fail-open helper for the assignment-watch arm hook: any miss (bad id,
+/// relay error, timeout, empty result) returns `None` and the caller skips
+/// arming.
+async fn fetch_event_by_id(
+    rest_client: &relay::RestClient,
+    event_id_hex: &str,
+) -> Option<nostr::Event> {
+    let event_id = match nostr::EventId::from_hex(event_id_hex) {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::debug!("invalid thread root event id {event_id_hex}: {e}");
+            return None;
+        }
+    };
+    let filter = nostr::Filter::new().id(event_id).limit(1);
+    let value =
+        match tokio::time::timeout(Duration::from_secs(2), rest_client.query(&[filter])).await {
+            Ok(Ok(value)) => value,
+            Ok(Err(e)) => {
+                tracing::debug!("thread root fetch failed for {event_id_hex}: {e}");
+                return None;
+            }
+            Err(_) => {
+                tracing::debug!("thread root fetch timed out for {event_id_hex}");
+                return None;
+            }
+        };
+    value
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|ev| serde_json::from_value::<nostr::Event>(ev.clone()).ok())
+}
+
+/// Arm (or extend) a swarm assignment watch for a self-authored message
+/// (docs/swarms.md §8 — the arm step).
+///
+/// All predicates are mechanical: the message must reply into a thread whose
+/// ROOT carries a `["swarm", <id>]` tag naming a swarm this agent leads with
+/// `report_back: true`, and it must p-tag at least one member of that swarm.
+/// Every failure path is fail-open (debug-log + skip): a missed watch only
+/// means report-back falls back to the member mentioning the leader.
+async fn maybe_arm_swarm_watch(
+    relay: &mut HarnessRelay,
+    swarm_watches: &mut crate::swarm_watch::WatchRegistry,
+    ctx: &PromptContext,
+    buzz_event: &relay::BuzzEvent,
+) {
+    use crate::swarm_watch::{watch_sub_id, ArmOutcome, AssignmentWatch};
+
+    // An assignment is always a reply — a message with no thread root
+    // cannot be one.
+    let Some(root_hex) = crate::queue::parse_thread_tags(&buzz_event.event).root_event_id else {
+        return;
+    };
+
+    // Same-thread re-assignment merges into the open watch (no new REQ);
+    // a fresh thread resolves its swarm id from the ROOT event's tag (the
+    // root is the client-built @swarm message, so the tag is mechanical).
+    let (swarm_id, already_watched) = match swarm_watches.for_thread(&root_hex) {
+        Some(watch) => (watch.swarm_id.clone(), true),
+        None => {
+            let Some(root_event) = fetch_event_by_id(&ctx.rest_client, &root_hex).await else {
+                tracing::debug!(
+                    thread = %root_hex,
+                    "thread root unavailable — not arming a watch"
+                );
+                return;
+            };
+            match crate::swarm_fetch::event_swarm_tag(&root_event) {
+                Some(id) => (id, false),
+                None => return, // ordinary thread — arms nothing
+            }
+        }
+    };
+    let Some(swarm) = ctx.swarms.get(&swarm_id) else {
+        return; // swarm deleted (or no longer led) since the thread started
+    };
+    let members = crate::swarm_watch::assignment_members(&buzz_event.event, &swarm);
+    if members.is_empty() {
+        return; // reporting off, or no member p-tagged
+    }
+    let member_count = members.len();
+    if !already_watched {
+        if let Err(e) = relay
+            .subscribe_swarm_watch(buzz_event.channel_id, &root_hex)
+            .await
+        {
+            tracing::warn!(
+                target: "swarm::watch",
+                thread = %root_hex,
+                "failed to queue swarm watch subscription: {e}"
+            );
+            return;
+        }
+    }
+    if let ArmOutcome::ArmedEvictingOldest(old) = swarm_watches.arm(AssignmentWatch {
+        thread_root: root_hex.clone(),
+        channel_id: buzz_event.channel_id,
+        swarm_id: swarm_id.clone(),
+        members,
+        armed_at: std::time::Instant::now(),
+    }) {
+        tracing::warn!(
+            target: "swarm::watch",
+            thread = %old.thread_root,
+            "watch cap reached — evicted oldest assignment watch"
+        );
+        let old_sub = watch_sub_id(old.channel_id, &old.thread_root);
+        if let Err(e) = relay.close_swarm_watch(&old_sub).await {
+            tracing::debug!("failed to close evicted swarm watch: {e}");
+        }
+    }
+    tracing::info!(
+        target: "swarm::watch",
+        swarm = %swarm_id,
+        thread = %root_hex,
+        members = member_count,
+        active = swarm_watches.len(),
+        "assignment watch armed"
+    );
+}
+
+/// Route one watched-thread event (docs/swarms.md §8 — the fire step).
+///
+/// A member report queues an evaluation turn through the ordinary queue (its
+/// event-id dedup absorbs the double delivery when a well-behaved member also
+/// mentioned the leader) and closes the watch. Returns `true` when a report
+/// was queued, so the caller can nudge dispatch.
+#[allow(clippy::too_many_arguments)]
+async fn handle_swarm_watch_report(
+    relay: &mut HarnessRelay,
+    swarm_watches: &mut crate::swarm_watch::WatchRegistry,
+    queue: &mut EventQueue,
+    ctx: &PromptContext,
+    config: &Config,
+    owner_cache: &OwnerCache,
+    pubkey_hex: &str,
+    watched: relay::BuzzEvent,
+) -> bool {
+    // The watch REQ is scoped to `#e:[root]`, so the root resolved from the
+    // event's own thread tags is the watch lookup key.
+    let Some(root_hex) = crate::queue::parse_thread_tags(&watched.event).root_event_id else {
+        tracing::debug!("watched event carries no thread root — dropping");
+        return false;
+    };
+    let Some(watch) = swarm_watches.for_thread(&root_hex) else {
+        tracing::debug!(thread = %root_hex, "watched event has no open watch — dropping");
+        return false;
+    };
+    if !crate::swarm_watch::is_member_report(&watched.event, watch, pubkey_hex) {
+        tracing::debug!(thread = %root_hex, "watched event is not a member report — dropping");
+        return false;
+    }
+    // Same inbound author gate as the normal event path — same-owner members
+    // pass as siblings. Watched threads live in channels, never DMs.
+    let author = watched.event.pubkey.to_hex();
+    let allowed = author_allowed(
+        &config.respond_to,
+        &config.respond_to_allowlist,
+        &author,
+        /* is_dm */ false,
+        owner_cache,
+        &ctx.rest_client,
+    )
+    .await;
+    if !allowed {
+        tracing::debug!(
+            thread = %root_hex,
+            author = %author,
+            mode = %config.respond_to,
+            "member report rejected by inbound author gate — dropping"
+        );
+        return false;
+    }
+    let swarm_id = watch.swarm_id.clone();
+    ctx.swarm_watch_marks
+        .mark(watched.event.id.to_hex(), swarm_id.clone());
+    queue.push(QueuedEvent {
+        channel_id: watched.channel_id,
+        event: watched.event,
+        received_at: std::time::Instant::now(),
+        prompt_tag: "swarm-report".into(),
+    });
+    // Report received — the watch's job is done.
+    if let Some(closed) = swarm_watches.close(&root_hex) {
+        let sub_id = crate::swarm_watch::watch_sub_id(closed.channel_id, &closed.thread_root);
+        if let Err(e) = relay.close_swarm_watch(&sub_id).await {
+            tracing::debug!("failed to close fired swarm watch: {e}");
+        }
+    }
+    tracing::info!(
+        target: "swarm::watch",
+        swarm = %swarm_id,
+        thread = %root_hex,
+        "member report received — evaluation turn queued"
+    );
+    true
 }
 
 // ── signal_in_flight_task ─────────────────────────────────────────────────────

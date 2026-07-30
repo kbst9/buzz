@@ -115,7 +115,7 @@ use std::time::Instant;
 
 use buzz_core::kind::{
     KIND_AGENT_OBSERVER_FRAME, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
-    KIND_TYPING_INDICATOR,
+    KIND_STREAM_MESSAGE, KIND_TYPING_INDICATOR,
 };
 use futures_util::{SinkExt, StreamExt};
 use nostr::{Event, EventBuilder, Keys, Kind, RelayUrl, Tag};
@@ -516,6 +516,13 @@ enum RelayCommand {
     SubscribeMembership,
     /// Subscribe to encrypted observer control frames addressed to this agent.
     SubscribeObserverControls,
+    /// Open a live swarm assignment watch on one thread (docs/swarms.md §8).
+    SubscribeSwarmWatch {
+        channel_id: Uuid,
+        thread_root_hex: String,
+    },
+    /// Close a swarm assignment watch subscription (sends a NIP-01 CLOSE).
+    CloseSwarmWatch { sub_id: String },
     /// Publish a signed event to the relay (for typing indicators, etc.).
     PublishEvent { event: Box<Event> },
     /// Floor `since` for membership notification replay; events before startup are never re-delivered.
@@ -536,6 +543,8 @@ pub struct HarnessRelay {
     event_rx: mpsc::Receiver<Option<BuzzEvent>>,
     /// Receiver for encrypted observer control events addressed to this agent.
     observer_control_rx: Option<mpsc::Receiver<Event>>,
+    /// Receiver for swarm assignment-watch events (docs/swarms.md §8).
+    swarm_watch_rx: Option<mpsc::Receiver<BuzzEvent>>,
     /// Sender for commands to the background task.
     cmd_tx: mpsc::Sender<RelayCommand>,
     /// HTTP client for HTTP bridge calls.
@@ -610,6 +619,7 @@ impl HarnessRelay {
         let (event_tx, event_rx) = mpsc::channel::<Option<BuzzEvent>>(event_channel_capacity());
         let (observer_control_tx, observer_control_rx) =
             mpsc::channel::<Event>(event_channel_capacity());
+        let (swarm_watch_tx, swarm_watch_rx) = mpsc::channel::<BuzzEvent>(event_channel_capacity());
         let (cmd_tx, cmd_rx) = mpsc::channel::<RelayCommand>(CMD_CHANNEL_CAPACITY);
 
         let bg_keys = keys.clone();
@@ -623,6 +633,7 @@ impl HarnessRelay {
                 handshake_buffer,
                 event_tx,
                 observer_control_tx,
+                swarm_watch_tx,
                 cmd_rx,
                 bg_keys,
                 bg_relay_url,
@@ -635,6 +646,7 @@ impl HarnessRelay {
         Ok(Self {
             event_rx,
             observer_control_rx: Some(observer_control_rx),
+            swarm_watch_rx: Some(swarm_watch_rx),
             cmd_tx,
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(10))
@@ -785,6 +797,46 @@ impl HarnessRelay {
     /// Take the observer-control receiver for polling outside this relay object.
     pub fn take_observer_control_rx(&mut self) -> Option<mpsc::Receiver<Event>> {
         self.observer_control_rx.take()
+    }
+
+    /// Take the swarm-watch receiver for polling outside this relay object.
+    pub fn take_swarm_watch_rx(&mut self) -> Option<mpsc::Receiver<BuzzEvent>> {
+        self.swarm_watch_rx.take()
+    }
+
+    /// Open a live assignment watch on one thread: kind:9 replies referencing
+    /// `thread_root_hex`, from now on. Returns the watch subscription id.
+    ///
+    /// Watch subscriptions are live-only by design (docs/swarms.md §8): they
+    /// are never recorded for resubscribe-on-reconnect and die with the
+    /// connection.
+    pub async fn subscribe_swarm_watch(
+        &mut self,
+        channel_id: Uuid,
+        thread_root_hex: &str,
+    ) -> Result<String, RelayError> {
+        let sub_id = crate::swarm_watch::watch_sub_id(channel_id, thread_root_hex);
+        self.cmd_tx
+            .send(RelayCommand::SubscribeSwarmWatch {
+                channel_id,
+                thread_root_hex: thread_root_hex.to_string(),
+            })
+            .await
+            .map_err(|_| RelayError::ConnectionClosed)?;
+        debug!("queued swarm watch subscribe {sub_id}");
+        Ok(sub_id)
+    }
+
+    /// Close a swarm assignment watch subscription.
+    pub async fn close_swarm_watch(&mut self, sub_id: &str) -> Result<(), RelayError> {
+        self.cmd_tx
+            .send(RelayCommand::CloseSwarmWatch {
+                sub_id: sub_id.to_string(),
+            })
+            .await
+            .map_err(|_| RelayError::ConnectionClosed)?;
+        debug!("queued swarm watch close {sub_id}");
+        Ok(())
     }
 
     /// Return a cloneable publisher handle for signed relay events.
@@ -1271,6 +1323,9 @@ fn apply_command_to_state(state: &mut BgState, cmd: RelayCommand) {
         RelayCommand::SubscribeObserverControls => {
             state.observer_control_sub_active = true;
         }
+        // Swarm watches are live-only (docs/swarms.md §8): no intent survives
+        // a disconnect, so nothing is recorded while the socket is down.
+        RelayCommand::SubscribeSwarmWatch { .. } | RelayCommand::CloseSwarmWatch { .. } => {}
         RelayCommand::SetStartupWatermark { ts } => {
             state.startup_watermark = Some(ts);
             if state.membership_last_seen.is_none() {
@@ -1465,6 +1520,30 @@ async fn execute_connected_command(
                 false
             }
         }
+        RelayCommand::SubscribeSwarmWatch {
+            channel_id,
+            thread_root_hex,
+        } => {
+            // Watch subs are live-only (docs/swarms.md §8): never recorded in
+            // active_subscriptions (that map drives resubscribe-on-reconnect),
+            // so a rate-gated REQ is dropped rather than deferred — the
+            // harness registry's expiry sweep reclaims the armed watch.
+            if state.check_rate_gate().is_some() {
+                warn!("rate-gated: dropping swarm watch REQ for thread {thread_root_hex}");
+                return true;
+            }
+            send_swarm_watch_subscribe(ws, channel_id, &thread_root_hex).await
+        }
+        RelayCommand::CloseSwarmWatch { sub_id } => {
+            let msg = json!(["CLOSE", sub_id]);
+            if let Ok(text) = serde_json::to_string(&msg) {
+                // Best-effort CLOSE — watch lifecycle lives in the harness
+                // registry, and an unclosed live sub dies with the connection.
+                let _ = ws_send_timeout(ws, Message::Text(text.into()), WS_SEND_TIMEOUT_SECS).await;
+            }
+            debug!("closed swarm watch subscription {sub_id}");
+            true
+        }
         RelayCommand::PublishEvent { event } => {
             // Observer telemetry frames (kind 24200) are durable telemetry, not
             // droppable ephemera: park them while the rate-limit gate is armed —
@@ -1536,6 +1615,7 @@ async fn run_background_task(
     initial_handshake_buffer: std::collections::VecDeque<RelayMessage>,
     event_tx: mpsc::Sender<Option<BuzzEvent>>,
     observer_control_tx: mpsc::Sender<Event>,
+    swarm_watch_tx: mpsc::Sender<BuzzEvent>,
     mut cmd_rx: mpsc::Receiver<RelayCommand>,
     keys: Keys,
     relay_url: String,
@@ -1549,6 +1629,7 @@ async fn run_background_task(
         initial_handshake_buffer,
         &event_tx,
         &observer_control_tx,
+        &swarm_watch_tx,
         &mut state,
         &keys,
         &relay_url,
@@ -1570,6 +1651,7 @@ async fn run_background_task(
             &agent_pubkey_hex,
             &event_tx,
             &observer_control_tx,
+            &swarm_watch_tx,
             auth_tag.as_ref(),
         )
         .await
@@ -1594,6 +1676,7 @@ async fn run_background_task(
                         &agent_pubkey_hex,
                         &event_tx,
                         &observer_control_tx,
+                        &swarm_watch_tx,
                         true,
                         auth_tag.as_ref(),
                     )
@@ -1653,6 +1736,7 @@ async fn run_background_task(
                         &agent_pubkey_hex,
                         &event_tx,
                         &observer_control_tx,
+                        &swarm_watch_tx,
                         auth_tag.as_ref(),
                     )
                     .await
@@ -1683,6 +1767,7 @@ async fn run_background_task(
                                     &agent_pubkey_hex,
                                     &event_tx,
                                     &observer_control_tx,
+                                    &swarm_watch_tx,
                                     true,
                                     auth_tag.as_ref(),
                                 )
@@ -1796,6 +1881,7 @@ async fn run_background_task(
                                        &mut ws,
                                        &event_tx,
                                        &observer_control_tx,
+                                       &swarm_watch_tx,
                                        &mut state,
                                        &keys,
                                        &relay_url,
@@ -1829,6 +1915,7 @@ async fn run_background_task(
                                &agent_pubkey_hex,
                                &event_tx,
                            &observer_control_tx,
+                           &swarm_watch_tx,
             auth_tag.as_ref(),
                            )
                            .await;
@@ -1849,7 +1936,7 @@ async fn run_background_task(
                                if matches!(
                                    wait_for_reconnect(
                                        &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-        &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+        &agent_pubkey_hex, &event_tx, &observer_control_tx, &swarm_watch_tx, true,
                         auth_tag.as_ref(),
                                    ).await,
                                    ReconnectOutcome::Shutdown
@@ -1869,7 +1956,7 @@ async fn run_background_task(
                                if matches!(
                                    wait_for_reconnect(
                                        &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-        &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+        &agent_pubkey_hex, &event_tx, &observer_control_tx, &swarm_watch_tx, true,
                         auth_tag.as_ref(),
                                    ).await,
                                    ReconnectOutcome::Shutdown
@@ -1905,6 +1992,7 @@ async fn run_background_task(
                                        &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
         &agent_pubkey_hex, &event_tx,
                                    &observer_control_tx,
+                                   &swarm_watch_tx,
             auth_tag.as_ref(),
                                    ).await {
                                        ReconnectOutcome::Shutdown => return,
@@ -1918,7 +2006,7 @@ async fn run_background_task(
                                            if matches!(
                                                wait_for_reconnect(
                                                    &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-        &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+        &agent_pubkey_hex, &event_tx, &observer_control_tx, &swarm_watch_tx, true,
                         auth_tag.as_ref(),
                                                ).await,
                                                ReconnectOutcome::Shutdown
@@ -1944,6 +2032,7 @@ async fn run_background_task(
                                &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
         &agent_pubkey_hex, &event_tx,
                            &observer_control_tx,
+                           &swarm_watch_tx,
             auth_tag.as_ref(),
                            ).await {
                                ReconnectOutcome::Shutdown => return,
@@ -1957,7 +2046,7 @@ async fn run_background_task(
                                    if matches!(
                                        wait_for_reconnect(
                                            &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-        &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+        &agent_pubkey_hex, &event_tx, &observer_control_tx, &swarm_watch_tx, true,
                         auth_tag.as_ref(),
                                        ).await,
                                        ReconnectOutcome::Shutdown
@@ -1977,6 +2066,7 @@ async fn run_background_task(
                                    &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
         &agent_pubkey_hex, &event_tx,
                                &observer_control_tx,
+                               &swarm_watch_tx,
             auth_tag.as_ref(),
                                ).await {
                                    ReconnectOutcome::Shutdown => return,
@@ -1990,7 +2080,7 @@ async fn run_background_task(
                                        if matches!(
                                            wait_for_reconnect(
                                                &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-        &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+        &agent_pubkey_hex, &event_tx, &observer_control_tx, &swarm_watch_tx, true,
                         auth_tag.as_ref(),
                                            ).await,
                                            ReconnectOutcome::Shutdown
@@ -2045,6 +2135,7 @@ async fn handle_ws_message(
     ws: &mut WsStream,
     event_tx: &mpsc::Sender<Option<BuzzEvent>>,
     observer_control_tx: &mpsc::Sender<Event>,
+    swarm_watch_tx: &mpsc::Sender<BuzzEvent>,
     state: &mut BgState,
     keys: &Keys,
     relay_url: &str,
@@ -2071,6 +2162,31 @@ async fn handle_ws_message(
                             Ok(()) => {}
                             Err(mpsc::error::TrySendError::Full(_)) => {
                                 warn!("observer control event dropped because control channel is full");
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => return false,
+                        }
+                    } else if subscription_id.starts_with(crate::swarm_watch::WATCH_SUB_PREFIX) {
+                        // Swarm assignment watch (docs/swarms.md §8).
+                        // Deliberately NOT recorded in seen_ids or any replay
+                        // watermark: the same event may legitimately arrive on
+                        // the channel subscription too, and the queue's
+                        // event-id dedup resolves that pair downstream.
+                        let channel_id = match crate::swarm_watch::parse_watch_sub_channel(
+                            &subscription_id,
+                        ) {
+                            Some(uuid) => uuid,
+                            None => {
+                                warn!("swarm watch event with malformed subscription id {subscription_id} — dropping");
+                                return true;
+                            }
+                        };
+                        match swarm_watch_tx.try_send(BuzzEvent {
+                            channel_id,
+                            event: *event,
+                        }) {
+                            Ok(()) => {}
+                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                warn!("swarm watch event dropped because watch channel is full");
                             }
                             Err(mpsc::error::TrySendError::Closed(_)) => return false,
                         }
@@ -2337,6 +2453,11 @@ async fn handle_ws_message(
                                 return false;
                             }
                         } // end: channel is still active
+                    } else if subscription_id.starts_with(crate::swarm_watch::WATCH_SUB_PREFIX) {
+                        // Watch subs are live-only and never resubscribed
+                        // (docs/swarms.md §8) — the harness registry reclaims
+                        // the armed watch via its expiry sweep.
+                        debug!("CLOSED for swarm watch {subscription_id} — not resubscribing");
                     } else {
                         warn!("CLOSED for unknown subscription {subscription_id} — ignoring");
                     }
@@ -2395,6 +2516,7 @@ async fn process_handshake_buffer(
     buffer: std::collections::VecDeque<RelayMessage>,
     event_tx: &mpsc::Sender<Option<BuzzEvent>>,
     observer_control_tx: &mpsc::Sender<Event>,
+    swarm_watch_tx: &mpsc::Sender<BuzzEvent>,
     state: &mut BgState,
     keys: &Keys,
     relay_url: &str,
@@ -2438,6 +2560,7 @@ async fn process_handshake_buffer(
                 ws,
                 event_tx,
                 observer_control_tx,
+                swarm_watch_tx,
                 state,
                 keys,
                 relay_url,
@@ -2833,7 +2956,8 @@ async fn drain_commands(
             }
             RelayCommand::Subscribe { .. }
             | RelayCommand::SubscribeMembership
-            | RelayCommand::SubscribeObserverControls => {
+            | RelayCommand::SubscribeObserverControls
+            | RelayCommand::SubscribeSwarmWatch { .. } => {
                 // A gated subscription is only parked in state; pace only an
                 // actual live send attempt.
                 let pace_after = state.check_rate_gate().is_none();
@@ -2899,6 +3023,7 @@ async fn try_autonomous_reconnect(
     agent_pubkey_hex: &str,
     event_tx: &mpsc::Sender<Option<BuzzEvent>>,
     observer_control_tx: &mpsc::Sender<Event>,
+    swarm_watch_tx: &mpsc::Sender<BuzzEvent>,
     auth_tag: Option<&nostr::Tag>,
 ) -> ReconnectOutcome {
     state.requeue_observer_in_flight();
@@ -2930,6 +3055,7 @@ async fn try_autonomous_reconnect(
                     handshake_buffer,
                     event_tx,
                     observer_control_tx,
+                    swarm_watch_tx,
                     state,
                     keys,
                     relay_url,
@@ -3028,6 +3154,7 @@ async fn wait_for_reconnect(
     agent_pubkey_hex: &str,
     event_tx: &mpsc::Sender<Option<BuzzEvent>>,
     observer_control_tx: &mpsc::Sender<Event>,
+    swarm_watch_tx: &mpsc::Sender<BuzzEvent>,
     skip_drain: bool,
     auth_tag: Option<&nostr::Tag>,
 ) -> ReconnectOutcome {
@@ -3068,6 +3195,7 @@ async fn wait_for_reconnect(
                     handshake_buffer,
                     event_tx,
                     observer_control_tx,
+                    swarm_watch_tx,
                     state,
                     keys,
                     relay_url,
@@ -3299,6 +3427,44 @@ async fn send_observer_control_subscribe(ws: &mut WsStream, agent_pubkey_hex: &s
         }
         Err(e) => {
             warn!("failed to serialize observer control REQ: {e}");
+            false
+        }
+    }
+}
+
+/// Send a NIP-01 REQ for a swarm assignment watch (docs/swarms.md §8):
+/// kind:9 replies referencing the watched thread root, live-only
+/// (`since` = now, no replay).
+async fn send_swarm_watch_subscribe(
+    ws: &mut WsStream,
+    channel_id: Uuid,
+    thread_root_hex: &str,
+) -> bool {
+    let req = json!([
+        "REQ",
+        crate::swarm_watch::watch_sub_id(channel_id, thread_root_hex),
+        {
+            "kinds": [KIND_STREAM_MESSAGE],
+            "#e": [thread_root_hex],
+            "since": unix_now_secs(),
+        }
+    ]);
+
+    match serde_json::to_string(&req) {
+        Ok(text) => {
+            match ws_send_timeout(ws, Message::Text(text.into()), WS_SEND_TIMEOUT_SECS).await {
+                Ok(()) => {
+                    debug!("subscribed swarm watch on thread {thread_root_hex}");
+                    true
+                }
+                Err(e) => {
+                    warn!("failed to send swarm watch REQ for thread {thread_root_hex}: {e}");
+                    false
+                }
+            }
+        }
+        Err(e) => {
+            warn!("failed to serialize swarm watch REQ for thread {thread_root_hex}: {e}");
             false
         }
     }
