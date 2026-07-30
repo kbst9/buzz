@@ -244,6 +244,12 @@ criteria. `journalctl -u buzz-acp-claude | grep swarm` shows
 
 ## 8. Report-back enforcement — assignment watches
 
+**Status: IMPLEMENTED and deployed 2026-07-30** (`feat/swarm-assignment-watches`,
+merged at `52ea7cb6`; 659 harness tests green, clippy clean; all five
+units rolled). One deviation from the sketch below: watch subscriptions
+are also dropped on relay reconnect (not only restart) — they expire
+harmlessly; re-arm by re-assigning.
+
 **Problem (observed live, 2026-07-30):** report-back rode the assignment
 text, so it was only as reliable as the member's model remembering to
 @-mention the leader. A member completed its task without the mention and
