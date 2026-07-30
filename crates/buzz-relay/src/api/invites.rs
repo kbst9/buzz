@@ -58,6 +58,13 @@ pub struct MintInviteRequest {
     /// must be an integer from 1 through [`MAX_INVITE_USES`].
     #[serde(default)]
     pub max_uses: Option<i32>,
+    /// Mint an agent-typed invite: the claiming keypair joins as a member AND
+    /// is attributed to the minter via `users.agent_owner_pubkey` — the same
+    /// mapping a verified NIP-OA tag materializes at AUTH time. You own what
+    /// you mint: the recorded owner is always the authenticated minter. Agent
+    /// invites are single-use; `max_uses` must be omitted or `1`.
+    #[serde(default)]
+    pub agent: bool,
 }
 
 fn validate_mint_request(
@@ -81,6 +88,18 @@ fn validate_mint_request(
                 &format!("max_uses must be between 1 and {MAX_INVITE_USES}"),
             ));
         }
+    }
+
+    if request.agent {
+        // One invite, one agent identity — a leaked code must not be able to
+        // mint a fleet attributed to the owner.
+        if request.max_uses.unwrap_or(1) != 1 {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "agent invites are single-use: omit max_uses or set it to 1",
+            ));
+        }
+        return Ok((ttl, Some(1)));
     }
 
     Ok((ttl, request.max_uses))
@@ -299,10 +318,15 @@ pub async fn mint_invite(
 
     let (ttl, max_uses) = validate_mint_request(&request)?;
 
+    // Agent invites attribute every claimant to the minter. Recording the
+    // authenticated minter (never a caller-supplied pubkey) keeps the authz
+    // story identical to minting itself: you own what you mint.
+    let agent_owner = request.agent.then_some(sender_hex.as_str());
+
     // Mint a v2 opaque, database-backed invite.
     let invite = state
         .db
-        .mint_relay_invite(tenant.community(), &sender_hex, ttl, max_uses)
+        .mint_relay_invite(tenant.community(), &sender_hex, ttl, max_uses, agent_owner)
         .await
         .map_err(|error| match error {
             buzz_db::DbError::InvalidData(message) => api_error(StatusCode::BAD_REQUEST, &message),
@@ -323,6 +347,7 @@ pub async fn mint_invite(
         invite_id = %invite.invite_id,
         expires_at = %invite.expires_at,
         max_uses = ?invite.max_uses,
+        agent = %invite.agent_owner.is_some(),
         "relay invite minted"
     );
 
@@ -335,6 +360,7 @@ pub async fn mint_invite(
         "max_uses": invite.max_uses,
         "uses_remaining": invite.uses_remaining,
         "url": format!("{scheme}://{}/invite/{}", tenant.host(), invite.code),
+        "agent_owner": invite.agent_owner,
     })))
 }
 
@@ -400,10 +426,11 @@ pub async fn claim_invite(
             .map_err(|e| internal_error(&format!("v2 invite claim: {e}")))?;
 
         return match outcome {
-            buzz_db::relay_invite::ClaimOutcome::Joined { .. } => {
+            buzz_db::relay_invite::ClaimOutcome::Joined { agent_owner, .. } => {
                 tracing::info!(
                     community = %tenant.community(),
                     member = %claimer_hex,
+                    agent_owner = ?agent_owner,
                     "relay member added via v2 invite"
                 );
                 // NIP-43 side effects only on Joined, never on other outcomes.
@@ -420,14 +447,16 @@ pub async fn claim_invite(
                     "community_id": tenant.community().to_string(),
                     "host": tenant.host(),
                     "role": "member",
+                    "agent_owner": agent_owner,
                 })))
             }
-            buzz_db::relay_invite::ClaimOutcome::AlreadyMember { .. } => {
+            buzz_db::relay_invite::ClaimOutcome::AlreadyMember { agent_owner, .. } => {
                 Ok(Json(serde_json::json!({
                     "status": "already_member",
                     "community_id": tenant.community().to_string(),
                     "host": tenant.host(),
                     "role": "member",
+                    "agent_owner": agent_owner,
                 })))
             }
             buzz_db::relay_invite::ClaimOutcome::Expired => {
@@ -789,6 +818,7 @@ mod tests {
                 super::MintInviteRequest {
                     ttl_secs: Some(MIN_INVITE_TTL_SECS),
                     max_uses: Some(1),
+                    agent: false,
                 },
                 (MIN_INVITE_TTL_SECS, Some(1)),
             ),
@@ -796,6 +826,7 @@ mod tests {
                 super::MintInviteRequest {
                     ttl_secs: Some(MAX_INVITE_TTL_SECS),
                     max_uses: Some(MAX_INVITE_USES),
+                    agent: false,
                 },
                 (MAX_INVITE_TTL_SECS, Some(MAX_INVITE_USES)),
             ),
@@ -810,27 +841,63 @@ mod tests {
             super::MintInviteRequest {
                 ttl_secs: None,
                 max_uses: Some(0),
+                agent: false,
             },
             super::MintInviteRequest {
                 ttl_secs: None,
                 max_uses: Some(-1),
+                agent: false,
             },
             super::MintInviteRequest {
                 ttl_secs: None,
                 max_uses: Some(MAX_INVITE_USES + 1),
+                agent: false,
             },
             super::MintInviteRequest {
                 ttl_secs: Some(MIN_INVITE_TTL_SECS - 1),
                 max_uses: None,
+                agent: false,
             },
             super::MintInviteRequest {
                 ttl_secs: Some(MAX_INVITE_TTL_SECS + 1),
                 max_uses: None,
+                agent: false,
             },
         ] {
             assert_eq!(
                 validate_mint_request(&request)
                     .expect_err("invalid request")
+                    .0,
+                StatusCode::BAD_REQUEST
+            );
+        }
+    }
+
+    #[test]
+    fn mint_request_validation_pins_agent_invites_to_single_use() {
+        use super::validate_mint_request;
+
+        // Omitted max_uses defaults to 1; explicit 1 is accepted.
+        for max_uses in [None, Some(1)] {
+            let request = super::MintInviteRequest {
+                ttl_secs: None,
+                max_uses,
+                agent: true,
+            };
+            let (_, pinned) = validate_mint_request(&request).expect("agent request");
+            assert_eq!(pinned, Some(1));
+        }
+
+        // Anything else is a 400 — one invite, one agent identity.
+        for max_uses in [Some(2), Some(MAX_INVITE_USES)] {
+            let request = super::MintInviteRequest {
+                ttl_secs: None,
+                max_uses,
+                agent: true,
+            };
+            assert_eq!(
+                validate_mint_request(&request)
+                    .expect_err("multi-use agent invite")
                     .0,
                 StatusCode::BAD_REQUEST
             );
@@ -1144,6 +1211,111 @@ mod tests {
         assert_eq!(
             json.get("status").and_then(Value::as_str),
             Some("already_member")
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn agent_invite_end_to_end_attributes_claimant_to_minter() {
+        let host = format!("invites-agent-{}.example", Uuid::new_v4().simple());
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let Some(state) = invite_test_state(&host).await else {
+            return;
+        };
+        let community = state
+            .db
+            .lookup_community_by_host(&host)
+            .await
+            .expect("lookup")
+            .expect("community exists");
+        let community_id = community.id;
+        let owner_hex = owner.public_key().to_hex();
+        state
+            .db
+            .add_relay_member(community_id, &owner_hex, "owner", None)
+            .await
+            .expect("seed owner");
+
+        // Mint with the agent flag: max_uses pins to 1, the minter is the
+        // recorded owner.
+        let response = post_json(
+            state.clone(),
+            &host,
+            "/api/invites",
+            &owner,
+            serde_json::json!({ "agent": true }).to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = read_json(response).await;
+        let code = json.get("code").and_then(Value::as_str).expect("code");
+        assert_eq!(json.get("max_uses").and_then(Value::as_i64), Some(1));
+        assert_eq!(
+            json.get("agent_owner").and_then(Value::as_str),
+            Some(owner_hex.as_str())
+        );
+
+        // An explicit multi-use agent mint is rejected.
+        let response = post_json(
+            state.clone(),
+            &host,
+            "/api/invites",
+            &owner,
+            serde_json::json!({ "agent": true, "max_uses": 5 }).to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // Claim as a fresh agent keypair: membership + owner attribution
+        // commit together.
+        let claim_body = serde_json::json!({ "code": code }).to_string();
+        let response = post_json(
+            state.clone(),
+            &host,
+            "/api/invites/claim",
+            &agent,
+            claim_body.clone(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = read_json(response).await;
+        assert_eq!(json.get("status").and_then(Value::as_str), Some("joined"));
+        assert_eq!(
+            json.get("agent_owner").and_then(Value::as_str),
+            Some(owner_hex.as_str())
+        );
+
+        assert!(state
+            .db
+            .is_relay_member(community_id, &agent.public_key().to_hex())
+            .await
+            .expect("agent membership"));
+        // The mapping is the same one NIP-OA materialization writes — the
+        // classification surfaces (rate tiers, observer gate, ban cascade)
+        // read it from here.
+        assert!(state
+            .db
+            .is_agent_owner(
+                community_id,
+                agent.public_key().as_bytes(),
+                owner.public_key().as_bytes(),
+            )
+            .await
+            .expect("owner attribution"));
+
+        // Retry converges and reports the same attribution.
+        let response =
+            post_json(state, &host, "/api/invites/claim", &agent, claim_body).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = read_json(response).await;
+        assert_eq!(
+            json.get("status").and_then(Value::as_str),
+            Some("already_member")
+        );
+        assert_eq!(
+            json.get("agent_owner").and_then(Value::as_str),
+            Some(owner_hex.as_str())
         );
     }
 

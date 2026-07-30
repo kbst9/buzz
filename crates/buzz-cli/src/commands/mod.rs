@@ -7,6 +7,7 @@ pub mod feed;
 pub mod files;
 pub mod invites;
 pub mod issues;
+pub mod keys;
 pub mod mem;
 pub mod messages;
 pub mod moderation;

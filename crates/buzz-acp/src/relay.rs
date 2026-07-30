@@ -238,6 +238,26 @@ pub struct RestClient {
     pub auth_tag_json: Option<String>,
 }
 
+/// Outcome of an invite claim (`POST /api/invites/claim`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InviteClaimOutcome {
+    /// The relay accepted the claim. `status` is `joined` or
+    /// `already_member`; `agent_owner` is the recorded owner attribution for
+    /// agent-typed invites.
+    Accepted {
+        /// Relay-reported claim status.
+        status: String,
+        /// Owner the claimant was attributed to (agent-typed invites only).
+        agent_owner: Option<String>,
+    },
+    /// The relay rejected the code with a typed error (`invite_expired`,
+    /// `invite_exhausted`, `invite_invalid`, `join_policy_required`, …).
+    Rejected {
+        /// Relay-reported error code, or `HTTP <status>` when the body had none.
+        error: String,
+    },
+}
+
 /// Whether an HTTP status code is retriable (transient server/rate-limit errors).
 fn is_retriable_status(status: reqwest::StatusCode) -> bool {
     matches!(status.as_u16(), 429 | 502 | 503 | 504)
@@ -307,11 +327,13 @@ impl RestClient {
         Ok(format!("Nostr {}", self.sign_nip98(method, url, body)?))
     }
 
-    /// Retry helper: executes `build_request` up to 4 times (1 attempt + 3 retries)
-    /// on transient failures (429, 502, 503, 504, timeout, connect errors).
+    /// Core retry loop: executes `build_request` up to 4 times (1 attempt +
+    /// 3 retries) on transient failures (429, 502, 503, 504, timeout, connect
+    /// errors), and returns the first non-retriable response — success or not
+    /// — so callers can read typed error bodies.
     ///
     /// NIP-98 auth events are re-signed on each attempt (they have a ±60s window).
-    async fn request_with_retry<F, Fut>(
+    async fn request_with_retry_raw<F, Fut>(
         &self,
         method: &str,
         path: &str,
@@ -337,7 +359,6 @@ impl RestClient {
             }
 
             match build_request().await {
-                Ok(resp) if resp.status().is_success() => return Ok(resp),
                 Ok(resp) if is_retriable_status(resp.status()) => {
                     let status = resp.status();
                     tracing::warn!("{method} {path} returned retriable HTTP {status}");
@@ -345,13 +366,7 @@ impl RestClient {
                         "{method} {path} returned HTTP {status}"
                     )));
                 }
-                Ok(resp) => {
-                    return Err(RelayError::Http(format!(
-                        "{method} {} returned HTTP {}",
-                        path,
-                        resp.status()
-                    )));
-                }
+                Ok(resp) => return Ok(resp),
                 Err(e) if e.is_timeout() || e.is_connect() => {
                     tracing::warn!("{method} {path} network error: {e}");
                     last_err = Some(RelayError::Http(e.to_string()));
@@ -362,6 +377,31 @@ impl RestClient {
 
         Err(last_err
             .unwrap_or_else(|| RelayError::Http(format!("{method} {path} failed after retries"))))
+    }
+
+    /// [`Self::request_with_retry_raw`], with every non-2xx terminal response
+    /// mapped to an error. The common shape for bridge calls whose error
+    /// bodies carry nothing actionable.
+    async fn request_with_retry<F, Fut>(
+        &self,
+        method: &str,
+        path: &str,
+        build_request: F,
+    ) -> Result<reqwest::Response, RelayError>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<reqwest::Response, reqwest::Error>>,
+    {
+        let resp = self.request_with_retry_raw(method, path, build_request).await?;
+        if resp.status().is_success() {
+            Ok(resp)
+        } else {
+            Err(RelayError::Http(format!(
+                "{method} {} returned HTTP {}",
+                path,
+                resp.status()
+            )))
+        }
     }
 
     /// POST with NIP-98 auth and retry. Re-signs on each attempt.
@@ -390,6 +430,62 @@ impl RestClient {
             req.body(body_owned.clone()).send()
         })
         .await
+    }
+
+    /// Claim a community invite: `POST /api/invites/claim` with NIP-98 auth.
+    ///
+    /// Built for the eager startup claim (`BUZZ_INVITE_CODE`): the endpoint is
+    /// idempotent (`joined` and `already_member` both mean the identity is a
+    /// member afterwards), so calling it on every boot is safe. Typed relay
+    /// rejections — `invite_expired`, `invite_exhausted`, `invite_invalid`,
+    /// `join_policy_required` — come back as [`InviteClaimOutcome::Rejected`];
+    /// only connectivity failures are `Err`.
+    pub async fn claim_invite(&self, code: &str) -> Result<InviteClaimOutcome, RelayError> {
+        let path = "/api/invites/claim";
+        let url = format!("{}{}", self.base_url, path);
+        let body = serde_json::to_vec(&serde_json::json!({ "code": code }))
+            .map_err(|e| RelayError::Http(format!("claim body serialize error: {e}")))?;
+        let auth_tag_header = self.auth_tag_json.clone();
+
+        let resp = self
+            .request_with_retry_raw("POST", path, || {
+                let auth = self
+                    .nip98_header("POST", &url, Some(&body))
+                    .unwrap_or_default();
+                let mut req = self
+                    .http
+                    .post(&url)
+                    .header("Authorization", auth)
+                    .header("Content-Type", "application/json");
+                if let Some(ref tag) = auth_tag_header {
+                    req = req.header("x-auth-tag", tag);
+                }
+                req.body(body.clone()).send()
+            })
+            .await?;
+
+        let http_status = resp.status();
+        let json: Value = resp.json().await.unwrap_or(Value::Null);
+        if http_status.is_success() {
+            return Ok(InviteClaimOutcome::Accepted {
+                status: json
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("joined")
+                    .to_string(),
+                agent_owner: json
+                    .get("agent_owner")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            });
+        }
+        Ok(InviteClaimOutcome::Rejected {
+            error: json
+                .get("error")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("HTTP {http_status}")),
+        })
     }
 
     /// Query events via the HTTP bridge: `POST /query` with NIP-98 auth.
@@ -4160,6 +4256,104 @@ async fn wait_for_any_ok(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One-shot HTTP server returning a fixed status line + JSON body;
+    /// records whether the request carried a NIP-98 Authorization header.
+    async fn claim_test_server(
+        status_line: &'static str,
+        body: serde_json::Value,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test HTTP server");
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let saw_nip98 = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server_saw = saw_nip98.clone();
+        let body = body.to_string();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut request = vec![0; 16384];
+                let n = socket.read(&mut request).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&request[..n]).to_string();
+                if request.contains("Authorization: Nostr ")
+                    || request.contains("authorization: Nostr ")
+                {
+                    server_saw.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                let response = format!(
+                    "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status_line,
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        (base_url, saw_nip98)
+    }
+
+    fn claim_test_client(base_url: String) -> RestClient {
+        RestClient {
+            http: reqwest::Client::new(),
+            base_url,
+            keys: Keys::generate(),
+            auth_tag_json: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn claim_invite_parses_accepted_response_and_signs_nip98() {
+        let (base_url, saw_nip98) = claim_test_server(
+            "200 OK",
+            serde_json::json!({
+                "status": "joined",
+                "role": "member",
+                "agent_owner": "ab".repeat(32),
+            }),
+        )
+        .await;
+
+        let outcome = claim_test_client(base_url)
+            .claim_invite("v2.testcode")
+            .await
+            .expect("claim call");
+        assert_eq!(
+            outcome,
+            InviteClaimOutcome::Accepted {
+                status: "joined".into(),
+                agent_owner: Some("ab".repeat(32)),
+            }
+        );
+        assert!(
+            saw_nip98.load(std::sync::atomic::Ordering::SeqCst),
+            "claim must authenticate with NIP-98"
+        );
+    }
+
+    #[tokio::test]
+    async fn claim_invite_surfaces_typed_rejection_without_erroring() {
+        let (base_url, _) = claim_test_server(
+            "403 Forbidden",
+            serde_json::json!({ "error": "invite_expired" }),
+        )
+        .await;
+
+        let outcome = claim_test_client(base_url)
+            .claim_invite("v2.testcode")
+            .await
+            .expect("typed rejection is not a transport error");
+        assert_eq!(
+            outcome,
+            InviteClaimOutcome::Rejected {
+                error: "invite_expired".into(),
+            }
+        );
+    }
 
     #[test]
     fn relay_ws_to_http_plain() {

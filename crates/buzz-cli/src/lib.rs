@@ -236,6 +236,9 @@ enum Cmd {
     /// Agent engram management — persistent memory per NIP-AE
     #[command(subcommand)]
     Mem(MemCmd),
+    /// Generate Nostr keypairs (local, no relay connection needed)
+    #[command(subcommand)]
+    Keys(KeysCmd),
     /// Persona pack operations (local, no relay connection needed)
     #[command(subcommand)]
     Pack(PackCmd),
@@ -1730,6 +1733,16 @@ pub enum PackCmd {
     },
 }
 
+/// Subcommands for `buzz keys`.
+#[derive(Subcommand)]
+pub enum KeysCmd {
+    /// Generate a fresh Nostr keypair — prints {private_key, public_key} hex
+    #[command(
+        after_help = "Examples:\n  buzz keys generate\n\nProvisioning a standalone agent: private_key becomes the unit's\nBUZZ_PRIVATE_KEY; the private key is printed exactly once and never stored."
+    )]
+    Generate,
+}
+
 /// Community moderation commands.
 ///
 /// The community (tenant) is selected by the relay host in `--relay` /
@@ -1837,6 +1850,14 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         };
     }
 
+    // Key generation is local-only and identity-free — it must work before
+    // any BUZZ_PRIVATE_KEY exists (it creates one).
+    if let Cmd::Keys(ref sub) = cli.command {
+        return match sub {
+            KeysCmd::Generate => commands::keys::cmd_generate(),
+        };
+    }
+
     // Auth: private key is required for all relay operations.
     // The keypair IS the identity — no tokens, no other auth.
     let private_key_str = cli.private_key.ok_or_else(|| {
@@ -1886,7 +1907,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Upload(sub) => commands::upload::dispatch(sub, &client).await,
         Cmd::Mem(sub) => commands::mem::dispatch(sub, &client).await,
         Cmd::Moderation(sub) => commands::moderation::dispatch(sub, &client, &cli.format).await,
-        Cmd::Pack(_) => unreachable!("handled above"),
+        Cmd::Keys(_) | Cmd::Pack(_) => unreachable!("handled above"),
     }
 }
 
@@ -1959,6 +1980,7 @@ mod tests {
             "files",
             "invites",
             "issues",
+            "keys",
             "media",
             "mem",
             "messages",
@@ -2014,6 +2036,7 @@ mod tests {
         }
 
         let cmd = Cli::command();
+        assert_eq!(names(&cmd, "keys"), vec!["generate"]);
         assert_eq!(
             names(&cmd, "agents"),
             vec![

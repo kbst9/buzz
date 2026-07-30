@@ -1900,6 +1900,15 @@ impl Db {
         user::is_agent_owner(&self.pool, community_id, target_pubkey, actor_pubkey).await
     }
 
+    /// Get the relay-recorded owner of `agent_pubkey`, if any.
+    pub async fn get_agent_owner(
+        &self,
+        community_id: CommunityId,
+        agent_pubkey: &[u8],
+    ) -> Result<Option<Vec<u8>>> {
+        user::get_agent_owner(&self.pool, community_id, agent_pubkey).await
+    }
+
     /// Set the channel_add_policy for a user.
     pub async fn set_channel_add_policy(
         &self,
@@ -3077,14 +3086,25 @@ impl Db {
     ///
     /// `max_uses` is `None` for unlimited or `Some(1..=10000)`.
     /// `ttl_secs` must be in the shared invite lifetime range.
+    /// `agent_owner` marks an agent-typed invite (single-use); the claimant is
+    /// attributed to that owner at claim time.
     pub async fn mint_relay_invite(
         &self,
         community: CommunityId,
         created_by: &str,
         ttl_secs: u64,
         max_uses: Option<i32>,
+        agent_owner: Option<&str>,
     ) -> Result<relay_invite::MintedInvite> {
-        relay_invite::mint_relay_invite(&self.pool, community, created_by, ttl_secs, max_uses).await
+        relay_invite::mint_relay_invite(
+            &self.pool,
+            community,
+            created_by,
+            ttl_secs,
+            max_uses,
+            agent_owner,
+        )
+        .await
     }
 
     /// Delete one bounded batch of invites expired before `cutoff`.

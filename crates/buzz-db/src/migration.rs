@@ -560,7 +560,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 25);
+        assert_eq!(migrations.len(), 26);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -899,10 +899,26 @@ mod tests {
             .contains("CREATE INDEX relay_invites_expires_at_idx ON relay_invites (expires_at)"));
         assert!(!relay_invites.contains("_operator_global_tables"));
 
+        // Agent-typed invites: nullable owner attribution on relay_invites.
+        // Claiming binds the claimant to agent_owner inside the claim txn;
+        // NULL preserves plain member invites bit-for-bit. Single-use pin is
+        // a schema-level CHECK so no future caller can mint a multi-use one.
+        assert_eq!(migrations[25].version, 26);
+        let agent_invites = migrations[25].sql.as_str();
+        assert!(agent_invites.contains("ADD COLUMN agent_owner TEXT"));
+        assert!(agent_invites
+            .contains("CHECK (agent_owner IS NULL OR agent_owner ~ '^[0-9a-f]{64}$')"));
+        assert!(agent_invites.contains("ADD CONSTRAINT relay_invites_agent_owner_single_use"));
+        assert!(agent_invites.contains("CHECK (agent_owner IS NULL OR max_uses = 1)"));
+
         let desired_schema = include_str!("../../../schema/schema.sql");
         assert!(
             desired_schema.contains("CREATE TABLE join_policy_acceptances"),
             "desired-state schema must include join-policy evidence used by invite claims",
+        );
+        assert!(
+            desired_schema.contains("agent_owner  TEXT"),
+            "desired-state schema must include agent-typed invite attribution",
         );
     }
 

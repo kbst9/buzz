@@ -1490,6 +1490,65 @@ async fn tokio_main() -> Result<()> {
         .filter(|s| !s.is_empty())
         .and_then(|s| buzz_sdk::nip_oa::parse_auth_tag(&s).ok());
 
+    // Eager invite claim (BUZZ_INVITE_CODE): join the community before the
+    // WebSocket ever connects, so a standalone agent bootstraps from nothing
+    // but its keypair and a code. The claim is idempotent relay-side; failure
+    // is a warning, not a crash — the connect below is the real membership
+    // test, and an already-claimed unit keeps working after its invite
+    // expires.
+    if let Some(code) = config.invite_code.as_deref() {
+        let rest = relay::RestClient {
+            http: reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .connect_timeout(Duration::from_secs(5))
+                .build()
+                .map_err(|e| anyhow::anyhow!("invite claim HTTP client: {e}"))?,
+            base_url: relay::relay_ws_to_http(&config.relay_url),
+            keys: config.keys.clone(),
+            auth_tag_json: relay_auth_tag
+                .as_ref()
+                .and_then(|t| serde_json::to_string(t.as_slice()).ok()),
+        };
+        match rest.claim_invite(code).await {
+            Ok(relay::InviteClaimOutcome::Accepted {
+                status,
+                agent_owner,
+            }) => {
+                tracing::info!(status, agent_owner = ?agent_owner, "community invite claimed");
+                match (agent_owner.as_deref(), config.agent_owner.as_deref()) {
+                    (Some(claimed), Some(configured))
+                        if !claimed.eq_ignore_ascii_case(configured) =>
+                    {
+                        tracing::warn!(
+                            claimed,
+                            configured,
+                            "relay-recorded agent owner differs from BUZZ_ACP_AGENT_OWNER"
+                        );
+                    }
+                    (Some(claimed), None) => {
+                        tracing::info!(
+                            owner = claimed,
+                            "agent invite recorded an owner — set BUZZ_ACP_AGENT_OWNER to \
+                             the same value to enable owner gates and observer frames"
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            Ok(relay::InviteClaimOutcome::Rejected { error }) => {
+                tracing::warn!(
+                    error,
+                    "invite claim rejected — continuing (membership may already exist)"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "invite claim failed: {e} — continuing (relay may be briefly unavailable)"
+                );
+            }
+        }
+    }
+
     let mut relay =
         HarnessRelay::connect(&config.relay_url, &config.keys, &pubkey_hex, relay_auth_tag)
             .await
@@ -5558,6 +5617,7 @@ mod build_mcp_servers_tests {
             profile_overlay: buzz_sdk::profile::ProfileOverlay::default(),
             lazy_pool: false,
             agent_owner: None,
+            invite_code: None,
             no_base_prompt: false,
             base_prompt_content: None,
         }
@@ -5780,6 +5840,7 @@ mod error_outcome_emission_tests {
             profile_overlay: buzz_sdk::profile::ProfileOverlay::default(),
             lazy_pool: false,
             agent_owner: None,
+            invite_code: None,
             no_base_prompt: false,
             base_prompt_content: None,
         }

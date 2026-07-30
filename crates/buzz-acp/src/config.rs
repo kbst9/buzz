@@ -247,6 +247,14 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_AGENT_OWNER")]
     pub agent_owner: Option<String>,
 
+    /// Community invite code, claimed eagerly at startup (idempotent). Lets a
+    /// standalone agent join a closed relay with nothing but its own keypair
+    /// and this code — agent-typed invites also record the minter as the
+    /// agent's owner relay-side. A failed claim is a warning, not a crash:
+    /// the subsequent connect is the real membership test.
+    #[arg(long, env = "BUZZ_INVITE_CODE", hide_env_values = true)]
+    pub invite_code: Option<String>,
+
     #[arg(long, env = "BUZZ_ACP_AGENT_COMMAND", default_value = "goose")]
     pub agent_command: String,
 
@@ -574,6 +582,8 @@ pub struct Config {
     /// Agent owner pubkey (hex). Used for `--respond-to=owner-only` gate.
     /// Replaces the old REST-based owner lookup.
     pub agent_owner: Option<String>,
+    /// Community invite code claimed eagerly at startup (idempotent).
+    pub invite_code: Option<String>,
     /// Disable the [Base] platform-context section prepended to every prompt.
     pub no_base_prompt: bool,
     /// Resolved content from `--base-prompt-file`, read and validated in
@@ -1125,6 +1135,10 @@ impl Config {
             },
             lazy_pool: args.lazy_pool,
             agent_owner: args.agent_owner.map(|s| s.trim().to_ascii_lowercase()),
+            invite_code: args
+                .invite_code
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             no_base_prompt: args.no_base_prompt,
             base_prompt_content,
         };
@@ -1496,6 +1510,7 @@ mod tests {
             profile_overlay: buzz_sdk::profile::ProfileOverlay::default(),
             lazy_pool: false,
             agent_owner: None,
+            invite_code: None,
             no_base_prompt: false,
             base_prompt_content: None,
         }
@@ -2205,6 +2220,35 @@ channels = "ALL"
         let args = CliArgs::try_parse_from(["buzz-acp", "--private-key", &key, "--lazy-pool=true"]);
         assert!(args.is_err(), "bool flags do not take an explicit value");
         assert!(CliArgs::parse_from(["buzz-acp", "--private-key", &key, "--lazy-pool"]).lazy_pool);
+    }
+
+    #[test]
+    fn invite_code_parses_and_blank_values_normalize_to_none() {
+        // A valid secp256k1 secret (scalar 1) — from_args parses the key.
+        let key = format!("{:0>64}", "1");
+        assert_eq!(
+            CliArgs::parse_from(["buzz-acp", "--private-key", &key]).invite_code,
+            None
+        );
+
+        let args = CliArgs::parse_from([
+            "buzz-acp",
+            "--private-key",
+            &key,
+            "--invite-code",
+            "v2.abc123",
+        ]);
+        let config = Config::from_args(args).expect("config");
+        assert_eq!(config.invite_code.as_deref(), Some("v2.abc123"));
+
+        // Empty and whitespace-only values (common in templated env files)
+        // normalize to None instead of triggering doomed claim attempts.
+        for blank in ["", "   "] {
+            let args =
+                CliArgs::parse_from(["buzz-acp", "--private-key", &key, "--invite-code", blank]);
+            let config = Config::from_args(args).expect("config");
+            assert_eq!(config.invite_code, None, "blank {blank:?} must be None");
+        }
     }
 
     #[test]

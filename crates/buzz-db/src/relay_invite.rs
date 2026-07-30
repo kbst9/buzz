@@ -39,6 +39,12 @@ pub enum ClaimOutcome {
         use_count: i32,
         /// Remaining slots, or `None` when the invite is unlimited.
         uses_remaining: Option<i32>,
+        /// For agent-typed invites: the hex pubkey the claimant is now
+        /// attributed to in `users.agent_owner_pubkey`. This is the mapping
+        /// that *holds* after the claim — first-write-wins, so it can differ
+        /// from the invite's recorded owner if an earlier attribution exists.
+        /// `None` for plain member invites.
+        agent_owner: Option<String>,
     },
     /// The claimer was already a member. `use_count` was NOT incremented.
     AlreadyMember {
@@ -46,6 +52,9 @@ pub enum ClaimOutcome {
         use_count: i32,
         /// Remaining slots, or `None` when the invite is unlimited.
         uses_remaining: Option<i32>,
+        /// Effective owner attribution — see [`ClaimOutcome::Joined`]. Also
+        /// written on this path so a retry after a partial failure converges.
+        agent_owner: Option<String>,
     },
     /// The invite's `expires_at` has passed.
     Expired,
@@ -70,9 +79,15 @@ pub struct MintedInvite {
     pub uses_remaining: Option<i32>,
     /// The invite's database-generated UUID.
     pub invite_id: uuid::Uuid,
+    /// Hex owner pubkey for agent-typed invites; `None` for member invites.
+    pub agent_owner: Option<String>,
 }
 
-fn validate_mint_inputs(ttl_secs: u64, max_uses: Option<i32>) -> Result<()> {
+fn validate_mint_inputs(
+    ttl_secs: u64,
+    max_uses: Option<i32>,
+    agent_owner: Option<&str>,
+) -> Result<()> {
     if !(MIN_INVITE_TTL_SECS..=MAX_INVITE_TTL_SECS).contains(&ttl_secs) {
         return Err(crate::error::DbError::InvalidData(format!(
             "ttl_secs must be between {MIN_INVITE_TTL_SECS} and {MAX_INVITE_TTL_SECS}"
@@ -87,6 +102,23 @@ fn validate_mint_inputs(ttl_secs: u64, max_uses: Option<i32>) -> Result<()> {
         }
     }
 
+    if let Some(owner) = agent_owner {
+        if owner.len() != 64 || !owner.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+            return Err(crate::error::DbError::InvalidData(
+                "agent_owner must be a 64-char lowercase hex pubkey".into(),
+            ));
+        }
+        // One invite, one agent identity: the schema pins agent invites to a
+        // single use so a leaked code cannot mint a fleet attributed to the
+        // owner. Enforced here too so callers get a typed error, not a CHECK
+        // violation.
+        if max_uses != Some(1) {
+            return Err(crate::error::DbError::InvalidData(
+                "agent invites must have max_uses = 1".into(),
+            ));
+        }
+    }
+
     Ok(())
 }
 
@@ -95,14 +127,18 @@ fn validate_mint_inputs(ttl_secs: u64, max_uses: Option<i32>) -> Result<()> {
 ///
 /// `ttl_secs` must be in the shared invite lifetime range.
 /// `max_uses` must be `None` (unlimited) or `Some(1..=10000)`.
+/// `agent_owner` (64-char lowercase hex) marks an agent-typed invite: the
+/// claimant is attributed to that owner at claim time. Agent invites require
+/// `max_uses = Some(1)`.
 pub async fn mint_relay_invite(
     pool: &PgPool,
     community: CommunityId,
     created_by: &str,
     ttl_secs: u64,
     max_uses: Option<i32>,
+    agent_owner: Option<&str>,
 ) -> Result<MintedInvite> {
-    validate_mint_inputs(ttl_secs, max_uses)?;
+    validate_mint_inputs(ttl_secs, max_uses, agent_owner)?;
 
     // Generate 32 random bytes and encode as base64url — this is the secret.
     let secret: [u8; V2_SECRET_LEN] = rand::random();
@@ -112,8 +148,9 @@ pub async fn mint_relay_invite(
     let expires_at = now + chrono::Duration::seconds(ttl_secs as i64);
 
     let row = sqlx::query(
-        "INSERT INTO relay_invites (community_id, token_hash, max_uses, expires_at, created_by) \
-         VALUES ($1, $2, $3, $4, $5) \
+        "INSERT INTO relay_invites \
+         (community_id, token_hash, max_uses, expires_at, created_by, agent_owner) \
+         VALUES ($1, $2, $3, $4, $5, $6) \
          RETURNING id",
     )
     .bind(community.as_uuid())
@@ -121,6 +158,7 @@ pub async fn mint_relay_invite(
     .bind(max_uses)
     .bind(expires_at)
     .bind(created_by)
+    .bind(agent_owner)
     .fetch_one(pool)
     .await?;
 
@@ -132,6 +170,7 @@ pub async fn mint_relay_invite(
         max_uses,
         uses_remaining: max_uses,
         invite_id,
+        agent_owner: agent_owner.map(str::to_owned),
     })
 }
 
@@ -179,6 +218,62 @@ pub async fn reap_expired_relay_invites(pool: &PgPool, cutoff: DateTime<Utc>) ->
     Ok(result.rows_affected())
 }
 
+/// Attribute the claimant of an agent-typed invite to the invite's recorded
+/// owner, inside the claim transaction.
+///
+/// This is the agent-invite half of what NIP-OA materialization does at AUTH
+/// time for tag-bearing agents: write `users.agent_owner_pubkey`,
+/// first-write-wins (semantics of [`crate::user::set_agent_owner`], inlined
+/// here so attribution commits atomically with membership). Both principals
+/// are upserted into `users` first — the mapping has a community-scoped FK.
+/// The conditional UPDATE only fills a NULL mapping, so an existing
+/// attribution is never rebound; the returned hex is the mapping that
+/// actually holds after this claim.
+async fn attribute_agent_owner(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    community: CommunityId,
+    claimer_pubkey: &str,
+    invite_owner: &str,
+) -> Result<String> {
+    let claimer = hex::decode(claimer_pubkey).map_err(|e| {
+        crate::error::DbError::InvalidData(format!("claimer pubkey is not hex: {e}"))
+    })?;
+    let owner = hex::decode(invite_owner).map_err(|e| {
+        crate::error::DbError::InvalidData(format!("invite agent_owner is not hex: {e}"))
+    })?;
+
+    for pubkey in [&owner, &claimer] {
+        sqlx::query(
+            "INSERT INTO users (community_id, pubkey) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(community.as_uuid())
+        .bind(pubkey.as_slice())
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    sqlx::query(
+        "UPDATE users SET agent_owner_pubkey = $1 \
+         WHERE community_id = $2 AND pubkey = $3 AND agent_owner_pubkey IS NULL",
+    )
+    .bind(owner.as_slice())
+    .bind(community.as_uuid())
+    .bind(claimer.as_slice())
+    .execute(&mut **tx)
+    .await?;
+
+    // Report the mapping that holds — pre-existing attributions win.
+    let effective: Vec<u8> = sqlx::query_scalar(
+        "SELECT agent_owner_pubkey FROM users WHERE community_id = $1 AND pubkey = $2",
+    )
+    .bind(community.as_uuid())
+    .bind(claimer.as_slice())
+    .fetch_one(&mut **tx)
+    .await?;
+
+    Ok(hex::encode(effective))
+}
+
 /// Atomically claim a v2 relay invite.
 ///
 /// Executes the full redemption in one PostgreSQL transaction:
@@ -187,17 +282,24 @@ pub async fn reap_expired_relay_invites(pool: &PgPool, cutoff: DateTime<Utc>) ->
 /// 3. If no row → `Invalid`.
 /// 4. If `expires_at <= now()` → `Expired`.
 /// 5. Check existing membership.
-/// 6. If already a member → insert policy evidence (if configured), commit,
-///    return `AlreadyMember` (no increment).
+/// 6. If already a member → attribute agent ownership (agent invites), insert
+///    policy evidence (if configured), commit, return `AlreadyMember`
+///    (no increment).
 /// 7. If `max_uses` is set and `use_count >= max_uses` → `Exhausted`.
 /// 8. Insert relay member with role `member`, `added_by = 'invite'`.
-/// 9. Insert join-policy acceptance evidence (if configured).
-/// 10. Increment `use_count`.
-/// 11. Commit.
+/// 9. For agent-typed invites, attribute the claimant to the invite's owner
+///    (`users.agent_owner_pubkey`, first-write-wins — see
+///    [`attribute_agent_owner`]).
+/// 10. Insert join-policy acceptance evidence (if configured).
+/// 11. Increment `use_count`.
+/// 12. Commit.
 ///
 /// `FOR UPDATE` serializes concurrent claims so exactly one claimant wins the
-/// final slot. Membership insertion, policy evidence, and consumption share
-/// one commit — a failure in any rolls back all.
+/// final slot. Membership insertion, owner attribution, policy evidence, and
+/// consumption share one commit — a failure in any rolls back all. Claiming an
+/// agent invite is an explicit act of self-registration: an already-member
+/// claimant is attributed too (that is the retry path after a partial
+/// failure), but a mapping that already exists is never rebound.
 pub async fn claim_relay_invite(
     pool: &PgPool,
     community: CommunityId,
@@ -209,7 +311,7 @@ pub async fn claim_relay_invite(
 
     // 2. SELECT FOR UPDATE — lock the invite row for the duration of this txn.
     let row = sqlx::query(
-        "SELECT id, max_uses, use_count, expires_at \
+        "SELECT id, max_uses, use_count, expires_at, agent_owner \
          FROM relay_invites \
          WHERE community_id = $1 AND token_hash = $2 \
          FOR UPDATE",
@@ -230,6 +332,7 @@ pub async fn claim_relay_invite(
     let max_uses: Option<i32> = invite.try_get("max_uses")?;
     let use_count: i32 = invite.try_get("use_count")?;
     let expires_at: DateTime<Utc> = invite.try_get("expires_at")?;
+    let invite_agent_owner: Option<String> = invite.try_get("agent_owner")?;
 
     // Expiry is checked before membership deliberately. An expired bearer must
     // not authorize fresh policy-acceptance evidence, even for an existing
@@ -257,7 +360,14 @@ pub async fn claim_relay_invite(
             .await?;
 
     if existing.is_some() {
-        // 6. Already a member — insert policy evidence but do NOT increment.
+        // 6. Already a member — attribute (agent invites), insert policy
+        // evidence, but do NOT increment.
+        let agent_owner = match &invite_agent_owner {
+            Some(owner) => {
+                Some(attribute_agent_owner(&mut tx, community, claimer_pubkey, owner).await?)
+            }
+            None => None,
+        };
         if let Some(version) = policy_version {
             sqlx::query(
                 "INSERT INTO join_policy_acceptances (community_id, pubkey, policy_version) \
@@ -280,6 +390,7 @@ pub async fn claim_relay_invite(
         return Ok(ClaimOutcome::AlreadyMember {
             use_count,
             uses_remaining: uses_remaining(),
+            agent_owner,
         });
     }
 
@@ -313,7 +424,16 @@ pub async fn claim_relay_invite(
     .rows_affected()
         > 0;
 
-    // 9. Insert join-policy acceptance evidence. This is required for both a
+    // 9. Attribute agent ownership. Runs on both branches below — attribution
+    // is claim semantics, not consumption semantics.
+    let agent_owner = match &invite_agent_owner {
+        Some(owner) => {
+            Some(attribute_agent_owner(&mut tx, community, claimer_pubkey, owner).await?)
+        }
+        None => None,
+    };
+
+    // 10. Insert join-policy acceptance evidence. This is required for both a
     // new member and a claimant whose concurrent membership insert won first.
     if let Some(version) = policy_version {
         sqlx::query(
@@ -339,10 +459,11 @@ pub async fn claim_relay_invite(
         return Ok(ClaimOutcome::AlreadyMember {
             use_count,
             uses_remaining: uses_remaining(),
+            agent_owner,
         });
     }
 
-    // 10. Increment use_count (for every new member, even unlimited).
+    // 11. Increment use_count (for every new member, even unlimited).
     let new_use_count = use_count + 1;
     sqlx::query("UPDATE relay_invites SET use_count = $1 WHERE community_id = $2 AND id = $3")
         .bind(new_use_count)
@@ -351,7 +472,7 @@ pub async fn claim_relay_invite(
         .execute(&mut *tx)
         .await?;
 
-    // 11. Commit.
+    // 12. Commit.
     tx.commit().await?;
 
     let new_uses_remaining = max_uses.map(|mu| mu - new_use_count);
@@ -367,6 +488,7 @@ pub async fn claim_relay_invite(
     Ok(ClaimOutcome::Joined {
         use_count: new_use_count,
         uses_remaining: new_uses_remaining,
+        agent_owner,
     })
 }
 
@@ -411,6 +533,18 @@ mod tests {
             .execute(&mut *tx)
             .await
             .expect("delete test members");
+        // Agent-invite claims create users rows; clear the self-referencing
+        // owner mapping before deleting them.
+        sqlx::query("UPDATE users SET agent_owner_pubkey = NULL WHERE community_id = $1")
+            .bind(community.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .expect("clear test user mappings");
+        sqlx::query("DELETE FROM users WHERE community_id = $1")
+            .bind(community.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .expect("delete test users");
         sqlx::query("DELETE FROM communities WHERE id = $1")
             .bind(community.as_uuid())
             .execute(&mut *tx)
@@ -443,7 +577,32 @@ mod tests {
             (3600, Some(-1)),
             (3600, Some(MAX_INVITE_USES + 1)),
         ] {
-            let error = validate_mint_inputs(ttl, max_uses).expect_err("invalid mint contract");
+            let error =
+                validate_mint_inputs(ttl, max_uses, None).expect_err("invalid mint contract");
+            assert!(matches!(error, crate::DbError::InvalidData(_)), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn mint_validation_enforces_agent_invite_contract() {
+        let owner = "a".repeat(64);
+        assert!(validate_mint_inputs(3600, Some(1), Some(&owner)).is_ok());
+
+        // Agent invites are single-use by contract — unlimited and multi-use
+        // are rejected before any database access.
+        for max_uses in [None, Some(2), Some(MAX_INVITE_USES)] {
+            let error = validate_mint_inputs(3600, max_uses, Some(&owner))
+                .expect_err("agent invites must be single-use");
+            assert!(matches!(error, crate::DbError::InvalidData(_)), "{error:?}");
+        }
+
+        // Owner must be a 64-char lowercase hex pubkey.
+        let uppercase = "A".repeat(64);
+        let nonhex = "g".repeat(64);
+        let short = "a".repeat(63);
+        for bad_owner in ["", uppercase.as_str(), nonhex.as_str(), short.as_str()] {
+            let error = validate_mint_inputs(3600, Some(1), Some(bad_owner))
+                .expect_err("malformed agent_owner");
             assert!(matches!(error, crate::DbError::InvalidData(_)), "{error:?}");
         }
     }
@@ -455,7 +614,7 @@ mod tests {
         let community = make_test_community(&pool).await;
         let first = test_pubkey();
         let second = test_pubkey();
-        let invite = mint_relay_invite(&pool, community, "owner", 3600, Some(1))
+        let invite = mint_relay_invite(&pool, community, "owner", 3600, Some(1), None)
             .await
             .expect("mint bounded invite");
         let hash = hash_v2_code(&invite.code);
@@ -467,6 +626,7 @@ mod tests {
             ClaimOutcome::Joined {
                 use_count: 1,
                 uses_remaining: Some(0),
+                agent_owner: None,
             }
         );
         assert_eq!(
@@ -476,6 +636,7 @@ mod tests {
             ClaimOutcome::AlreadyMember {
                 use_count: 1,
                 uses_remaining: Some(0),
+                agent_owner: None,
             }
         );
         assert_eq!(
@@ -501,7 +662,7 @@ mod tests {
         let community = make_test_community(&pool).await;
         let first = test_pubkey();
         let second = test_pubkey();
-        let invite = mint_relay_invite(&pool, community, "owner", 3600, Some(1))
+        let invite = mint_relay_invite(&pool, community, "owner", 3600, Some(1), None)
             .await
             .expect("mint bounded invite");
         let hash = hash_v2_code(&invite.code);
@@ -545,7 +706,7 @@ mod tests {
         let pool = setup_pool().await;
         let community_a = make_test_community(&pool).await;
         let community_b = make_test_community(&pool).await;
-        let invite = mint_relay_invite(&pool, community_a, "owner", 3600, Some(2))
+        let invite = mint_relay_invite(&pool, community_a, "owner", 3600, Some(2), None)
             .await
             .expect("mint invite");
         let hash = hash_v2_code(&invite.code);
@@ -582,10 +743,10 @@ mod tests {
     async fn retention_sweep_deletes_only_invites_older_than_cutoff() {
         let pool = setup_pool().await;
         let community = make_test_community(&pool).await;
-        let old = mint_relay_invite(&pool, community, "owner", 3600, Some(1))
+        let old = mint_relay_invite(&pool, community, "owner", 3600, Some(1), None)
             .await
             .expect("mint old invite");
-        let recent = mint_relay_invite(&pool, community, "owner", 3600, Some(1))
+        let recent = mint_relay_invite(&pool, community, "owner", 3600, Some(1), None)
             .await
             .expect("mint recent invite");
         let cutoff = Utc::now() - chrono::Duration::days(30);
@@ -620,7 +781,7 @@ mod tests {
     async fn unlimited_invites_count_each_new_member() {
         let pool = setup_pool().await;
         let community = make_test_community(&pool).await;
-        let invite = mint_relay_invite(&pool, community, "owner", 3600, None)
+        let invite = mint_relay_invite(&pool, community, "owner", 3600, None, None)
             .await
             .expect("mint unlimited invite");
         let hash = hash_v2_code(&invite.code);
@@ -633,6 +794,7 @@ mod tests {
                 ClaimOutcome::Joined {
                     use_count: expected_count,
                     uses_remaining: None,
+                    agent_owner: None,
                 }
             );
         }
@@ -646,7 +808,7 @@ mod tests {
         let pool = setup_pool().await;
         let community = make_test_community(&pool).await;
         let pubkey = test_pubkey();
-        let invite = mint_relay_invite(&pool, community, "owner", 3600, Some(1))
+        let invite = mint_relay_invite(&pool, community, "owner", 3600, Some(1), None)
             .await
             .expect("mint bounded invite");
         let hash = hash_v2_code(&invite.code);
@@ -666,6 +828,108 @@ mod tests {
                 .expect("claim after rollback"),
             ClaimOutcome::Joined { use_count: 1, .. }
         ));
+        delete_test_community(&pool, community).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn agent_invite_claim_attributes_claimant_to_owner() {
+        let pool = setup_pool().await;
+        let community = make_test_community(&pool).await;
+        let owner = test_pubkey();
+        let agent = test_pubkey();
+        let invite = mint_relay_invite(&pool, community, &owner, 3600, Some(1), Some(&owner))
+            .await
+            .expect("mint agent invite");
+        assert_eq!(invite.agent_owner.as_deref(), Some(owner.as_str()));
+        let hash = hash_v2_code(&invite.code);
+
+        assert_eq!(
+            claim_relay_invite(&pool, community, &hash, &agent, None)
+                .await
+                .expect("first claim"),
+            ClaimOutcome::Joined {
+                use_count: 1,
+                uses_remaining: Some(0),
+                agent_owner: Some(owner.clone()),
+            }
+        );
+        assert!(is_relay_member(&pool, community, &agent)
+            .await
+            .expect("agent membership"));
+
+        // Attribution committed with the claim and is readable through the
+        // user module — the same mapping NIP-OA materialization writes.
+        let agent_bytes = hex::decode(&agent).expect("agent hex");
+        let mapped = crate::user::get_agent_owner(&pool, community, &agent_bytes)
+            .await
+            .expect("read mapping")
+            .expect("mapping exists");
+        assert_eq!(hex::encode(mapped), owner);
+
+        // Retry converges without consuming anything further.
+        assert_eq!(
+            claim_relay_invite(&pool, community, &hash, &agent, None)
+                .await
+                .expect("idempotent retry"),
+            ClaimOutcome::AlreadyMember {
+                use_count: 1,
+                uses_remaining: Some(0),
+                agent_owner: Some(owner.clone()),
+            }
+        );
+        assert_eq!(use_count(&pool, community, invite.invite_id).await, 1);
+        delete_test_community(&pool, community).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn agent_invite_claim_never_rebinds_an_existing_owner_mapping() {
+        let pool = setup_pool().await;
+        let community = make_test_community(&pool).await;
+        let first_owner = test_pubkey();
+        let second_owner = test_pubkey();
+        let agent = test_pubkey();
+
+        // Pre-existing attribution, e.g. NIP-OA materialized at AUTH time.
+        let agent_bytes = hex::decode(&agent).expect("agent hex");
+        let first_owner_bytes = hex::decode(&first_owner).expect("owner hex");
+        crate::user::ensure_user(&pool, community, &first_owner_bytes)
+            .await
+            .expect("owner row");
+        crate::user::ensure_user(&pool, community, &agent_bytes)
+            .await
+            .expect("agent row");
+        assert!(
+            crate::user::set_agent_owner(&pool, community, &agent_bytes, &first_owner_bytes)
+                .await
+                .expect("seed mapping")
+        );
+
+        let invite = mint_relay_invite(
+            &pool,
+            community,
+            &second_owner,
+            3600,
+            Some(1),
+            Some(&second_owner),
+        )
+        .await
+        .expect("mint agent invite");
+        let hash = hash_v2_code(&invite.code);
+
+        // Membership is granted; the reported owner is the mapping that
+        // HOLDS (first-write-wins), not the invite's recorded owner.
+        assert_eq!(
+            claim_relay_invite(&pool, community, &hash, &agent, None)
+                .await
+                .expect("claim"),
+            ClaimOutcome::Joined {
+                use_count: 1,
+                uses_remaining: Some(0),
+                agent_owner: Some(first_owner.clone()),
+            }
+        );
         delete_test_community(&pool, community).await;
     }
 }

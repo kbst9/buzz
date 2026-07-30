@@ -348,6 +348,27 @@ pub async fn get_agent_channel_policy(
     .transpose()
 }
 
+/// Get the `agent_owner_pubkey` recorded for `agent_pubkey`, if any.
+///
+/// This is the relay-recorded ownership mapping — written by NIP-OA
+/// materialization at AUTH time or by an agent-typed invite claim. `None`
+/// means the pubkey is unknown or has no owner (i.e. is not an agent).
+pub async fn get_agent_owner(
+    pool: &PgPool,
+    community_id: CommunityId,
+    agent_pubkey: &[u8],
+) -> Result<Option<Vec<u8>>> {
+    let row = sqlx::query_scalar::<_, Vec<u8>>(
+        "SELECT agent_owner_pubkey FROM users \
+         WHERE community_id = $1 AND pubkey = $2 AND agent_owner_pubkey IS NOT NULL",
+    )
+    .bind(community_id.as_uuid())
+    .bind(agent_pubkey)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
 /// Check whether `actor_pubkey` is the `agent_owner_pubkey` of `target_pubkey`.
 /// Queries `agent_owner_pubkey` directly rather than going through
 /// `get_agent_channel_policy`, which would fetch unrelated fields.

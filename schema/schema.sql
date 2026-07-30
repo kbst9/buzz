@@ -591,6 +591,9 @@ CREATE TABLE join_policy_acceptances (
 -- Conformance: durable invite records for atomic redemption, community-scoped.
 -- Stores only SHA-256(code) as 32-byte BYTEA; never the reusable bearer code.
 -- PK and UNIQUE both lead with community_id. max_uses NULL = unlimited.
+-- agent_owner (hex pubkey) marks an agent-typed invite: every claimant is
+-- attributed to that owner via users.agent_owner_pubkey inside the claim
+-- transaction. Agent invites are pinned to max_uses = 1.
 
 CREATE TABLE relay_invites (
     community_id  UUID        NOT NULL REFERENCES communities(id),
@@ -602,9 +605,14 @@ CREATE TABLE relay_invites (
     expires_at   TIMESTAMPTZ NOT NULL,
     created_by   TEXT        NOT NULL,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    agent_owner  TEXT
+        CONSTRAINT relay_invites_agent_owner_format
+        CHECK (agent_owner IS NULL OR agent_owner ~ '^[0-9a-f]{64}$'),
     PRIMARY KEY (community_id, id),
     UNIQUE (community_id, token_hash),
-    CHECK (max_uses IS NULL OR use_count <= max_uses)
+    CHECK (max_uses IS NULL OR use_count <= max_uses),
+    CONSTRAINT relay_invites_agent_owner_single_use
+        CHECK (agent_owner IS NULL OR max_uses = 1)
 );
 
 CREATE INDEX relay_invites_expires_at_idx ON relay_invites (expires_at);
