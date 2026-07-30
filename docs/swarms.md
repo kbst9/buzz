@@ -327,6 +327,29 @@ against the mention path, cap eviction, expiry. No relay, desktop, CLI,
 SDK, or member-side changes. Ships via the standard harness rollout
 (rebuild + restart the five units).
 
+## 8.1 Swarm self-deployment — members join on first address
+
+**Status: IMPLEMENTED and deployed 2026-07-30** (`6ee2a8e2`, deploy-direct
+commit; 662 harness tests green; all five units rolled).
+
+A swarm member missing from the channel had no subscription there, so an
+assignment mentioning it was silently undeliverable. Now, on every
+ASSIGNED swarm turn — before the model runs — the leader's harness diffs
+the swarm roster against the channel's kind:39002 membership and publishes
+kind:9000 adds (role bot) for the missing members. The relay's
+`channel_add_policy` stays the authorizer (the huddle-add precedent), and
+the member's replay-from-membership subscribe delivers the subsequent
+assignment even when it races the join. Product consequence, by design:
+addressing a swarm in a channel deploys its members into that channel's
+member list — "quick deployment" literally.
+
+Guardrails: declined adds mark the member "NOT REACHABLE in this channel"
+in the leader's roster (it says so instead of assigning into the void);
+an unavailable membership snapshot publishes nothing (no duplicate-add
+spam) and marks nobody; adds cap at 8 per turn. Logs under
+`swarm::deploy` ("swarm member deployed to channel" / "add declined").
+Report-received turns skip deployment entirely.
+
 ## 9. Non-goals (v1)
 
 - No changes to Teams, members' harnesses, the relay, or mobile (beyond the
