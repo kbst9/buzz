@@ -18,7 +18,7 @@ use std::sync::RwLock;
 
 use buzz_core::kind::KIND_SWARM;
 use buzz_sdk::swarm::{parse_swarm_content, SwarmContent, SWARM_TAG};
-use nostr::{Alphabet, Event, PublicKey, SingleLetterTag};
+use nostr::{Event, PublicKey};
 
 use crate::relay::RestClient;
 
@@ -273,7 +273,7 @@ async fn fetch_member_meta(
                 .filter(|a| !a.is_empty()),
         };
         let key = event.pubkey.to_hex();
-        let ts = event.created_at.as_u64();
+        let ts = event.created_at.as_secs();
         match newest.get(&key) {
             Some((existing_ts, _)) if *existing_ts >= ts => {}
             _ => {

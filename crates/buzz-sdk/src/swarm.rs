@@ -41,6 +41,7 @@ pub struct SwarmMember {
 /// fields written by newer clients.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SwarmContent {
+    /// Display name for the swarm ("devswarm").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Leader agent pubkey (64-char hex). Required for a functioning swarm;
@@ -50,12 +51,14 @@ pub struct SwarmContent {
     /// Leader/manager instructions — injected as the high-priority block.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
+    /// Member agents eligible for assignment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub members: Option<Vec<SwarmMember>>,
     /// When true the leader instructs members to report back on completion
     /// and evaluates their report against `evaluation_criteria`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report_back: Option<bool>,
+    /// Owner-defined success criteria the leader evaluates reports against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluation_criteria: Option<String>,
     /// Unknown fields from newer writers, preserved verbatim.
