@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# Stand up a new standalone Buzz agent on this host (runbook steps 2-5).
+# Stand up a new standalone Buzz agent on this host.
 # See docs/standalone-agents.md. This script NEVER handles the owner's
-# secret key: mint the auth tag on the owner's machine and paste it here.
+# secret key. Two provisioning modes:
+#   - invite (recommended): paste the single-use agent invite code from the
+#     desktop's "Add agent" dialog — the agent claims it on first start and
+#     is attributed to the owner relay-side. No tag round-trip.
+#   - auth tag (manual): mint the NIP-OA tag on the owner's machine and
+#     paste it here.
 set -euo pipefail
 
 say() { printf '\n%s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-[[ -f crates/buzz-sdk/examples/keygen.rs ]] || die "run from a buzz repo checkout (needs cargo examples)"
+[[ -d crates/buzz-sdk ]] || die "run from a buzz repo checkout"
 command -v systemctl >/dev/null || die "systemd required (Linux host)"
 command -v buzz-acp >/dev/null || die "buzz-acp not on PATH (cargo build --release -p buzz-acp)"
 command -v buzz >/dev/null || die "buzz CLI not on PATH (cargo build --release -p buzz-cli)"
@@ -31,16 +36,35 @@ if [[ "$RESPOND_TO" == "allowlist" ]]; then
 fi
 
 say "Generating the agent keypair (secret stays on this host)…"
-KEYGEN_OUT="$(cargo run --release -q -p buzz-sdk --example keygen)"
-SECRET="$(sed -n 's/^secret=//p' <<<"$KEYGEN_OUT")"
-PUBKEY="$(sed -n 's/^pubkey=//p' <<<"$KEYGEN_OUT")"
+if KEYGEN_OUT="$(buzz keys generate 2>/dev/null)"; then
+  SECRET="$(sed -n 's/.*"private_key":"\([0-9a-f]\{64\}\)".*/\1/p' <<<"$KEYGEN_OUT")"
+  PUBKEY="$(sed -n 's/.*"public_key":"\([0-9a-f]\{64\}\)".*/\1/p' <<<"$KEYGEN_OUT")"
+else
+  # Older buzz CLI without `keys generate` — fall back to the cargo example.
+  KEYGEN_OUT="$(cargo run --release -q -p buzz-sdk --example keygen)"
+  SECRET="$(sed -n 's/^secret=//p' <<<"$KEYGEN_OUT")"
+  PUBKEY="$(sed -n 's/^pubkey=//p' <<<"$KEYGEN_OUT")"
+fi
 [[ -n "$SECRET" && -n "$PUBKEY" ]] || die "keygen failed"
-
 say "Agent pubkey: $PUBKEY"
-say "On the OWNER's machine, mint the auth tag now:
+
+say "Membership: paste the single-use agent invite code from the desktop's
+Settings → Connected agents → Add agent dialog (recommended), or press
+enter to use the manual NIP-OA auth-tag flow."
+read -rp "Invite code (v2.…, empty for auth-tag flow): " INVITE_CODE
+
+AUTH_TAG=""
+OWNER_PUBKEY=""
+if [[ -n "$INVITE_CODE" ]]; then
+  [[ "$INVITE_CODE" == v2.* ]] || die "invite codes start with v2."
+  read -rp "Owner pubkey (64-char hex, shown in the same dialog): " OWNER_PUBKEY
+  [[ "$OWNER_PUBKEY" =~ ^[0-9a-f]{64}$ ]] || die "owner pubkey must be 64-char lowercase hex"
+else
+  say "On the OWNER's machine, mint the auth tag now:
   cargo run --release -p buzz-sdk --example compute_auth_tag -- <owner_secret_hex> $PUBKEY"
-read -rp "Paste the auth tag JSON: " AUTH_TAG
-[[ "$AUTH_TAG" == '["auth"'* ]] || die "that does not look like an auth tag"
+  read -rp "Paste the auth tag JSON: " AUTH_TAG
+  [[ "$AUTH_TAG" == '["auth"'* ]] || die "that does not look like an auth tag"
+fi
 
 ENV_FILE="/etc/buzz-agents/${NAME}.env"
 UNIT_FILE="/etc/systemd/system/buzz-acp-${NAME}.service"
@@ -53,7 +77,9 @@ sudo install -m 0600 -o "$RUN_USER" /dev/null "$ENV_FILE"
 sudo tee "$ENV_FILE" >/dev/null <<ENV
 BUZZ_RELAY_URL=${RELAY_URL}
 BUZZ_PRIVATE_KEY=${SECRET}
-BUZZ_AUTH_TAG=${AUTH_TAG}
+$( [[ -n "$INVITE_CODE" ]] && echo "BUZZ_INVITE_CODE=${INVITE_CODE}" )
+$( [[ -n "$OWNER_PUBKEY" ]] && echo "BUZZ_ACP_AGENT_OWNER=${OWNER_PUBKEY}" )
+$( [[ -n "$AUTH_TAG" ]] && echo "BUZZ_AUTH_TAG=${AUTH_TAG}" )
 BUZZ_ACP_RESPOND_TO=${RESPOND_TO}
 $( [[ -n "$ALLOWLIST" ]] && echo "BUZZ_ACP_RESPOND_TO_ALLOWLIST=${ALLOWLIST}" )
 BUZZ_ACP_AGENT_COMMAND=${AGENT_CMD}
@@ -84,9 +110,13 @@ say "Enabling and starting…"
 sudo systemctl daemon-reload
 sudo systemctl enable --now "buzz-acp-${NAME}"
 
+VERIFY_EXPECT='profile published (kind:0 sync) + discovered N channel(s)'
+if [[ -n "$INVITE_CODE" ]]; then
+  VERIFY_EXPECT="community invite claimed + ${VERIFY_EXPECT}"
+fi
 say "Done. Verify with:
   journalctl -u buzz-acp-${NAME} -f
-  # expect: profile published (kind:0 sync) + discovered N channel(s)
+  # expect: ${VERIFY_EXPECT}
 Then add the agent to a channel (member picker, or):
   buzz channels add-member --channel <uuid> --pubkey ${PUBKEY}
 And send it a fresh mention — mentions from before a start are never replayed."

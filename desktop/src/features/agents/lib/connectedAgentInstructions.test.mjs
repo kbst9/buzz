@@ -14,16 +14,35 @@ test("unit slug kebab-cases display names", () => {
   assert.equal(unitSlugForAgentName("🐝"), "agent");
 });
 
-test("add instructions embed relay url and owner pubkey, never ask for the owner secret", () => {
+test("add instructions embed relay url, owner pubkey, and the invite code — no secret handling", () => {
   const text = buildAddAgentInstructions({
     relayUrl: "wss://buzz.example.org",
     ownerPubkey: "a".repeat(64),
+    inviteCode: "v2.test-invite-code",
+    inviteExpiresAt: 1_754_000_000,
   });
   assert.ok(text.includes("wss://buzz.example.org"));
   assert.ok(text.includes("a".repeat(64)));
-  assert.ok(text.includes("never ask for"));
-  assert.ok(text.includes("compute_auth_tag"));
+  assert.ok(text.includes("v2.test-invite-code"));
+  assert.ok(text.includes("single-use"));
+  assert.ok(text.includes("expires"));
+  assert.ok(text.includes("Never ask for anyone's secret key"));
   assert.ok(text.includes("new-standalone-agent.sh"));
+  assert.ok(text.includes("community invite claimed"));
+  // The invite flow fully replaces the owner-side tag mint — the old
+  // STOP-and-wait step must be gone.
+  assert.ok(!text.includes("compute_auth_tag"));
+  assert.ok(!text.includes("STOP and ask the owner"));
+});
+
+test("add instructions omit the expiry hint when no expiry is known", () => {
+  const text = buildAddAgentInstructions({
+    relayUrl: "wss://buzz.example.org",
+    ownerPubkey: "a".repeat(64),
+    inviteCode: "v2.test-invite-code",
+  });
+  assert.ok(text.includes("v2.test-invite-code (single-use)"));
+  assert.ok(!text.includes("expires "));
 });
 
 test("edit instructions include only the fields that were set", () => {

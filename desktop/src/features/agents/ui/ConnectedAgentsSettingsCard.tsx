@@ -1,7 +1,9 @@
+import { useMutation } from "@tanstack/react-query";
 import { Cable, Pencil, Plus } from "lucide-react";
 import * as React from "react";
 
 import { buildAddAgentInstructions } from "@/features/agents/lib/connectedAgentInstructions";
+import { mintInvite } from "@/shared/api/invites";
 import { useVerifiedAgents } from "@/features/agents/lib/useVerifiedAgents";
 import {
   ConnectedAgentEditDialog,
@@ -238,10 +240,32 @@ function AddAgentDialog({
   relayUrl: string;
   ownerPubkey: string;
 }) {
+  // Each dialog open mints a fresh single-use agent invite: the claiming
+  // keypair joins the community and is attributed to this user relay-side,
+  // so no secret (owner's or agent's) ever crosses machines.
+  const mint = useMutation({ mutationFn: () => mintInvite({ agent: true }) });
+  const { mutate: mintNow, reset: resetMint } = mint;
+  React.useEffect(() => {
+    if (open) {
+      mintNow();
+    } else {
+      resetMint();
+    }
+  }, [open, mintNow, resetMint]);
+
   const instructions = React.useMemo(
-    () => buildAddAgentInstructions({ ownerPubkey, relayUrl }),
-    [ownerPubkey, relayUrl],
+    () =>
+      mint.data
+        ? buildAddAgentInstructions({
+            inviteCode: mint.data.code,
+            inviteExpiresAt: mint.data.expiresAt,
+            ownerPubkey,
+            relayUrl,
+          })
+        : null,
+    [mint.data, ownerPubkey, relayUrl],
   );
+
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
       <DialogContent className="max-w-2xl">
@@ -249,14 +273,43 @@ function AddAgentDialog({
           <DialogTitle>Add a connected agent</DialogTitle>
           <DialogDescription>
             Paste this to an AI (or a person) with shell access on the machine
-            that will run the agent. Your relay URL and owner pubkey are filled
-            in; the owner secret is never part of it.
+            that will run the agent. It carries a fresh single-use agent invite
+            — the agent joins this community as yours on first connect. No
+            secret key ever moves between machines.
           </DialogDescription>
         </DialogHeader>
-        <CopyableInstructions
-          testId="connected-agents-add-instructions"
-          text={instructions}
-        />
+        {instructions ? (
+          <CopyableInstructions
+            testId="connected-agents-add-instructions"
+            text={instructions}
+          />
+        ) : mint.isError ? (
+          <div
+            className="space-y-3 rounded-2xl border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm"
+            data-testid="connected-agents-add-mint-error"
+          >
+            <p>
+              Could not mint the agent invite:{" "}
+              {mint.error instanceof Error
+                ? mint.error.message
+                : "unknown error"}
+            </p>
+            <p className="text-muted-foreground">
+              Minting needs community owner or admin rights and a reachable
+              relay.
+            </p>
+            <Button onClick={() => mintNow()} size="sm" variant="outline">
+              Try again
+            </Button>
+          </div>
+        ) : (
+          <p
+            className="rounded-2xl border border-border/60 px-4 py-6 text-sm text-muted-foreground"
+            data-testid="connected-agents-add-minting"
+          >
+            Minting a single-use agent invite…
+          </p>
+        )}
       </DialogContent>
     </Dialog>
   );
