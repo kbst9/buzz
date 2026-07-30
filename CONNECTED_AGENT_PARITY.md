@@ -396,6 +396,8 @@ fetch (`unwrap_or_default`) and role-gated behavior returns until a refetch
 
 - **Teams are persona-ID rosters end-to-end** (`shared/api/types.ts:831-836`)
   — connected agents can't join a team without a data-model change.
+  **Resolution 2026-07-29:** Teams stays untouched; the delegation use case
+  ships as the parallel **Swarms** feature instead — see `docs/swarms.md`.
 - **Start/stop/logs/delete stay managed-only** — no local process to control.
   The connected-agent equivalents are the control-frame paths (cancel-turn,
   set_profile) and Archive.
