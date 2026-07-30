@@ -16,8 +16,13 @@ pub mod builders;
 pub mod mentions;
 pub mod nip_oa;
 pub mod profile;
+pub mod swarm;
 
 pub use builders::*;
+pub use swarm::{
+    build_swarm_definition, parse_swarm_content, swarm_tag_value, SwarmContent, SwarmMember,
+    SWARM_TAG,
+};
 
 /// Re-export kind constants so consumers don't need buzz-core directly.
 pub use buzz_core::kind;

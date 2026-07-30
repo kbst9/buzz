@@ -24,10 +24,17 @@ upstream PR later. Teams stays exactly as it is.
 
 ## 2. Simplicity keystones (the load-bearing decisions)
 
-1. **The leader IS the swarm's address.** No virtual identities, no new
-   dispatch: "@Leader" fires the leader's turn via the existing mention
-   machinery, and its harness detects it leads a swarm. A leader is
-   swarm-dedicated by convention (any direct mention activates leader mode).
+1. **The swarm is addressed by mention aliasing — no new identity.**
+   "@devswarm" is a first-class mention-autocomplete candidate; selecting it
+   emits the *leader's* p-tag plus a `["swarm", "<swarm-id>"]` tag on the
+   message (and "@devswarm" as the visible text). The leader's harness
+   enters leader mode only when its own mention arrives WITH a swarm tag
+   naming a definition it leads; a plain "@Leader" mention stays ordinary
+   agent behavior. This kills three birds: swarms initiate from channels,
+   no keypair/custody/presence questions ever arise, and leaders no longer
+   need to be swarm-dedicated. (Clients without swarm awareness can still
+   address a swarm by mentioning the leader and adding the tag — or just
+   talk to the leader directly.)
 2. **Members are completely swarm-unaware.** No member-side harness or
    schema changes. Delegation is a normal in-thread mention from the leader
    (fires the member's turn today); report-back is a *sentence in the
@@ -191,12 +198,12 @@ with no restarts anywhere.
 
 ## 9. Open questions (non-blocking)
 
-- Swarm display identity: v1 renders the leader's avatar for the swarm; if
-  "@Swarm" should ever feel like its own entity, that's a schema-level
-  decision (dedicated keypair vs. leader aliasing) to take before v2.
-- Should the leader's *assignment* messages carry a machine-readable tag
-  (e.g. `["swarm", <id>]`) for future UI (swarm activity view)? Cheap to
-  add at P2 time; invisible otherwise.
+- ~~Swarm display identity~~ **Resolved (Kevin, 2026-07-29): swarms are
+  addressable via mention aliasing (§2.1)** — "@devswarm" initiates from
+  any channel the leader can hear; no dedicated identity.
+- The `["swarm", <id>]` tag now exists on *initiating* messages by design;
+  whether the leader's assignment replies should also carry it (swarm
+  activity view) stays open — cheap to add later.
 - CLI surface (`buzz swarms get/set`) — follows the AGENTS.md rule
   (agent-facing ops live in buzz-cli); natural P5 if operators want to
   define swarms from the box.

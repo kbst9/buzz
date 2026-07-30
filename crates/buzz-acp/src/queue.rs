@@ -1372,6 +1372,12 @@ pub struct FormatPromptArgs<'a> {
     /// For legacy agents it rides in the user message on every turn of the
     /// session, alongside `[Base]`/`[System]`/`[Agent Memory — core]`.
     pub agent_canvas: Option<&'a str>,
+    /// Rendered `[Swarm Leader]` section for swarm-addressed turns
+    /// (docs/swarms.md). Per-turn and user-message-delivered for BOTH agent
+    /// generations — it depends on the triggering event's swarm tag, so it
+    /// can never ride the session-static system role. Rendered first: the
+    /// delegation contract outranks every other section this turn.
+    pub swarm_context: Option<&'a str>,
 }
 
 /// Format the `[Base]` section for the base prompt.
@@ -1421,7 +1427,13 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
         .map(|ci| ci.channel_type == "dm")
         .unwrap_or(false);
 
-    let mut sections: Vec<String> = Vec::with_capacity(7);
+    let mut sections: Vec<String> = Vec::with_capacity(8);
+
+    // Swarm-addressed turns open with the delegation contract — highest
+    // priority section for both agent generations (see FormatPromptArgs).
+    if let Some(swarm) = args.swarm_context.map(str::trim).filter(|s| !s.is_empty()) {
+        sections.push(swarm.to_string());
+    }
 
     // For legacy agents (protocol_version < 2), inject base_prompt and
     // system_prompt as user-message sections. Modern agents receive these
@@ -1804,6 +1816,30 @@ mod tests {
             prompt.contains(&format!("--reply-to {newest_id}")),
             "reply anchor must target the newest event; prompt was:\n{prompt}"
         );
+    }
+
+    /// A swarm-addressed turn opens with the [Swarm Leader] section — the
+    /// delegation contract outranks every other section this turn.
+    #[test]
+    fn swarm_context_renders_as_first_section() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        q.push(make_queued_created_at(ch, "fix the bug", 1_000));
+        let batch = q.flush_next().expect("should return batch");
+
+        let sections = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                swarm_context: Some("[Swarm Leader]\ndelegate, never execute"),
+                ..Default::default()
+            },
+        );
+        assert!(sections[0].starts_with("[Swarm Leader]"));
+        assert!(sections.iter().any(|s| s.contains("fix the bug")));
+
+        // Absent swarm context → no such section anywhere.
+        let plain = format_prompt(&batch, &FormatPromptArgs::default());
+        assert!(plain.iter().all(|s| !s.contains("[Swarm Leader]")));
     }
 
     #[test]

@@ -258,6 +258,17 @@ pub const KIND_TEAM: u32 = 30176;
 /// since these events are world-readable on the relay.
 pub const KIND_MANAGED_AGENT: u32 = 30177;
 
+/// NIP-AP: Swarm (parameterized replaceable, owner-authored).
+///
+/// Swarm definition event published by the swarm owner. Addressed by
+/// `(pubkey, kind, d_tag)` where `d_tag` is the swarm's stable id (uuid).
+/// Content is a JSON body naming a required leader agent, member agents with
+/// per-member task descriptions, leader instructions, and reporting policy.
+/// The leader's harness fetches definitions authored by its NIP-OA owner and
+/// enters delegation mode when mentioned together with a `["swarm", <id>]`
+/// tag; members need no swarm awareness. See docs/swarms.md.
+pub const KIND_SWARM: u32 = 30178;
+
 // NIP-56 reporting
 /// NIP-56: Report an event, pubkey, or blob to relay moderators (kind:1984).
 ///
@@ -586,6 +597,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_PERSONA,
     KIND_TEAM,
     KIND_MANAGED_AGENT,
+    KIND_SWARM,
     KIND_REPORT,
     KIND_PRODUCT_FEEDBACK,
     KIND_NIP29_PUT_USER,
@@ -784,6 +796,7 @@ const _: () = assert!(is_replaceable(KIND_AGENT_PROFILE)); // 10100 ∈ 10000–
 const _: () = assert!(is_parameterized_replaceable(KIND_PERSONA)); // 30175 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM)); // 30176 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_MANAGED_AGENT)); // 30177 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_SWARM)); // 30178 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_EVENT_REMINDER)); // 30300 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_DM_VISIBILITY)); // 30622 ∈ 30000–39999
