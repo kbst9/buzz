@@ -242,7 +242,86 @@ the member's report fires the leader; the leader evaluates against your
 criteria. `journalctl -u buzz-acp-claude | grep swarm` shows
 `swarm-addressed turn — entering leader mode`.
 
-## 8. Non-goals (v1)
+## 8. Report-back enforcement — assignment watches
+
+**Problem (observed live, 2026-07-30):** report-back rode the assignment
+text, so it was only as reliable as the member's model remembering to
+@-mention the leader. A member completed its task without the mention and
+the loop died silently. Worse: in Mentions mode the leader's subscription
+never even RECEIVES an un-mentioning reply (the mention filter drops it
+relay-side) — no prompt wording can fix that.
+
+**Principle: the supervisor watches; the worker stays dumb.** All
+enforcement lands in the leader's harness — the one place swarm logic
+already lives. Members remain 100% swarm-unaware (keystone #2 survives),
+which keeps this working for any member harness version and, later,
+cross-owner members or even human workers.
+
+### Mechanism (buzz-acp only, new module `swarm_watch.rs`)
+
+1. **Arm.** The event loop already receives the leader's own outgoing
+   messages (they arrive and are then dropped as self-authored —
+   `lib.rs:2219`; the hook goes just before that drop). When a
+   self-authored message satisfies ALL of:
+   - its thread ROOT carries a `["swarm", <id>]` tag for a swarm this
+     agent leads (the root is the client-built @swarm message, so the tag
+     is mechanical, never model-typed; root resolution reuses
+     `parse_thread_tags` + the existing thread-root walker),
+   - that swarm has `report_back: true`,
+   - it p-tags at least one member of that swarm,
+   → register `AssignmentWatch { thread_root, channel, swarm_id,
+   members_assigned, armed_at }`. In-memory only; watches do not survive a
+   restart (same live-only stance as mention replay, documented). Cap 16
+   concurrent, oldest evicted with a warn.
+2. **Watch.** Each armed watch opens one live relay subscription:
+   `kinds:[9], #e:[thread_root], since:now`. This is the piece that makes
+   enforcement possible at all — it bypasses the mention filter for
+   exactly one thread, for exactly as long as an assignment is open.
+3. **Fire.** A watched event whose author is one of `members_assigned`
+   (never self) is pushed into the ordinary turn queue for that channel.
+   The queue's existing event-id dedup absorbs the double-delivery case
+   where a well-behaved member DID mention the leader (arrives via both
+   paths). The author gate admits same-owner members as siblings — v1's
+   same-owner constraint keeps this closed; the cross-owner phase must
+   teach the gate to admit watched-thread authors.
+4. **Evaluate.** The prompt path injects the `[Swarm Leader]` section for
+   watch-fired turns too (today's predicate is trigger-tag-based; it gains
+   the watch marker), with a REPORT-RECEIVED framing: *"a member you
+   assigned replied in the supervised thread — evaluate against the
+   evaluation criteria; confirm completion to the requester or reassign
+   with concrete feedback."* Firing closes the watch.
+5. **Expire.** Watches time out (30 minutes, constant in v1). v1 logs and
+   drops. An env-gated nudge turn ("no report yet — follow up or
+   reassign") is the natural v1.1, default off, so prod never gains
+   surprise messages from an upgrade.
+
+### Consequences
+
+- `report_back` becomes structural: ON arms watches; OFF means no watch,
+  no supervision — the toggle finally does what it says.
+- The leader template DROPS the "instruct the member to @-mention you"
+  sentence (unreliable, now unnecessary) and instead says replies in the
+  thread are picked up automatically.
+- Loop safety is preserved by shape: only the leader auto-fires, only on
+  assigned members' replies, only inside supervised threads, only while a
+  watch is open. Members never auto-fire; the leader's own confirmation
+  replies fire no one.
+- Casual leader mentions of members outside swarm threads arm nothing
+  (the thread-root swarm tag is required), so non-dedicated leaders stay
+  safe.
+
+### Scope
+
+~250–400 lines in buzz-acp (`swarm_watch.rs` registry + pure predicates,
+three integration points: own-message hook, watch-event routing, expiry
+sweep on the existing tick) + tests for: arming predicate (root-tag +
+member-mention + report_back), non-arming cases (no tag / reporting off /
+foreign thread), fire-on-member-reply, self/non-member ignored, dedup
+against the mention path, cap eviction, expiry. No relay, desktop, CLI,
+SDK, or member-side changes. Ships via the standard harness rollout
+(rebuild + restart the five units).
+
+## 9. Non-goals (v1)
 
 - No changes to Teams, members' harnesses, the relay, or mobile (beyond the
   kind-constant sync).
