@@ -535,6 +535,7 @@ pub async fn send_channel_message(
     media_tags: Option<Vec<Vec<String>>>,
     emoji_tags: Option<Vec<Vec<String>>>,
     mention_tags: Option<Vec<Vec<String>>>,
+    swarm_tags: Option<Vec<Vec<String>>>,
     mention_pubkeys: Option<Vec<String>>,
     kind: Option<u32>,
     state: State<'_, AppState>,
@@ -546,6 +547,7 @@ pub async fn send_channel_message(
     let media = media_tags.unwrap_or_default();
     let emoji = emoji_tags.unwrap_or_default();
     let mention_refs_only = mention_tags.unwrap_or_default();
+    let swarm_refs = swarm_tags.unwrap_or_default();
     let kind_num = kind.unwrap_or(buzz_core_pkg::kind::KIND_STREAM_MESSAGE);
 
     let mut resolved_root: Option<String> = None;
@@ -593,6 +595,10 @@ pub async fn send_channel_message(
             )?
         }
     };
+    // Swarm-aliasing tags (docs/swarms.md §2.1) apply to every message kind,
+    // so they append here rather than through each builder. The validator
+    // mirrors mention_reference_tags: only ["swarm", <id>] passes.
+    let builder = builder.tags(events::swarm_reference_tags(&swarm_refs)?);
 
     let result = submit_event(builder, &state).await?;
 

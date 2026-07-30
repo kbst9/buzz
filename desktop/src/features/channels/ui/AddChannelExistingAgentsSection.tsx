@@ -1,7 +1,7 @@
 import { Check } from "lucide-react";
 import * as React from "react";
 
-import { useManagedAgentsQuery } from "@/features/agents/hooks";
+import { useVerifiedAgents } from "@/features/agents/lib/useVerifiedAgents";
 import {
   useAddChannelMembersMutation,
   useChannelMembersQuery,
@@ -10,18 +10,12 @@ import {
   formatExistingAgentLabel,
   selectAddChannelExistingAgentCandidates,
 } from "@/features/channels/ui/addChannelExistingAgentCandidates";
-import {
-  useFlattenedUserSearchResults,
-  useInfiniteUserSearchQuery,
-  useUsersBatchQuery,
-} from "@/features/profile/hooks";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { UserSearchResult } from "@/shared/api/types";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 import { Button } from "@/shared/ui/button";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
-
-const DIRECTORY_RESULT_LIMIT = 50;
 
 type AddChannelExistingAgentsSectionProps = {
   channelId: string | null;
@@ -45,14 +39,10 @@ export function AddChannelExistingAgentsSection({
 }: AddChannelExistingAgentsSectionProps) {
   const identityQuery = useIdentityQuery();
   const viewerPubkey = identityQuery.data?.pubkey ?? null;
-  const directoryQuery = useInfiniteUserSearchQuery("", {
-    allowEmpty: true,
-    enabled,
-    limit: DIRECTORY_RESULT_LIMIT,
-  });
-  const directoryUsers = useFlattenedUserSearchResults(directoryQuery.data);
+  // Shared verified-agent enumeration; the candidates helper below keeps
+  // this dialog's own membership/exclusion filtering and sorting.
+  const { directoryUsers, managedPubkeys } = useVerifiedAgents({ enabled });
   const membersQuery = useChannelMembersQuery(channelId, enabled);
-  const managedAgentsQuery = useManagedAgentsQuery();
   const addMembersMutation = useAddChannelMembersMutation(channelId);
 
   const [pendingPubkeys, setPendingPubkeys] = React.useState<
@@ -74,20 +64,15 @@ export function AddChannelExistingAgentsSection({
         .filter((pubkey) => !addedPubkeys.has(pubkey)),
     [addedPubkeys, membersQuery.data],
   );
-  const managedAgentPubkeys = React.useMemo(
-    () => (managedAgentsQuery.data ?? []).map((agent) => agent.pubkey),
-    [managedAgentsQuery.data],
-  );
-
   const candidates = React.useMemo(
     () =>
       selectAddChannelExistingAgentCandidates({
-        excludedPubkeys: managedAgentPubkeys,
+        excludedPubkeys: managedPubkeys,
         memberPubkeys,
         users: directoryUsers,
         viewerPubkey,
       }),
-    [directoryUsers, managedAgentPubkeys, memberPubkeys, viewerPubkey],
+    [directoryUsers, managedPubkeys, memberPubkeys, viewerPubkey],
   );
 
   const ownerPubkeys = React.useMemo(

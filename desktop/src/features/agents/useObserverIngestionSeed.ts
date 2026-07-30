@@ -1,10 +1,7 @@
 import * as React from "react";
 
-import {
-  useFlattenedUserSearchResults,
-  useInfiniteUserSearchQuery,
-  useUsersBatchQuery,
-} from "@/features/profile/hooks";
+import { useVerifiedAgents } from "@/features/agents/lib/useVerifiedAgents";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { UserSearchResult } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -76,16 +73,15 @@ export function useObserverIngestionSeed() {
   const identityQuery = useIdentityQuery();
   const currentPubkey = identityQuery.data?.pubkey;
 
-  const directoryQuery = useInfiniteUserSearchQuery("", {
-    allowEmpty: true,
+  // Shared verified-agent enumeration; the owned-agent selection below keeps
+  // this seed's own ownership filter over the raw directory rows.
+  const { directoryUsers } = useVerifiedAgents({
     enabled: Boolean(currentPubkey),
-    limit: 50,
   });
-  const users = useFlattenedUserSearchResults(directoryQuery.data);
 
   const ownedAgentPubkeys = React.useMemo(
-    () => selectOwnedConnectedAgentPubkeys(users, currentPubkey),
-    [users, currentPubkey],
+    () => selectOwnedConnectedAgentPubkeys(directoryUsers, currentPubkey),
+    [directoryUsers, currentPubkey],
   );
 
   useUsersBatchQuery(ownedAgentPubkeys, {

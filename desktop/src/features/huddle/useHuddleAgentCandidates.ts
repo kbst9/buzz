@@ -1,11 +1,8 @@
 import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
+import { useVerifiedAgents } from "@/features/agents/lib/useVerifiedAgents";
 import { usePresenceQuery } from "@/features/presence/hooks";
-import {
-  useFlattenedUserSearchResults,
-  useInfiniteUserSearchQuery,
-} from "@/features/profile/hooks";
 import type { PresenceLookup } from "@/shared/api/types";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 
@@ -104,11 +101,9 @@ export function mergeHuddleAgentCandidates(
  */
 export function useHuddleAgentCandidates() {
   const managedAgentsQuery = useManagedAgentsQuery();
-  const directoryQuery = useInfiniteUserSearchQuery("", {
-    allowEmpty: true,
-    limit: 50,
-  });
-  const directoryUsers = useFlattenedUserSearchResults(directoryQuery.data);
+  // Shared verified-agent enumeration; `mergeHuddleAgentCandidates` keeps
+  // this surface's own filtering over the raw directory rows.
+  const { directoryQuery, directoryUsers } = useVerifiedAgents();
 
   const managedAgents = React.useMemo(
     () => managedAgentsQuery.data ?? [],

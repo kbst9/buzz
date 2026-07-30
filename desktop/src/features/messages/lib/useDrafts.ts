@@ -43,6 +43,13 @@ export type DraftMentionRef = {
   displayName: string;
   pubkey: string;
   isAgent: boolean;
+  /**
+   * Swarm aliasing (§2.1): set when the mention is a swarm alias — `pubkey`
+   * is the leader and this is the swarm definition id, so a restored draft
+   * still emits the ["swarm", id] tag. Absent on ordinary mentions (and on
+   * drafts stored before this field existed).
+   */
+  swarmId?: string;
 };
 
 export type DraftState = {
