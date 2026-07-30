@@ -906,8 +906,9 @@ mod tests {
         assert_eq!(migrations[25].version, 26);
         let agent_invites = migrations[25].sql.as_str();
         assert!(agent_invites.contains("ADD COLUMN agent_owner TEXT"));
-        assert!(agent_invites
-            .contains("CHECK (agent_owner IS NULL OR agent_owner ~ '^[0-9a-f]{64}$')"));
+        assert!(
+            agent_invites.contains("CHECK (agent_owner IS NULL OR agent_owner ~ '^[0-9a-f]{64}$')")
+        );
         assert!(agent_invites.contains("ADD CONSTRAINT relay_invites_agent_owner_single_use"));
         assert!(agent_invites.contains("CHECK (agent_owner IS NULL OR max_uses = 1)"));
 

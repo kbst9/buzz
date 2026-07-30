@@ -392,7 +392,9 @@ impl RestClient {
         F: Fn() -> Fut,
         Fut: std::future::Future<Output = Result<reqwest::Response, reqwest::Error>>,
     {
-        let resp = self.request_with_retry_raw(method, path, build_request).await?;
+        let resp = self
+            .request_with_retry_raw(method, path, build_request)
+            .await?;
         if resp.status().is_success() {
             Ok(resp)
         } else {

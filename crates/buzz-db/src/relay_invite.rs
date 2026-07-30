@@ -103,7 +103,11 @@ fn validate_mint_inputs(
     }
 
     if let Some(owner) = agent_owner {
-        if owner.len() != 64 || !owner.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        if owner.len() != 64
+            || !owner
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        {
             return Err(crate::error::DbError::InvalidData(
                 "agent_owner must be a 64-char lowercase hex pubkey".into(),
             ));
