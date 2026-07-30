@@ -906,8 +906,9 @@ mod tests {
         assert_eq!(migrations[25].version, 26);
         let agent_invites = migrations[25].sql.as_str();
         assert!(agent_invites.contains("ADD COLUMN agent_owner TEXT"));
-        assert!(agent_invites
-            .contains("CHECK (agent_owner IS NULL OR agent_owner ~ '^[0-9a-f]{64}$')"));
+        assert!(
+            agent_invites.contains("CHECK (agent_owner IS NULL OR agent_owner ~ '^[0-9a-f]{64}$')")
+        );
         assert!(agent_invites.contains("ADD CONSTRAINT relay_invites_agent_owner_single_use"));
         assert!(agent_invites.contains("CHECK (agent_owner IS NULL OR max_uses = 1)"));
 
@@ -1162,7 +1163,11 @@ mod tests {
         run_migrations(&pool)
             .await
             .expect("retry succeeds after operator repair");
-        assert_eq!(applied_versions(&pool).await.last().copied(), Some(25));
+        // Derive the expected head from the MIGRATOR so this doesn't go
+        // stale as additive migrations land (it previously hardcoded the
+        // version and rotted).
+        let latest = MIGRATOR.iter().map(|migration| migration.version).max();
+        assert_eq!(applied_versions(&pool).await.last().copied(), latest);
     }
 
     #[tokio::test]

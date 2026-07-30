@@ -1305,8 +1305,7 @@ mod tests {
             .expect("owner attribution"));
 
         // Retry converges and reports the same attribution.
-        let response =
-            post_json(state, &host, "/api/invites/claim", &agent, claim_body).await;
+        let response = post_json(state, &host, "/api/invites/claim", &agent, claim_body).await;
         assert_eq!(response.status(), StatusCode::OK);
         let json = read_json(response).await;
         assert_eq!(
