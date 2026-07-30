@@ -190,6 +190,14 @@ Plus-card at the end of the grid opens the create dialog.
   direct mention; assembly order; report-back sentence toggled by
   `report_back`. **Done** (`feat/swarms`; 1,158 crate tests green).
 - **P3 — desktop:** section + dialog + publish path + tests as above.
+  **Done** (`feat/swarms-desktop`, five commits + size-guard extractions;
+  3,898 desktop tests green; Tauri Rust compile-checked). Notes: the
+  frontend→event tag channel is prefix-validated (`swarm_tags` param
+  mirroring `mention_tags`'s anti-forgery rule — verbatim append was
+  deliberately rejected); swarm mention rows use the `Network` icon and
+  appear only in channel composers whose leader can hear the channel;
+  `useVerifiedAgents` now dedupes the six enumeration copies. Accepted
+  one-time ratchet overage: `commands/messages.rs` +3 (the parameter).
 - **P4 — verify on the reference deployment:** define a swarm over two
   gradient agents, mention the leader in a channel, watch: leader assigns
   one member in-thread, member answers, (reporting on) member mentions
@@ -200,6 +208,39 @@ Plus-card at the end of the grid opens the create dialog.
 one member and no self-answer; with reporting on, the loop closes with the
 leader's evaluation; deleting the swarm event restores plain-agent behavior
 with no restarts anywhere.
+
+### P4 status (2026-07-30) and operator handoff
+
+Everything local is shipped: schema, relay acceptance, harness, desktop UI
++ mention aliasing, all gates green, app installed. The live loop needs
+three operator steps that are blocked on access/keys, in order:
+
+1. **Gradient SSH re-auth** — the Cloudflare Access session expired
+   mid-rollout (`ssh gradient-ssh` now stalls in the browser SSO dance).
+   Open any `ssh gradient-ssh` from a terminal and complete the SSO prompt.
+2. **Relay must accept kind:30178** — prod runs the pinned upstream image,
+   which rejects the kind. Either build + pin a fork image
+   (`cd ~/buzz && git pull && DOCKER_BUILDKIT=1 docker build …` then set
+   `BUZZ_IMAGE` in `deploy/compose/.env` and `./run.sh restart`;
+   ~30 s agent 502 window) or upstream `f1b3fe24` first and wait for the
+   next official image. Until then, Save in the Swarm dialog will surface
+   the relay's rejection — the UI ships dormant, nothing breaks.
+3. **Harness rollout** — the five units need the feat/swarms buzz-acp:
+   `cd ~/buzz && git checkout deploy && git pull && cargo build --release
+   -p buzz-acp && sudo install -m755 target/release/buzz-acp
+   /usr/local/bin/buzz-acp && sudo systemctl restart buzz-acp-{claude,codex,hermes,hermesgpt,threemes}`
+   (backup first per the 07-29 pattern; verify the binary mtime is seconds
+   old — `just ci` does NOT produce release binaries).
+
+Then the one-click verification (owner-signed, so it must be you):
+relaunch Buzz → Agents → Swarms → Create Swarm (leader: Moooclaude;
+members: codex + one hermes with descriptions; Reporting on with a
+criteria line) → open a channel the leader is in → type `@` and pick the
+swarm → send a small task. Expect: leader replies in-thread assigning
+exactly ONE member with the report-back instruction; the member answers;
+the member's report fires the leader; the leader evaluates against your
+criteria. `journalctl -u buzz-acp-claude | grep swarm` shows
+`swarm-addressed turn — entering leader mode`.
 
 ## 8. Non-goals (v1)
 
