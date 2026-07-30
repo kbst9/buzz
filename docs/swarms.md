@@ -171,11 +171,21 @@ Plus-card at the end of the grid opens the create dialog.
 
 - **P1 — schema:** `buzz-core` kind + registry; `buzz-sdk` builders/parse
   with Option discipline. Unit tests: round-trip, unknown-field
-  preservation, absent-field never-wipe.
+  preservation, absent-field never-wipe. **Done** (`feat/swarms`).
+- **P1.5 — relay acceptance (discovered while landing):** the ingest scope
+  map REJECTS unknown kinds (`handlers/ingest.rs::required_scope_for_kind`),
+  so 30178 needed explicit acceptance (UsersWrite + h-tag immunity, same as
+  persona/team/managed-agent). **Done** (`f1b3fe24`). **Deployment
+  consequence:** the production relay runs the pinned upstream image —
+  swarm publishes bounce with "unknown kind" until the relay runs a build
+  containing this arm. Options: build + pin a fork relay image on the prod
+  host, or upstream this one-liner and wait for the next official image.
+  Owner's call; nothing else in the feature is blocked by it (everything
+  ships dormant).
 - **P2 — harness:** fetch + trigger predicate + assembly in `buzz-acp`
   (mirrors the 30177 fetch seams). Tests: no-swarm no-op; injection only on
   direct mention; assembly order; report-back sentence toggled by
-  `report_back`.
+  `report_back`. **Done** (`feat/swarms`; 1,158 crate tests green).
 - **P3 — desktop:** section + dialog + publish path + tests as above.
 - **P4 — verify on the reference deployment:** define a swarm over two
   gradient agents, mention the leader in a channel, watch: leader assigns
