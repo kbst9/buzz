@@ -100,9 +100,15 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             // dropped with zero further processing.
             //
             // NIP-OA cascade: a ban on the authenticated pubkey blocks it directly;
-            // a ban on its cryptographically-proven owner cascades to the agent
-            // (owner ban ⇒ agents banned; agent ban is agent-only). The owner is
-            // extracted from the self-proving auth tag with no DB round-trip.
+            // a ban on its resolved owner cascades to the agent (owner ban ⇒
+            // agents banned; agent ban is agent-only). The owner is extracted
+            // from the self-proving auth tag when presented, else read from the
+            // relay-recorded mapping.
+            //
+            // Relay-recorded owner resolved during the ban gate (one indexed
+            // read, only when no tag is presented); reused below to classify
+            // the connection without a second lookup.
+            let mut relay_recorded_owner: Option<nostr::PublicKey> = None;
             {
                 // Fail closed on a DB error, but distinguish it from a real ban:
                 // a transient blip must deny (never let a banned principal
@@ -130,14 +136,39 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     }
                 };
 
-                // Cascade: check the proven NIP-OA owner only if the agent itself
+                // Cascade: check the resolved owner only if the agent itself
                 // is clear (a DB error already denies; a direct ban already blocks
-                // — both skip the needless second DB read).
+                // — both skip the needless second DB read). The owner comes from
+                // the self-proving NIP-OA tag when one is presented (no DB), else
+                // from the relay-recorded mapping (`users.agent_owner_pubkey`,
+                // written by agent-typed invite claims and prior NIP-OA
+                // materialization) — so tag-less member agents get the same
+                // owner-ban cascade as tag-bearing ones.
                 if matches!(outcome, BanOutcome::Clear) {
-                    if let Some(owner) = crate::api::relay_members::extract_nip_oa_owner(
+                    let owner = match crate::api::relay_members::extract_nip_oa_owner(
                         pubkey.as_bytes(),
                         auth_tag_json.as_deref(),
                     ) {
+                        Some(owner) => Some(owner),
+                        None => match state
+                            .db
+                            .get_agent_owner(conn.tenant.community(), pubkey.as_bytes())
+                            .await
+                        {
+                            Ok(mapped) => {
+                                relay_recorded_owner = mapped
+                                    .and_then(|bytes| nostr::PublicKey::from_slice(&bytes).ok());
+                                relay_recorded_owner
+                            }
+                            Err(e) => {
+                                warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), error = %e,
+                                      "agent-owner DB lookup failed, denying (fail-closed)");
+                                outcome = BanOutcome::DbError;
+                                None
+                            }
+                        },
+                    };
+                    if let Some(owner) = owner {
                         outcome = match state
                             .db
                             .moderation_restriction_state(conn.tenant.community(), owner.as_bytes())
@@ -237,19 +268,22 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 }
             };
 
-            // Open relay NIP-OA backfill: extract owner for agent→owner DB mapping
-            // (needed for observer frame auth). Only runs on open relays — on closed
-            // relays, enforce_relay_membership already handles NIP-OA delegation.
-            // No feature flag needed: NIP-OA is cryptographically self-proving.
+            // NIP-OA backfill: extract owner for the agent→owner DB mapping
+            // (needed for agent classification — rate tiers, directory,
+            // observer frame auth) whenever a valid tag is presented and
+            // membership enforcement did not already resolve one (closed-relay
+            // delegation returns ViaOwner above). Besides open relays, this
+            // covers closed relays where the agent is a relay member in its
+            // own right — e.g. a standalone agent that claimed an invite —
+            // whose membership row satisfies the gate before the tag is ever
+            // parsed. Extraction grants no access and needs no feature flag:
+            // the tag is cryptographically self-proving, and the mapping write
+            // is first-write-wins, so a hostile tag cannot rebind an agent.
             let nip_oa_owner = nip_oa_owner.or_else(|| {
-                if !state.config.require_relay_membership && auth_tag_json.is_some() {
-                    crate::api::relay_members::extract_nip_oa_owner(
-                        pubkey.as_bytes(),
-                        auth_tag_json.as_deref(),
-                    )
-                } else {
-                    None
-                }
+                crate::api::relay_members::extract_nip_oa_owner(
+                    pubkey.as_bytes(),
+                    auth_tag_json.as_deref(),
+                )
             });
 
             // Stash NIP-OA owner on the auth context only after the shared
@@ -272,6 +306,12 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                         "NIP-OA owner could not be materialized"
                     );
                 }
+            } else if let Some(owner) = relay_recorded_owner {
+                // No tag, but the relay already records this pubkey as an
+                // agent (agent-typed invite claim, or a mapping materialized
+                // on an earlier connection). The mapping is durable — classify
+                // the connection without any write.
+                auth_ctx.agent_owner_pubkey = Some(owner);
             }
 
             info!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "NIP-42 auth successful");
