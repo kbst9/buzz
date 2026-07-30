@@ -191,7 +191,9 @@ pub async fn cmd_set_profile(
             &me,
             current.as_ref(),
             &overlay,
-            env_auth_tag.as_deref(),
+            buzz_sdk::profile::AgentOwnership::AuthTag {
+                fallback: env_auth_tag.as_deref(),
+            },
         )
     } else {
         buzz_sdk::profile::merge_profile(current.as_ref(), &overlay)

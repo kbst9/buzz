@@ -101,15 +101,20 @@ async fn publish_presence(
 /// fields survive, the NIP-OA auth tag is carried forward (from the current
 /// profile, else `BUZZ_AUTH_TAG`), and `bot: true` is always set. A missing
 /// tag on both sides is a refusal — the harness keeps running, but never
-/// replaces an owned profile with an unowned one. Every failure path is a
-/// warn-and-continue: profile sync must not take the agent down.
+/// replaces an owned profile with an unowned one — **unless** ownership is
+/// relay-recorded (`relay_recorded_ownership`, i.e. `BUZZ_ACP_AGENT_OWNER`
+/// is set with no `BUZZ_AUTH_TAG`): an invite-registered agent's owner
+/// mapping lives in the relay's `users` table, so its profile publishes
+/// untagged. Every failure path is a warn-and-continue: profile sync must
+/// not take the agent down.
 async fn sync_profile(
     publisher: &relay::RelayEventPublisher,
     rest_client: &relay::RestClient,
     keys: &nostr::Keys,
     overlay: &buzz_sdk::profile::ProfileOverlay,
+    relay_recorded_ownership: bool,
 ) {
-    use buzz_sdk::profile::{merge_agent_profile, CurrentProfile};
+    use buzz_sdk::profile::{merge_agent_profile, AgentOwnership, CurrentProfile};
 
     let me = keys.public_key();
     let filter = nostr::Filter::new()
@@ -149,12 +154,23 @@ async fn sync_profile(
         };
 
     let env_tag = std::env::var("BUZZ_AUTH_TAG").ok();
-    let merged = match merge_agent_profile(&me, current.as_ref(), overlay, env_tag.as_deref()) {
+    let has_env_tag = env_tag.as_deref().is_some_and(|tag| !tag.trim().is_empty());
+    // A presented tag is the strongest anchor and always wins; relay-recorded
+    // mode only applies when there is no tag to carry.
+    let ownership = if has_env_tag || !relay_recorded_ownership {
+        AgentOwnership::AuthTag {
+            fallback: env_tag.as_deref(),
+        }
+    } else {
+        AgentOwnership::RelayRecorded
+    };
+    let merged = match merge_agent_profile(&me, current.as_ref(), overlay, ownership) {
         Ok(merged) => merged,
         Err(buzz_sdk::SdkError::MissingAuthTag) => {
             tracing::warn!(
                 "profile sync refused: no NIP-OA auth tag on the current profile or in \
-                 BUZZ_AUTH_TAG — publishing would orphan the agent"
+                 BUZZ_AUTH_TAG — publishing would orphan the agent (invite-registered \
+                 agents: set BUZZ_ACP_AGENT_OWNER to publish with relay-recorded ownership)"
             );
             return;
         }
@@ -934,6 +950,7 @@ fn handle_relay_observer_control_event(
     owner_pubkey_hex: &str,
     publisher: &relay::RelayEventPublisher,
     rest_client: &relay::RestClient,
+    relay_recorded_ownership: bool,
 ) {
     // Defense-in-depth: verify signature even though the relay already checked.
     if let Err(e) = buzz_core::verify_event(&event) {
@@ -980,7 +997,14 @@ fn handle_relay_observer_control_event(
             handle_switch_model_control(&payload, pool, observer);
         }
         Some("set_profile") => {
-            handle_set_profile_control(&payload, keys, publisher, rest_client, observer);
+            handle_set_profile_control(
+                &payload,
+                keys,
+                publisher,
+                rest_client,
+                observer,
+                relay_recorded_ownership,
+            );
         }
         _ => {
             tracing::debug!(payload = %payload, "ignoring unknown observer control frame");
@@ -1020,6 +1044,7 @@ fn handle_set_profile_control(
     publisher: &relay::RelayEventPublisher,
     rest_client: &relay::RestClient,
     observer: Option<&observer::ObserverHandle>,
+    relay_recorded_ownership: bool,
 ) {
     let overlay = control_profile_overlay(payload);
     if overlay.is_empty() {
@@ -1039,7 +1064,14 @@ fn handle_set_profile_control(
     let publisher = publisher.clone();
     let rest_client = rest_client.clone();
     tokio::spawn(async move {
-        sync_profile(&publisher, &rest_client, &keys, &overlay).await;
+        sync_profile(
+            &publisher,
+            &rest_client,
+            &keys,
+            &overlay,
+            relay_recorded_ownership,
+        )
+        .await;
     });
 }
 
@@ -1738,6 +1770,7 @@ async fn tokio_main() -> Result<()> {
             &relay.rest_client(),
             &presence_keys,
             &config.profile_overlay,
+            config.agent_owner.is_some(),
         )
         .await;
     }
@@ -2158,7 +2191,7 @@ async fn tokio_main() -> Result<()> {
                     match control_event {
                         Some(event) => {
                             if let Some(ref owner_hex) = owner_cache.pubkey {
-                                handle_relay_observer_control_event(&config.keys, event, &mut pool, observer.as_ref(), owner_hex, &presence_publisher, &control_rest_client);
+                                handle_relay_observer_control_event(&config.keys, event, &mut pool, observer.as_ref(), owner_hex, &presence_publisher, &control_rest_client, config.agent_owner.is_some());
                             } else {
                                 tracing::warn!("observer control frame received but no owner resolved — dropping");
                             }

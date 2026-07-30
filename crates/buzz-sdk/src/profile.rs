@@ -177,20 +177,39 @@ pub fn merge_profile(
     finish_merge(current, content, tags)
 }
 
+/// How an agent's ownership is anchored — decides whether a profile may
+/// publish without a NIP-OA `auth` tag.
+#[derive(Debug, Clone, Copy)]
+pub enum AgentOwnership<'a> {
+    /// NIP-OA attestation: the merged profile must end up carrying a tag
+    /// that verifies for the agent. `fallback` is appended when the current
+    /// profile has none; no verifiable tag from either source is a refusal
+    /// ([`SdkError::MissingAuthTag`]) — publishing would orphan the agent.
+    AuthTag {
+        /// Tag JSON appended when the current profile carries no valid tag.
+        fallback: Option<&'a str>,
+    },
+    /// Ownership is recorded relay-side (`users.agent_owner_pubkey`, written
+    /// by an agent-typed invite claim). A verifiable tag is still carried
+    /// forward when present, but absence is not an error — the relay, not
+    /// the profile, anchors the owner relationship.
+    RelayRecorded,
+}
+
 /// [`merge_profile`], plus the agent guarantee: `bot: true` is always set
 /// (NIP-24 — an agent profile written through this helper is never
-/// mistakable for a person's), and the result carries an `auth` tag that
-/// verifies for `agent_pubkey`.
+/// mistakable for a person's), and ownership is anchored per
+/// [`AgentOwnership`].
 ///
 /// Tag resolution, in order: a valid tag already on the profile is kept in
-/// place (and wins over the fallback); invalid `auth` tags are dropped;
-/// with none valid, `auth_tag_fallback` (verified) is appended; with no
-/// source at all the merge refuses with [`SdkError::MissingAuthTag`].
+/// place (and wins over any fallback); invalid `auth` tags are dropped;
+/// with none valid, `AuthTag` appends its verified fallback or refuses with
+/// [`SdkError::MissingAuthTag`], while `RelayRecorded` publishes untagged.
 pub fn merge_agent_profile(
     agent_pubkey: &PublicKey,
     current: Option<&CurrentProfile>,
     overlay: &ProfileOverlay,
-    auth_tag_fallback: Option<&str>,
+    ownership: AgentOwnership<'_>,
 ) -> Result<MergedProfile, SdkError> {
     let generic = merge_profile(current, overlay)?;
 
@@ -219,12 +238,17 @@ pub fn merge_agent_profile(
     }
 
     if !carried_valid_auth {
-        let Some(fallback) = auth_tag_fallback.filter(|tag| !tag.trim().is_empty()) else {
-            return Err(SdkError::MissingAuthTag);
-        };
-        verify_auth_tag(fallback, agent_pubkey)?;
-        let parsed = parse_auth_tag(fallback)?;
-        tags.push(parsed.as_slice().to_vec());
+        match ownership {
+            AgentOwnership::AuthTag { fallback } => {
+                let Some(fallback) = fallback.filter(|tag| !tag.trim().is_empty()) else {
+                    return Err(SdkError::MissingAuthTag);
+                };
+                verify_auth_tag(fallback, agent_pubkey)?;
+                let parsed = parse_auth_tag(fallback)?;
+                tags.push(parsed.as_slice().to_vec());
+            }
+            AgentOwnership::RelayRecorded => {}
+        }
     }
 
     finish_merge(current, content, tags)
@@ -355,7 +379,7 @@ mod tests {
             &agent.public_key(),
             Some(&current),
             &overlay(None, None, Some("https://x.example/a.png")),
-            Some(&auth),
+            AgentOwnership::AuthTag { fallback: Some(&auth) },
         )
         .expect("merge");
 
@@ -389,7 +413,7 @@ mod tests {
             &agent.public_key(),
             Some(&current),
             &ProfileOverlay::default(),
-            Some(&fallback),
+            AgentOwnership::AuthTag { fallback: Some(&fallback) },
         )
         .expect("merge");
 
@@ -415,7 +439,7 @@ mod tests {
             &agent.public_key(),
             Some(&current),
             &ProfileOverlay::default(),
-            Some(&fallback),
+            AgentOwnership::AuthTag { fallback: Some(&fallback) },
         )
         .expect("merge");
 
@@ -441,14 +465,69 @@ mod tests {
             &agent.public_key(),
             Some(&current),
             &ProfileOverlay::default(),
-            None,
+            AgentOwnership::AuthTag { fallback: None },
         )
         .expect_err("must refuse");
         assert!(matches!(err, SdkError::MissingAuthTag));
 
-        let err = merge_agent_profile(&agent.public_key(), None, &ProfileOverlay::default(), None)
-            .expect_err("must refuse with no profile at all");
+        let err = merge_agent_profile(
+            &agent.public_key(),
+            None,
+            &ProfileOverlay::default(),
+            AgentOwnership::AuthTag { fallback: None },
+        )
+        .expect_err("must refuse with no profile at all");
         assert!(matches!(err, SdkError::MissingAuthTag));
+    }
+
+    #[test]
+    fn relay_recorded_ownership_publishes_untagged_with_bot_flag() {
+        let (agent, _) = agent_and_owner();
+
+        // No tag anywhere: an invite-registered agent still gets its profile
+        // (bot: true, no auth tag) — the relay's users table is the anchor.
+        let merged = merge_agent_profile(
+            &agent.public_key(),
+            None,
+            &overlay(Some("Hermes"), None, None),
+            AgentOwnership::RelayRecorded,
+        )
+        .expect("relay-recorded merge must not refuse");
+        let content: serde_json::Value = serde_json::from_str(&merged.content).expect("json");
+        assert_eq!(content.get("bot"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(
+            content.get("name").and_then(serde_json::Value::as_str),
+            Some("Hermes")
+        );
+        assert!(
+            !merged.tags.iter().any(|tag| tag.first().map(String::as_str) == Some("auth")),
+            "no auth tag must be fabricated"
+        );
+    }
+
+    #[test]
+    fn relay_recorded_ownership_still_carries_a_valid_tag_forward() {
+        let (agent, owner) = agent_and_owner();
+        let tag = auth_tag_for(&owner, &agent);
+        let parsed: Vec<String> = serde_json::from_str(&tag).expect("tag json");
+        let current = profile(
+            r#"{"name":"a"}"#,
+            vec![parsed.iter().map(String::as_str).collect()],
+        );
+
+        // A tag-bearing profile republished under relay-recorded mode keeps
+        // its cryptographic anchor — the modes are compatible, not exclusive.
+        let merged = merge_agent_profile(
+            &agent.public_key(),
+            Some(&current),
+            &ProfileOverlay::default(),
+            AgentOwnership::RelayRecorded,
+        )
+        .expect("merge");
+        assert!(
+            merged.tags.contains(&parsed),
+            "valid auth tag must survive a relay-recorded republish"
+        );
     }
 
     #[test]
@@ -460,7 +539,7 @@ mod tests {
             &agent.public_key(),
             None,
             &overlay(Some("Hermes"), Some("chatty"), None),
-            Some(&fallback),
+            AgentOwnership::AuthTag { fallback: Some(&fallback) },
         )
         .expect("merge");
         let value = content_value(&merged);
@@ -477,7 +556,7 @@ mod tests {
             &agent.public_key(),
             Some(&published),
             &overlay(None, Some(""), None),
-            None,
+            AgentOwnership::AuthTag { fallback: None },
         )
         .expect("merge");
         let value = content_value(&cleared);
@@ -508,7 +587,14 @@ mod tests {
         let fallback = auth_tag_for(&owner, &agent);
         let overlay = overlay(Some("Hermes"), None, Some("https://x.example/a.png"));
 
-        let first = merge_agent_profile(&agent.public_key(), None, &overlay, Some(&fallback))
+        let first = merge_agent_profile(
+            &agent.public_key(),
+            None,
+            &overlay,
+            AgentOwnership::AuthTag {
+                fallback: Some(&fallback),
+            },
+        )
             .expect("merge");
         assert!(first.changed);
 
@@ -520,7 +606,7 @@ mod tests {
             &agent.public_key(),
             Some(&published),
             &overlay,
-            Some(&fallback),
+            AgentOwnership::AuthTag { fallback: Some(&fallback) },
         )
         .expect("merge");
         assert!(
@@ -532,7 +618,7 @@ mod tests {
             &agent.public_key(),
             Some(&published),
             &ProfileOverlay::default(),
-            None,
+            AgentOwnership::AuthTag { fallback: None },
         )
         .expect("merge");
         assert!(
@@ -568,7 +654,7 @@ mod tests {
             &agent.public_key(),
             Some(&current),
             &overlay(Some("Hermes"), None, None),
-            Some(&auth),
+            AgentOwnership::AuthTag { fallback: Some(&auth) },
         )
         .expect("merge");
         let value = content_value(&merged);
@@ -584,7 +670,7 @@ mod tests {
             &agent.public_key(),
             None,
             &overlay(Some("Hermes"), None, None),
-            Some(&auth),
+            AgentOwnership::AuthTag { fallback: Some(&auth) },
         )
         .expect("merge");
 
@@ -599,7 +685,7 @@ mod tests {
             &agent.public_key(),
             Some(&round_tripped),
             &ProfileOverlay::default(),
-            None,
+            AgentOwnership::AuthTag { fallback: None },
         )
         .expect("merge");
         assert!(!again.changed);
