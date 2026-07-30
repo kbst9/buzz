@@ -43,9 +43,12 @@ upstream PR later. Teams stays exactly as it is.
    carry only an `e` tag — no auto p-tag of the parent author
    (`crates/buzz-sdk/src/builders.rs:734`) — so nothing re-fires without an
    explicit mention.
-3. **One new event kind, zero relay changes.** The swarm definition is an
+3. **One new event kind, one relay match-arm.** The swarm definition is an
    owner-signed parameterized-replaceable event, published and fetched
-   exactly like the 30177 agent definition.
+   exactly like the 30177 agent definition. The relay's ingest scope map
+   rejects unknown kinds, so 30178 is registered there with the same
+   UsersWrite shape as its NIP-AP siblings (see §7 P1.5 for the
+   deployment consequence).
 4. **v1 constraints:** same-owner members only (the sibling rule admits the
    leader through every member's respond gate automatically); model names in
    the roster are best-effort (see §5 gap); cross-owner swarms are a later
