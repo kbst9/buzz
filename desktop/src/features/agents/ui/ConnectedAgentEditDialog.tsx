@@ -11,7 +11,7 @@ import {
 import { buildEditAgentInstructions } from "@/features/agents/lib/connectedAgentInstructions";
 import { useUserProfileQuery } from "@/features/profile/hooks";
 import { setConnectedAgentProfile } from "@/shared/api/agentControl";
-import { setConnectedAgentInstructions } from "@/shared/api/tauri";
+import { setConnectedAgentInstructions } from "@/shared/api/agentControl";
 import { getUserProfile } from "@/shared/api/tauriProfiles";
 import type { Profile, UserSearchResult } from "@/shared/api/types";
 import { AgentCreationPreview } from "@/features/agents/ui/AgentCreationPreview";

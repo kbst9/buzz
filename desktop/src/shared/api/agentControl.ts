@@ -1,5 +1,24 @@
 import { sendAgentObserverControl } from "@/shared/api/observerRelay";
+import { invokeTauri } from "@/shared/api/tauri";
 import type { CancelManagedAgentTurnResult } from "@/shared/api/types";
+
+/**
+ * Publish (or update) a connected agent's owner-authored kind:30177
+ * definition. The agent's harness reads `system_prompt` from it into its
+ * `[System]` section at each new session — instructions reach the agent
+ * without host access. Empty instructions publish an explicit clear.
+ */
+export async function setConnectedAgentInstructions(input: {
+  agentPubkey: string;
+  agentName: string;
+  instructions: string;
+}): Promise<void> {
+  await invokeTauri<void>("set_connected_agent_instructions", {
+    agentPubkey: input.agentPubkey,
+    agentName: input.agentName,
+    instructions: input.instructions,
+  });
+}
 
 export async function cancelManagedAgentTurn(
   pubkey: string,

@@ -31,7 +31,7 @@ import {
   PERSONA_FIELD_SHELL_CLASS,
 } from "@/features/agents/ui/agentConfigOptions";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import { publishSwarmDefinition } from "@/shared/api/tauri";
+import { publishSwarmDefinition } from "@/shared/api/swarms";
 import { Button } from "@/shared/ui/button";
 import { ChooserDialogContent } from "@/shared/ui/chooser-dialog-content";
 import { Dialog } from "@/shared/ui/dialog";

@@ -27,6 +27,7 @@ mod relay_admission;
 mod reset;
 mod secret_store;
 mod shutdown;
+mod swarm_tags;
 mod templates;
 mod util;
 #[cfg(target_os = "linux")]
