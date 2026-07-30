@@ -20,7 +20,6 @@ import { ChannelScreenHeader } from "@/features/channels/ui/ChannelScreenHeader"
 import { ChannelPane } from "@/features/channels/ui/ChannelScreenLazyViews";
 import { WelcomeAgentCreateDialog } from "@/features/channels/ui/WelcomeAgentCreateDialog";
 import { ForumChannelContent } from "@/features/channels/ui/ForumChannelContent";
-import { ChannelFilesSheet } from "@/features/files/ui/ChannelFilesSheet";
 import { MembersSidebar } from "@/features/channels/ui/MembersSidebar";
 import {
   useManagedAgentsQuery,
@@ -140,7 +139,7 @@ export function ChannelScreen({
     widthPx: threadPanelWidthPx,
   } = useThreadPanelWidth();
   const [isMembersSidebarOpen, setIsMembersSidebarOpen] = React.useState(false);
-  const [isFilesSheetOpen, setIsFilesSheetOpen] = React.useState(false);
+  const [isFilesPanelOpen, setIsFilesPanelOpen] = React.useState(false);
   const [isAddBotOpen, setIsAddBotOpen] = React.useState(false);
   const [channelContentRef, channelContentWidthPx] =
     useElementWidth<HTMLDivElement>();
@@ -719,6 +718,32 @@ export function ChannelScreen({
     enabled: !isSinglePanelView,
   });
 
+  // Files panel shares the auxiliary slot with channel management — opening
+  // either closes the other, mirroring handleManageChannel's exclusivity.
+  const handleToggleFiles = React.useCallback(() => {
+    if (isFilesPanelOpen) {
+      setIsFilesPanelOpen(false);
+      return;
+    }
+    setOpenThreadHeadId(null);
+    setExpandedThreadReplyIds(new Set());
+    setThreadScrollTargetId(null);
+    setThreadReplyTargetId(null);
+    handleCloseAgentSession();
+    setProfilePanelPubkey(null);
+    setChannelManagementOpen(false);
+    setIsFilesPanelOpen(true);
+  }, [
+    isFilesPanelOpen,
+    setOpenThreadHeadId,
+    setExpandedThreadReplyIds,
+    setThreadScrollTargetId,
+    setThreadReplyTargetId,
+    handleCloseAgentSession,
+    setProfilePanelPubkey,
+    setChannelManagementOpen,
+  ]);
+
   const handleManageChannel = React.useCallback(() => {
     if (activeChannel?.channelType === "forum") {
       openGlobalChannelManagement();
@@ -736,6 +761,7 @@ export function ChannelScreen({
     setThreadReplyTargetId(null);
     handleCloseAgentSession();
     setProfilePanelPubkey(null);
+    setIsFilesPanelOpen(false);
     setChannelManagementOpen(true);
   }, [
     activeChannel?.channelType,
@@ -746,8 +772,8 @@ export function ChannelScreen({
     handleCloseAgentSession,
     setProfilePanelPubkey,
   ]);
-  const handleToggleFiles = React.useCallback(
-    () => setIsFilesSheetOpen((prev) => !prev),
+  const handleCloseFilesPanel = React.useCallback(
+    () => setIsFilesPanelOpen(false),
     [],
   );
   const handleToggleMembers = React.useCallback(
@@ -851,6 +877,8 @@ export function ChannelScreen({
                   botTypingEntries={botTypingEntries}
                   channelFind={channelFind}
                   channelManagementOpen={channelManagementOpen}
+                  filesPanelOpen={isFilesPanelOpen}
+                  onCloseFilesPanel={handleCloseFilesPanel}
                   currentPubkey={currentPubkey}
                   canResetThreadPanelWidth={canResetThreadPanelWidth}
                   fetchOlder={fetchOlder}
@@ -979,11 +1007,6 @@ export function ChannelScreen({
           onOpenChange={setIsMembersSidebarOpen}
           onViewActivity={handleOpenAgentSession}
           relayUrl={activeCommunity?.relayUrl}
-        />
-        <ChannelFilesSheet
-          channel={activeChannel}
-          onOpenChange={setIsFilesSheetOpen}
-          open={isFilesSheetOpen}
         />
       </ProfilePanelProvider>
     </AgentSessionProvider>
