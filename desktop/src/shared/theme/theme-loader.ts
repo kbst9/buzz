@@ -38,28 +38,46 @@ export const BUZZ_BASE_THEME: SyntaxThemeName = "github-light";
 export const BUZZ_DARK_BASE_THEME: SyntaxThemeName = "github-dark";
 
 /**
+ * Sky theme name. Sky is the Buzz theme with a steel-blue sidebar gradient in
+ * place of the Buzz citrus ramp — everything else (GitHub Light base palette,
+ * neutral accent pinning, the `data-buzz-sidebar` chrome, macOS vibrancy) is
+ * identical. The gradient recolor lives in `shared/styles/globals/theme.css`,
+ * keyed off the `data-buzz-theme="sky"` attribute {@link ThemeProvider}
+ * stamps on the document root.
+ */
+export const SKY_THEME_NAME = "sky";
+
+/** Dark counterpart to {@link SKY_THEME_NAME}, paired the same way as Buzz. */
+export const SKY_DARK_THEME_NAME = "sky-dark";
+
+/**
  * Resolve a theme name to the real Shiki bundled theme it maps to.
  *
- * Most themes map to themselves, but the Buzz aliases (`buzz` / `buzz-dark`)
- * are not bundled Shiki themes — they reuse the GitHub Light / GitHub Dark
- * palettes. The Shiki highlighter engine (used for fenced code blocks in
- * `CodeBlock.tsx`) only understands bundled names, so callers that hand a
- * theme name to `loadTheme` / `codeToTokens` must resolve it through here
- * first; passing a raw Buzz alias makes Shiki throw and code blocks fall
- * back to unhighlighted plain text.
+ * Most themes map to themselves, but the Buzz-family aliases (`buzz` /
+ * `buzz-dark` / `sky` / `sky-dark`) are not bundled Shiki themes — they reuse
+ * the GitHub Light / GitHub Dark palettes. The Shiki highlighter engine (used
+ * for fenced code blocks in `CodeBlock.tsx`) only understands bundled names,
+ * so callers that hand a theme name to `loadTheme` / `codeToTokens` must
+ * resolve it through here first; passing a raw alias makes Shiki throw and
+ * code blocks fall back to unhighlighted plain text.
  */
 export function resolveShikiThemeName(name: string): SyntaxThemeName {
   if (name === BUZZ_THEME_NAME) return BUZZ_BASE_THEME;
   if (name === BUZZ_DARK_THEME_NAME) return BUZZ_DARK_BASE_THEME;
+  if (name === SKY_THEME_NAME) return BUZZ_BASE_THEME;
+  if (name === SKY_DARK_THEME_NAME) return BUZZ_DARK_BASE_THEME;
   return name as SyntaxThemeName;
 }
 
-// Available themes. "buzz" is a Buzz-branded theme that reuses the
-// github-light palette plus a sidebar gradient; the rest are the Shiki
-// bundled syntax themes, alphabetically sorted.
+// Available themes. "buzz" and "sky" are Buzz-branded themes that reuse the
+// github-light/github-dark palettes plus a sidebar gradient (Sky is the Buzz
+// treatment with a steel-blue gradient); the rest are the Shiki bundled
+// syntax themes, alphabetically sorted.
 export const SYNTAX_THEMES = [
   "buzz",
   "buzz-dark",
+  "sky",
+  "sky-dark",
   "andromeeda",
   "aurora-x",
   "ayu-dark",
@@ -80,10 +98,8 @@ export const SYNTAX_THEMES = [
   "github-light-default",
   "github-light-high-contrast",
   "gruvbox-dark-hard",
-  "gruvbox-dark-medium",
   "gruvbox-dark-soft",
   "gruvbox-light-hard",
-  "gruvbox-light-medium",
   "gruvbox-light-soft",
   "houston",
   "kanagawa-dragon",
@@ -128,13 +144,13 @@ export type SyntaxThemeName = (typeof SYNTAX_THEMES)[number];
 // for themes that haven't been loaded yet.
 export const LIGHT_THEMES: ReadonlySet<SyntaxThemeName> = new Set([
   "buzz",
+  "sky",
   "catppuccin-latte",
   "everforest-light",
   "github-light",
   "github-light-default",
   "github-light-high-contrast",
   "gruvbox-light-hard",
-  "gruvbox-light-medium",
   "gruvbox-light-soft",
   "kanagawa-lotus",
   "light-plus",
@@ -157,6 +173,9 @@ const themeImports: Record<
   buzz: () => import("shiki/themes/github-light.mjs"),
   // Buzz Dark reuses the github-dark palette; dark gradient applied separately.
   "buzz-dark": () => import("shiki/themes/github-dark.mjs"),
+  // Sky reuses the Buzz base palettes; only the gradient recolors (CSS-side).
+  sky: () => import("shiki/themes/github-light.mjs"),
+  "sky-dark": () => import("shiki/themes/github-dark.mjs"),
   andromeeda: () => import("shiki/themes/andromeeda.mjs"),
   "aurora-x": () => import("shiki/themes/aurora-x.mjs"),
   "ayu-dark": () => import("shiki/themes/ayu-dark.mjs"),
@@ -179,10 +198,8 @@ const themeImports: Record<
   "github-light-high-contrast": () =>
     import("shiki/themes/github-light-high-contrast.mjs"),
   "gruvbox-dark-hard": () => import("shiki/themes/gruvbox-dark-hard.mjs"),
-  "gruvbox-dark-medium": () => import("shiki/themes/gruvbox-dark-medium.mjs"),
   "gruvbox-dark-soft": () => import("shiki/themes/gruvbox-dark-soft.mjs"),
   "gruvbox-light-hard": () => import("shiki/themes/gruvbox-light-hard.mjs"),
-  "gruvbox-light-medium": () => import("shiki/themes/gruvbox-light-medium.mjs"),
   "gruvbox-light-soft": () => import("shiki/themes/gruvbox-light-soft.mjs"),
   houston: () => import("shiki/themes/houston.mjs"),
   "kanagawa-dragon": () => import("shiki/themes/kanagawa-dragon.mjs"),
@@ -235,15 +252,16 @@ export function isLightTheme(name: string): boolean {
 export const THEME_PAIRS: ReadonlyMap<SyntaxThemeName, SyntaxThemeName> =
   new Map([
     // Light → Dark
-    // Buzz is the first-party pair; keep it first so it leads every category.
+    // Buzz and Sky are the first-party pairs; keep them first so they lead
+    // every category.
     ["buzz", "buzz-dark"],
+    ["sky", "sky-dark"],
     ["catppuccin-latte", "catppuccin-mocha"],
     ["everforest-light", "everforest-dark"],
     ["github-light", "github-dark"],
     ["github-light-default", "github-dark-default"],
     ["github-light-high-contrast", "github-dark-high-contrast"],
     ["gruvbox-light-hard", "gruvbox-dark-hard"],
-    ["gruvbox-light-medium", "gruvbox-dark-medium"],
     ["gruvbox-light-soft", "gruvbox-dark-soft"],
     ["kanagawa-lotus", "kanagawa-wave"],
     ["light-plus", "dark-plus"],
@@ -256,13 +274,13 @@ export const THEME_PAIRS: ReadonlyMap<SyntaxThemeName, SyntaxThemeName> =
     ["vitesse-light", "vitesse-dark"],
     // Dark → Light (reverse mappings)
     ["buzz-dark", "buzz"],
+    ["sky-dark", "sky"],
     ["catppuccin-mocha", "catppuccin-latte"],
     ["everforest-dark", "everforest-light"],
     ["github-dark", "github-light"],
     ["github-dark-default", "github-light-default"],
     ["github-dark-high-contrast", "github-light-high-contrast"],
     ["gruvbox-dark-hard", "gruvbox-light-hard"],
-    ["gruvbox-dark-medium", "gruvbox-light-medium"],
     ["gruvbox-dark-soft", "gruvbox-light-soft"],
     ["kanagawa-wave", "kanagawa-lotus"],
     ["dark-plus", "light-plus"],

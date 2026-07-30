@@ -212,14 +212,26 @@ function applyAccentColor(value: string) {
 }
 
 /**
- * The Buzz themes ship with a fixed neutral accent (the GitHub black/white
- * foreground) rather than a user-selectable accent color. When a Buzz theme is
- * active we force `NEUTRAL_ACCENT` regardless of the stored preference, and the
- * appearance panel hides the accent picker. The user's chosen accent is left
- * untouched in storage so it returns when they switch back to another theme.
+ * The Buzz-family themes (Buzz, plus Sky — the same treatment with a
+ * steel-blue sidebar gradient) ship with a fixed neutral accent (the GitHub
+ * black/white foreground) rather than a user-selectable accent color. When one
+ * is active we force `NEUTRAL_ACCENT` regardless of the stored preference, and
+ * the appearance panel hides the accent picker. The user's chosen accent is
+ * left untouched in storage so it returns when they switch back to another
+ * theme.
+ *
+ * Everything else keyed off this predicate — the `data-buzz-sidebar` gradient
+ * chrome and the macOS vibrancy/translucency sequencing — applies to the whole
+ * family; Sky's only difference is the gradient stop override in theme.css,
+ * selected via the `data-buzz-theme` attribute set in `applyBuzzSidebar`.
  */
 export function isBuzzTheme(themeName: string): boolean {
-  return themeName === "buzz" || themeName === "buzz-dark";
+  return (
+    themeName === "buzz" ||
+    themeName === "buzz-dark" ||
+    themeName === "sky" ||
+    themeName === "sky-dark"
+  );
 }
 
 /**

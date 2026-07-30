@@ -47,11 +47,26 @@
     --sidebar-accent-foreground: 234 16.02% 35.49%;
     --sidebar-border: 225 13.56% 76.86%;
     --sidebar-ring: 225 13.56% 76.86%;
-    /* Exact Buzz palette tokens; components consume these semantically. */
-    --buzz-gradient-light-top: #e6e6b6;
-    --buzz-gradient-light-bottom: #c4d0da;
-    --buzz-gradient-dark-top: #4a4616;
-    --buzz-gradient-dark-bottom: #0a1423;
+    /* Exact Buzz palette tokens; components consume these semantically.
+       The classic-* and sky-* stops are per-theme constants — the theme
+       picker previews read them directly so every tile keeps its own ramp no
+       matter which Buzz-family theme is active. The --buzz-gradient-* tokens
+       below are the ACTIVE ramp consumed by the gradient layers: Buzz classic
+       by default, remapped per theme via the data-buzz-theme override further
+       down. */
+    --buzz-classic-gradient-light-top: #e6e6b6;
+    --buzz-classic-gradient-light-bottom: #c4d0da;
+    --buzz-classic-gradient-dark-top: #4a4616;
+    --buzz-classic-gradient-dark-bottom: #0a1423;
+    /* Sky variant stops (Buzz treatment, steel-blue ramp). */
+    --buzz-sky-gradient-light-top: #b2c4e0;
+    --buzz-sky-gradient-light-bottom: #6d8398;
+    --buzz-sky-gradient-dark-top: #323a42;
+    --buzz-sky-gradient-dark-bottom: #141819;
+    --buzz-gradient-light-top: var(--buzz-classic-gradient-light-top);
+    --buzz-gradient-light-bottom: var(--buzz-classic-gradient-light-bottom);
+    --buzz-gradient-dark-top: var(--buzz-classic-gradient-dark-top);
+    --buzz-gradient-dark-bottom: var(--buzz-classic-gradient-dark-bottom);
     --buzz-content-dark: 0 0% 10.1960784314%;
     /* Hosted-community onboarding intentionally keeps this light palette in
        both app themes; semantic tokens keep component code color-agnostic. */
@@ -243,6 +258,22 @@
     transparent
   );
   --buzz-active-foreground: 0 0% 100%;
+}
+
+/*
+ * Sky theme: the identical Buzz treatment with a steel-blue gradient.
+ * ThemeProvider stamps the concrete Buzz-family theme name in
+ * `data-buzz-theme`; remapping the four gradient stop tokens here recolors
+ * every downstream consumer (the opaque and translucent gradient layers and
+ * the portaled mobile sidebar) without duplicating any of those rules.
+ * Unlayered so it beats the layered :root defaults above.
+ */
+:root[data-buzz-theme="sky"],
+:root[data-buzz-theme="sky-dark"] {
+  --buzz-gradient-light-top: var(--buzz-sky-gradient-light-top);
+  --buzz-gradient-light-bottom: var(--buzz-sky-gradient-light-bottom);
+  --buzz-gradient-dark-top: var(--buzz-sky-gradient-dark-top);
+  --buzz-gradient-dark-bottom: var(--buzz-sky-gradient-dark-bottom);
 }
 
 /*

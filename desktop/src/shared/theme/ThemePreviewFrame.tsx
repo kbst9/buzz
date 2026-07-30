@@ -12,13 +12,24 @@ export const BUZZ_GRADIENT_STOPS: Record<
   string,
   { top: string; bottom: string }
 > = {
+  // Each tile reads its theme's constant stop tokens (classic-*/sky-*), never
+  // the active --buzz-gradient-* ramp — that one is remapped to whichever
+  // Buzz-family theme is live, which would repaint the other tiles' previews.
   buzz: {
-    top: "var(--buzz-gradient-light-top)",
-    bottom: "var(--buzz-gradient-light-bottom)",
+    top: "var(--buzz-classic-gradient-light-top)",
+    bottom: "var(--buzz-classic-gradient-light-bottom)",
   },
   "buzz-dark": {
-    top: "var(--buzz-gradient-dark-top)",
-    bottom: "var(--buzz-gradient-dark-bottom)",
+    top: "var(--buzz-classic-gradient-dark-top)",
+    bottom: "var(--buzz-classic-gradient-dark-bottom)",
+  },
+  sky: {
+    top: "var(--buzz-sky-gradient-light-top)",
+    bottom: "var(--buzz-sky-gradient-light-bottom)",
+  },
+  "sky-dark": {
+    top: "var(--buzz-sky-gradient-dark-top)",
+    bottom: "var(--buzz-sky-gradient-dark-bottom)",
   },
 };
 
