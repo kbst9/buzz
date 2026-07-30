@@ -1019,6 +1019,94 @@ pub async fn get_events_by_ids(
     Ok(out)
 }
 
+/// Fetch live (non-deleted) events of `kind` carrying an `e` tag equal to
+/// `target_hex`.
+///
+/// Serves the file-index retraction path: kind-1063 entries referencing a
+/// source message are looked up by JSONB containment on `tags`. The `kind`
+/// predicate keeps the scan bounded to the per-kind subset; retraction is
+/// rare enough that no dedicated index is warranted.
+pub async fn get_events_by_kind_and_e_tag(
+    pool: &PgPool,
+    community_id: CommunityId,
+    kind: i32,
+    target_hex: &str,
+) -> Result<Vec<StoredEvent>> {
+    let contains = serde_json::json!([["e", target_hex]]);
+    let rows = sqlx::query(
+        "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
+         FROM events \
+         WHERE community_id = $1 AND kind = $2 AND deleted_at IS NULL AND tags @> $3",
+    )
+    .bind(community_id.as_uuid())
+    .bind(kind)
+    .bind(contains)
+    .fetch_all(pool)
+    .await?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        if let Some(ev) = row_to_stored_event(row)? {
+            out.push(ev);
+        }
+    }
+    Ok(out)
+}
+
+/// Keyset-scan channel events that can contribute to the file index:
+/// imeta-carrying events plus all kind-40003 edits (an edit that removed
+/// every attachment carries no imeta but must still reconcile), oldest
+/// first, restricted to permanent (non-TTL), non-DM, live channels.
+///
+/// `after` is an exclusive `(created_at, id)` cursor. Serves
+/// `buzz-admin files backfill` only — the live path derives at ingest.
+pub async fn scan_file_index_sources(
+    pool: &PgPool,
+    community_id: CommunityId,
+    channel_id: Option<Uuid>,
+    after: Option<(DateTime<Utc>, Vec<u8>)>,
+    limit: i64,
+) -> Result<Vec<StoredEvent>> {
+    let imeta_probe = serde_json::json!([["imeta"]]);
+    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
+        "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
+         FROM events WHERE community_id = ",
+    );
+    qb.push_bind(community_id.as_uuid());
+    qb.push(" AND deleted_at IS NULL AND channel_id IS NOT NULL AND kind NOT IN (1063, 5)");
+    qb.push(" AND (tags @> ");
+    qb.push_bind(imeta_probe);
+    qb.push(" OR kind = 40003)");
+    qb.push(" AND channel_id IN (SELECT id FROM channels WHERE community_id = ");
+    qb.push_bind(community_id.as_uuid());
+    qb.push(
+        " AND ttl_seconds IS NULL AND channel_type <> 'dm' \
+         AND deleted_at IS NULL AND archived_at IS NULL)",
+    );
+    if let Some(ch) = channel_id {
+        qb.push(" AND channel_id = ");
+        qb.push_bind(ch);
+    }
+    if let Some((ts, id)) = after {
+        qb.push(" AND (created_at, id) > (");
+        qb.push_bind(ts);
+        qb.push(", ");
+        qb.push_bind(id);
+        qb.push(")");
+    }
+    qb.push(" ORDER BY created_at ASC, id ASC LIMIT ");
+    qb.push_bind(limit);
+
+    let rows = qb.build().fetch_all(pool).await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        if let Some(ev) = row_to_stored_event(row)? {
+            out.push(ev);
+        }
+    }
+    Ok(out)
+}
+
 /// Parameters for [`insert_event_with_thread_metadata`].
 #[derive(Debug)]
 pub struct ThreadMetadataParams<'a> {

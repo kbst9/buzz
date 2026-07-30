@@ -204,6 +204,13 @@ pub struct Config {
     /// serving media GET/HEAD. Default off for staged client rollout.
     pub require_media_get_auth: bool,
 
+    /// Derive relay-signed kind-1063 file-index entries for imeta-carrying
+    /// channel events (`BUZZ_FILE_INDEX`). Default off for staged rollout:
+    /// run `buzz-admin files backfill` before enabling so index order
+    /// matches share order. Retraction cascades run regardless of this
+    /// flag. See docs/channel-files-explorer.md.
+    pub file_index_enabled: bool,
+
     /// Whether tamper-evident event/media audit logging is enabled. Defaults to true.
     /// This does not control the separate `moderation_actions` audit trail.
     /// Set `BUZZ_AUDIT_ENABLED=false` for deployments that do not require it.
@@ -702,6 +709,15 @@ impl Config {
             })
             .unwrap_or(false);
 
+        let file_index_enabled = std::env::var("BUZZ_FILE_INDEX")
+            .map(|v| {
+                v == "true"
+                    || v == "1"
+                    || v.eq_ignore_ascii_case("yes")
+                    || v.eq_ignore_ascii_case("on")
+            })
+            .unwrap_or(false);
+
         let ephemeral_ttl_override = std::env::var("BUZZ_EPHEMERAL_TTL_OVERRIDE")
             .ok()
             .and_then(|v| v.parse::<i32>().ok())
@@ -918,6 +934,7 @@ impl Config {
             media_max_concurrent_uploads_per_pubkey,
             media_uploads_per_minute,
             require_media_get_auth,
+            file_index_enabled,
             audit_enabled,
             ephemeral_ttl_override,
             git_repo_path,

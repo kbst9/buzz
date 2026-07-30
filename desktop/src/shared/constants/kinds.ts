@@ -2,6 +2,11 @@ export const KIND_DELETION = 5;
 export const KIND_REACTION = 7;
 export const KIND_TEXT_NOTE = 1;
 export const KIND_STREAM_MESSAGE = 9;
+// NIP-94 file metadata — relay-derived file index, one entry per attachment
+// per share. Tags: url/m/x/size (+ filename/thumb/…), h channel, e source
+// message, shared_at source timestamp, uploader. Retracted via relay-signed
+// kind:5 carrying ["k","1063"]. See docs/channel-files-explorer.md.
+export const KIND_FILE_METADATA = 1063;
 // Buzz-native deletion. The relay soft-deletes the target and emits a
 // kind:40099 system message. Treated as a deletion marker alongside kind:5.
 export const KIND_NIP29_DELETE_EVENT = 9005;

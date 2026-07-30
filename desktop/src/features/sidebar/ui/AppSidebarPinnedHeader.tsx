@@ -1,4 +1,11 @@
-import { Activity, Bot, FolderGit2, Inbox, Zap } from "lucide-react";
+import {
+  Activity,
+  Bot,
+  FolderGit2,
+  FolderOpen,
+  Inbox,
+  Zap,
+} from "lucide-react";
 
 import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
 import { FeatureGate } from "@/shared/features";
@@ -18,6 +25,7 @@ type SidebarSelectedView =
   | "messages"
   | "agents"
   | "workflows"
+  | "files"
   | "pulse"
   | "projects";
 
@@ -38,6 +46,7 @@ type AppSidebarPinnedHeaderProps = {
 type AppSidebarPrimaryMenuProps = {
   homeBadgeCount: number;
   onSelectAgents: () => void;
+  onSelectFiles: () => void;
   onSelectHome: () => void;
   onSelectProjects: () => void;
   onSelectPulse: () => void;
@@ -83,6 +92,7 @@ export function AppSidebarPinnedHeader({
 export function AppSidebarPrimaryMenu({
   homeBadgeCount,
   onSelectAgents,
+  onSelectFiles,
   onSelectHome,
   onSelectProjects,
   onSelectPulse,
@@ -169,6 +179,18 @@ export function AppSidebarPrimaryMenu({
             </SidebarMenuButton>
           </SidebarMenuItem>
         </FeatureGate>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            data-testid="open-files-view"
+            isActive={selectedView === "files"}
+            onClick={onSelectFiles}
+            tooltip="Files"
+            type="button"
+          >
+            <FolderOpen className="h-4 w-4" />
+            <SidebarMenuLabel>Files</SidebarMenuLabel>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
       </SidebarMenu>
     </SidebarHeader>
   );

@@ -11,6 +11,8 @@ abstract final class EventKind {
   static const deletion = 5;
   static const reaction = 7;
   static const streamMessage = 9;
+  // NIP-94 file metadata — relay-derived per-channel file index.
+  static const fileMetadata = 1063;
   static const nip29DeleteEvent = 9005;
   static const presenceUpdate = 20001;
   static const typingIndicator = 20002;

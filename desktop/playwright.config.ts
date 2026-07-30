@@ -29,6 +29,7 @@ export default defineConfig({
         "**/channel-composer-overflow.spec.ts",
         "**/badge.spec.ts",
         "**/channel-browser.spec.ts",
+        "**/files-explorer.spec.ts",
         "**/channel-add-screenshots.spec.ts",
         "**/add-community-screenshots.spec.ts",
         "**/hosted-communities-settings-screenshots.spec.ts",

@@ -1,4 +1,4 @@
-import { EllipsisVertical, Settings2, Users } from "lucide-react";
+import { EllipsisVertical, FolderOpen, Settings2, Users } from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
@@ -32,6 +32,7 @@ type ChannelMembersBarProps = {
   isAddBotOpen?: boolean;
   onAddBotOpenChange?: (open: boolean) => void;
   onManageChannel: () => void;
+  onToggleFiles?: () => void;
   onToggleMembers: () => void;
   variant?: "inline" | "compact";
 };
@@ -42,6 +43,7 @@ export function ChannelMembersBar({
   isAddBotOpen: isAddBotOpenProp,
   onAddBotOpenChange,
   onManageChannel,
+  onToggleFiles,
   onToggleMembers,
   variant = "inline",
 }: ChannelMembersBarProps) {
@@ -152,6 +154,15 @@ export function ChannelMembersBar({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-48" forceMount>
+          {onToggleFiles && (
+            <DropdownMenuItem
+              data-testid="channel-files-trigger"
+              onSelect={onToggleFiles}
+            >
+              <FolderOpen />
+              <span>Files</span>
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem
             data-testid="channel-members-trigger"
             onSelect={onToggleMembers}
@@ -174,6 +185,24 @@ export function ChannelMembersBar({
       </DropdownMenu>
     ) : (
       <div className="flex items-center gap-[6px]">
+        {onToggleFiles && (
+          <Tooltip disableHoverableContent>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="View channel files"
+                data-testid="channel-files-trigger"
+                onClick={onToggleFiles}
+                size="icon"
+                type="button"
+                variant="outline"
+              >
+                <FolderOpen />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Files</TooltipContent>
+          </Tooltip>
+        )}
+
         <Tooltip disableHoverableContent>
           <TooltipTrigger asChild>
             <Button

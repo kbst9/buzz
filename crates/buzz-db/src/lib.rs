@@ -1222,6 +1222,31 @@ impl Db {
         event::get_events_by_ids(&self.pool, community_id, ids).await
     }
 
+    /// Fetch live events of `kind` whose tags contain `["e", target_hex]`.
+    /// Used by the file-index retraction path (kind 1063 entries referencing
+    /// a source message).
+    pub async fn get_events_by_kind_and_e_tag(
+        &self,
+        community_id: CommunityId,
+        kind: i32,
+        target_hex: &str,
+    ) -> Result<Vec<StoredEvent>> {
+        event::get_events_by_kind_and_e_tag(&self.pool, community_id, kind, target_hex).await
+    }
+
+    /// Keyset-scan file-index source events (imeta carriers + kind-40003
+    /// edits) in permanent non-DM channels. Serves `buzz-admin files
+    /// backfill`.
+    pub async fn scan_file_index_sources(
+        &self,
+        community_id: CommunityId,
+        channel_id: Option<Uuid>,
+        after: Option<(DateTime<Utc>, Vec<u8>)>,
+        limit: i64,
+    ) -> Result<Vec<StoredEvent>> {
+        event::scan_file_index_sources(&self.pool, community_id, channel_id, after, limit).await
+    }
+
     /// Exclusively claim a batch of due matcher jobs from one community.
     pub async fn claim_due_push_match_batch(
         &self,

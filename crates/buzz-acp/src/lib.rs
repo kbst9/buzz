@@ -3831,6 +3831,16 @@ mod agent_draft_prompt_tests {
             .contains("add them explicitly with `buzz channels add-member` only when authorized"));
         assert!(prompt.contains("never changes membership automatically"));
     }
+
+    #[test]
+    fn shared_base_prompt_teaches_files_inventory() {
+        let prompt = include_str!("base_prompt.md");
+        // Agents must learn the file index exists — without this, their file
+        // awareness is limited to URLs that happen to appear in turn context.
+        assert!(prompt.contains("| `buzz files` | `list` |"));
+        assert!(prompt.contains("buzz files list --channel <UUID>"));
+        assert!(prompt.contains("buzz media get"));
+    }
 }
 
 fn default_heartbeat_prompt() -> String {

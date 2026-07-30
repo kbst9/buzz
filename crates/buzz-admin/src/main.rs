@@ -93,6 +93,42 @@ enum Command {
         #[arg(long)]
         relay_key: Option<String>,
     },
+    /// File-index (kind 1063) operations.
+    Files {
+        #[command(subcommand)]
+        command: FilesCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum FilesCommand {
+    /// Backfill kind-1063 file-index events from historical imeta messages.
+    ///
+    /// Insert-only (no pub/sub fan-out), oldest-first, idempotent on the
+    /// (source message, blob hash) identity — re-runs double as reconcile.
+    /// Skips TTL (ephemeral) and DM channels. Run to completion BEFORE
+    /// enabling BUZZ_FILE_INDEX so index order matches share order
+    /// (docs/channel-files-explorer.md § Rollout).
+    Backfill {
+        /// Restrict to one channel (UUID). Default: all eligible channels.
+        #[arg(long)]
+        channel: Option<String>,
+
+        /// Scan and report without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Sleep between scan batches (ms) to throttle DB load.
+        #[arg(long, default_value_t = 0)]
+        sleep_ms: u64,
+
+        /// Relay private key (hex) for signing index events. Falls back to
+        /// BUZZ_RELAY_PRIVATE_KEY. Required: entries must be signed by the
+        /// live relay identity or NIP-09 retraction breaks for interop
+        /// clients (deletions are only valid from the entry's author).
+        #[arg(long)]
+        relay_key: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -152,7 +188,194 @@ async fn run(cli: Cli) -> Result<i32> {
             reconcile_channels(relay_key).await?;
             Ok(0)
         }
+        Command::Files {
+            command:
+                FilesCommand::Backfill {
+                    channel,
+                    dry_run,
+                    sleep_ms,
+                    relay_key,
+                },
+        } => cmd_files_backfill(channel, dry_run, sleep_ms, relay_key).await,
     }
+}
+
+/// Backfill the kind-1063 file index from historical imeta-carrying events.
+///
+/// Replays sources oldest-first — originals emit, kind-40003 edits reconcile
+/// — so an edited message's final entry set matches what the live emitter
+/// would have produced. Insert-only: no pub/sub fan-out and no kind-5
+/// retraction events (backfill runs before any client subscribes to the
+/// index); edit-removed entries are soft-deleted directly.
+async fn cmd_files_backfill(
+    channel_arg: Option<String>,
+    dry_run: bool,
+    sleep_ms: u64,
+    relay_key_arg: Option<String>,
+) -> Result<i32> {
+    use buzz_core::file_index::{
+        derive_file_index_specs, first_e_tag_hex, imeta_hash_set, x_tag_value,
+    };
+    use buzz_core::kind::{KIND_FILE_METADATA, KIND_STREAM_MESSAGE_EDIT};
+
+    let channel_id = match channel_arg {
+        Some(raw) => match raw.parse::<uuid::Uuid>() {
+            Ok(id) => Some(id),
+            Err(_) => {
+                eprintln!("error: --channel is not a valid UUID: {raw}");
+                return Ok(1);
+            }
+        },
+        None => None,
+    };
+
+    let relay_keys = match relay_key_arg.or_else(|| std::env::var("BUZZ_RELAY_PRIVATE_KEY").ok()) {
+        Some(hex) => match Keys::parse(&hex) {
+            Ok(keys) => keys,
+            Err(e) => {
+                eprintln!("error: invalid relay key: {e}");
+                return Ok(1);
+            }
+        },
+        None => {
+            eprintln!(
+                "error: relay signing key required (--relay-key or BUZZ_RELAY_PRIVATE_KEY).\n\
+                 Index entries must be signed by the live relay identity — NIP-09\n\
+                 retraction is only valid from the entry's author."
+            );
+            return Ok(1);
+        }
+    };
+
+    let db = connect_db().await?;
+    let tenant = resolve_admin_tenant(&db).await?;
+    let community = tenant.community();
+
+    const BATCH: i64 = 200;
+    let mut cursor: Option<(chrono::DateTime<chrono::Utc>, Vec<u8>)> = None;
+    let (mut scanned, mut emitted, mut retracted, mut skipped) = (0u64, 0u64, 0u64, 0u64);
+
+    loop {
+        let batch = db
+            .scan_file_index_sources(community, channel_id, cursor.clone(), BATCH)
+            .await?;
+        if batch.is_empty() {
+            break;
+        }
+
+        for source in &batch {
+            scanned += 1;
+            let kind_u32 = u32::from(source.event.kind.as_u16());
+            let Some(source_channel) = source.channel_id else {
+                continue;
+            };
+
+            let is_edit = kind_u32 == KIND_STREAM_MESSAGE_EDIT;
+            // Entries key on the shared message's id: the event's own id for
+            // originals, the edited target's id for kind-40003 edits.
+            let target_hex = if is_edit {
+                match first_e_tag_hex(&source.event) {
+                    Some(hex) => hex,
+                    None => continue,
+                }
+            } else {
+                source.event.id.to_hex()
+            };
+
+            let existing = db
+                .get_events_by_kind_and_e_tag(community, KIND_FILE_METADATA as i32, &target_hex)
+                .await?;
+            let keep = imeta_hash_set(&source.event);
+
+            if is_edit {
+                for entry in &existing {
+                    let stale = x_tag_value(&entry.event).is_none_or(|x| !keep.contains(&x));
+                    if stale {
+                        retracted += 1;
+                        if !dry_run {
+                            db.soft_delete_event(community, entry.event.id.as_bytes())
+                                .await?;
+                        }
+                    }
+                }
+            }
+
+            let have: std::collections::HashSet<String> = existing
+                .iter()
+                .filter_map(|entry| x_tag_value(&entry.event))
+                .filter(|x| !is_edit || keep.contains(x))
+                .collect();
+
+            let uploader = hex::encode(backfill_effective_author(
+                &source.event,
+                &relay_keys.public_key(),
+            ));
+            let specs = derive_file_index_specs(
+                &source.event,
+                &uploader,
+                &target_hex,
+                source.event.created_at.as_secs(),
+                &source_channel.to_string(),
+            );
+            for spec in specs {
+                if have.contains(&spec.sha256) {
+                    skipped += 1;
+                    continue;
+                }
+                emitted += 1;
+                if dry_run {
+                    continue;
+                }
+                let index_event =
+                    EventBuilder::new(Kind::Custom(KIND_FILE_METADATA as u16), spec.content)
+                        .tags(spec.tags)
+                        .sign_with_keys(&relay_keys)
+                        .map_err(|e| anyhow::anyhow!("sign failed: {e}"))?;
+                db.insert_event(community, &index_event, Some(source_channel))
+                    .await?;
+            }
+        }
+
+        cursor = batch.last().map(|last| {
+            (
+                chrono::DateTime::from_timestamp(last.event.created_at.as_secs() as i64, 0)
+                    .unwrap_or_default(),
+                last.event.id.as_bytes().to_vec(),
+            )
+        });
+        if sleep_ms > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)).await;
+        }
+    }
+
+    let mode = if dry_run { " (dry run)" } else { "" };
+    println!(
+        "files backfill{mode}: scanned={scanned} emitted={emitted} retracted={retracted} skipped={skipped}"
+    );
+    Ok(0)
+}
+
+/// Effective author for backfilled index attribution. Keep in sync with
+/// `buzz-relay` `handlers::ingest::effective_message_author` (relay-signed
+/// legacy/workflow events carry the real author in an `actor` or `p` tag).
+fn backfill_effective_author(event: &nostr::Event, relay_pubkey: &nostr::PublicKey) -> Vec<u8> {
+    if event.pubkey == *relay_pubkey {
+        for name in ["actor", "p"] {
+            let found = event.tags.iter().find_map(|t| {
+                if t.kind().to_string() == name {
+                    t.content()
+                        .and_then(|hex| hex::decode(hex).ok())
+                        .filter(|bytes| bytes.len() == 32)
+                } else {
+                    None
+                }
+            });
+            if let Some(bytes) = found {
+                return bytes;
+            }
+        }
+    }
+    event.pubkey.to_bytes().to_vec()
 }
 
 async fn cmd_add_member(pubkey_arg: String, role: String) -> Result<i32> {
