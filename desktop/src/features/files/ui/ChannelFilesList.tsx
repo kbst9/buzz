@@ -8,7 +8,10 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import { toast } from "sonner";
+
 import { useUsersBatchQuery } from "@/features/profile/hooks";
+import { invokeTauri } from "@/shared/api/tauri";
 import {
   type FileIndexEntry,
   type FileTypeClass,
@@ -143,7 +146,6 @@ export function ChannelFilesList({
               const uploaderName =
                 profile?.displayName ??
                 (entry.uploader ? truncatePubkey(entry.uploader) : null);
-              const proxiedUrl = rewriteRelayUrl(entry.url);
               const thumbUrl =
                 entry.typeClass === "image"
                   ? rewriteRelayUrl(entry.thumb ?? entry.url)
@@ -198,18 +200,30 @@ export function ChannelFilesList({
                       )}
                     </p>
                   </div>
-                  <a
+                  {/* Native download_file command (tunnel HTTP + save
+                      dialog) — a plain <a download> is ignored by the
+                      webview; see shared/ui/markdown/FileCard.tsx. */}
+                  <button
                     aria-label={`Download ${entry.name}`}
                     className="rounded-md p-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-accent-foreground focus-visible:opacity-100 group-hover:opacity-100"
                     data-testid="files-download"
-                    download={entry.name}
-                    href={proxiedUrl}
-                    onClick={(event) => event.stopPropagation()}
-                    rel="noreferrer"
-                    target="_blank"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      invokeTauri("download_file", {
+                        url: entry.url,
+                        filename: entry.name,
+                      }).catch((err: unknown) => {
+                        const msg =
+                          err instanceof Error
+                            ? err.message
+                            : "Download failed";
+                        toast.error(msg);
+                      });
+                    }}
+                    type="button"
                   >
                     <Download className="h-4 w-4" />
-                  </a>
+                  </button>
                 </>
               );
               const rowClass =
