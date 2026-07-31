@@ -17,7 +17,7 @@ import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 import { AgentIdentityCard } from "./AgentIdentityCard";
 import { AgentRuntimeAvatarControl } from "./AgentRuntimeAvatarControl";
 import { CreateIdentityCard } from "./CreateIdentityCard";
-import { AGENT_CARD_GRID_CLASS } from "./UnifiedAgentsSection";
+import { IDENTITY_CARD_GRID_CLASS } from "./UnifiedAgentsSection";
 
 function noopStart() {
   // Connected agents run outside this app — there is nothing to start here.
@@ -123,7 +123,7 @@ export function ConnectedAgentsSection() {
         ) : null}
       </button>
       {!isCollapsed ? (
-        <div className={AGENT_CARD_GRID_CLASS}>
+        <div className={IDENTITY_CARD_GRID_CLASS}>
           {cards.map(({ user, agent }) => (
             <ConnectedAgentCard
               agent={agent}

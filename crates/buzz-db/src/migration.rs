@@ -347,6 +347,7 @@ mod tests {
             "push_gateway_delivery_auth_replays",
             "push_gateway_delivery_request_replays",
             "product_feedback",
+            "replica_heartbeat",
         ] {
             if normalized[insert_pos..].contains(&format!("'{value}'")) {
                 globals.insert(value.to_owned());
@@ -899,13 +900,27 @@ mod tests {
             .contains("CREATE INDEX relay_invites_expires_at_idx ON relay_invites (expires_at)"));
         assert!(!relay_invites.contains("_operator_global_tables"));
 
+        // Replica heartbeat (upstream, renumbered to 0026 after
+        // 0025_relay_invites landed on main): the fence's portable read-side
+        // observation. A single CHECK'd row makes the token update the
+        // serialization point (multi-pod commit ordering), and the epoch
+        // column is what detects token resets — both are load-bearing for
+        // the routing proof.
+        assert_eq!(migrations[25].version, 26);
+        let heartbeat = migrations[25].sql.as_str();
+        assert!(heartbeat.contains("CREATE TABLE replica_heartbeat"));
+        assert!(heartbeat.contains("CHECK (id = 1)"));
+        assert!(heartbeat.contains("epoch"));
+        assert!(heartbeat.contains("INSERT INTO replica_heartbeat (id) VALUES (1)"));
+        assert!(heartbeat.contains("_operator_global_tables"));
+
         // Agent-typed invites: nullable owner attribution on relay_invites.
         // Claiming binds the claimant to agent_owner inside the claim txn;
         // NULL preserves plain member invites bit-for-bit. Single-use pin is
         // a schema-level CHECK so no future caller can mint a multi-use one.
         // Renumbered 0026 -> 0027: upstream took 0026 for replica_heartbeat.
-        assert_eq!(migrations[25].version, 27);
-        let agent_invites = migrations[25].sql.as_str();
+        assert_eq!(migrations[26].version, 27);
+        let agent_invites = migrations[26].sql.as_str();
         assert!(agent_invites.contains("ADD COLUMN agent_owner TEXT"));
         assert!(
             agent_invites.contains("CHECK (agent_owner IS NULL OR agent_owner ~ '^[0-9a-f]{64}$')")

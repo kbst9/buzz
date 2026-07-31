@@ -79,6 +79,18 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
+  const goProfile = React.useCallback(
+    (pubkey: string, behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/pulse",
+          search: { profile: pubkey },
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
   const goProjects = React.useCallback(
     (behavior?: NavigationBehavior) =>
       commitNavigation(
@@ -315,6 +327,7 @@ export function useAppNavigation() {
     goProject,
     goProjects,
     goPulse,
+    goProfile,
     goSettings,
     goWorkflow,
     goWorkflows,

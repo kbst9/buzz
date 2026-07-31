@@ -12,7 +12,7 @@ import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 import { AgentIdentityCard } from "./AgentIdentityCard";
 import { CreateIdentityCard } from "./CreateIdentityCard";
 import { SwarmDialog, type SwarmDialogState } from "./SwarmDialog";
-import { AGENT_CARD_GRID_CLASS } from "./UnifiedAgentsSection";
+import { IDENTITY_CARD_GRID_CLASS } from "./UnifiedAgentsSection";
 
 /**
  * Agents page › Swarms: the current user's owner-authored delegation groups
@@ -77,7 +77,7 @@ export function SwarmsSection() {
         ) : null}
       </button>
       {!isCollapsed ? (
-        <div className={AGENT_CARD_GRID_CLASS}>
+        <div className={IDENTITY_CARD_GRID_CLASS}>
           {swarms.map((swarm) => {
             const leaderLabel = leaderLabelFor(swarm);
             const displayName = swarmDisplayName(swarm.name, leaderLabel);
