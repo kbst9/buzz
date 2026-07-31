@@ -1,5 +1,5 @@
 /**
- * Owner-authored kind:30178 SWARM definitions — the relay counterpart of the
+ * Owner-authored kind:30978 SWARM definitions — the relay counterpart of the
  * Swarms section on the Agents page. Mirrors `connectedAgentDefinition.ts`:
  * the relay is the source of truth (`publishSwarmDefinition` in tauri.ts
  * writes it owner-signed; the leader's harness reads it at session start),

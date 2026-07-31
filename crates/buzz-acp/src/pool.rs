@@ -524,7 +524,7 @@ pub struct PromptContext {
     /// birth. Only consulted when `system_prompt` is `None` — a locally pinned
     /// prompt is authoritative. See `definition_fetch`.
     pub definition_prompt: crate::definition_fetch::DefinitionPromptCache,
-    /// Swarms this agent leads (kind:30178), for swarm-addressed turns.
+    /// Swarms this agent leads (kind:30978), for swarm-addressed turns.
     pub swarms: crate::swarm_fetch::SwarmDirectoryCache,
     /// Fired assignment-watch marks (docs/swarms.md §8): event id → swarm id,
     /// consumed once so a watch-fired member report renders the

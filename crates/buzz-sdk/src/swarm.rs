@@ -1,8 +1,8 @@
-//! Swarm definition events (kind:30178) — typed content, builder, and parse.
+//! Swarm definition events (kind:30978) — typed content, builder, and parse.
 //!
 //! A swarm is an owner-authored delegation group: a required leader agent,
 //! member agents with per-member task descriptions, leader instructions, and
-//! a reporting policy. Addressed by `(owner_pubkey, 30178, d = swarm id)`.
+//! a reporting policy. Addressed by `(owner_pubkey, 30978, d = swarm id)`.
 //!
 //! Content follows the never-wipe `Option` discipline used by team events:
 //! an absent field means "leave the stored value untouched", so an older
@@ -74,7 +74,7 @@ fn check_hex_pubkey(value: &str, field: &str) -> Result<(), String> {
     }
 }
 
-/// Build a kind:30178 swarm definition event.
+/// Build a kind:30978 swarm definition event.
 ///
 /// `d_tag` is the swarm's stable id (any non-empty string; clients use a
 /// uuid). Validates every pubkey present; a leaderless content body is
@@ -97,7 +97,7 @@ pub fn build_swarm_definition(d_tag: &str, content: &SwarmContent) -> Result<Eve
     Ok(EventBuilder::new(Kind::Custom(KIND_SWARM as u16), body).tags([d]))
 }
 
-/// Parse a kind:30178 event's content — the inbound counterpart of
+/// Parse a kind:30978 event's content — the inbound counterpart of
 /// [`build_swarm_definition`]. Unknown fields land in `extra`.
 pub fn parse_swarm_content(content: &str) -> Result<SwarmContent, String> {
     serde_json::from_str(content).map_err(|e| format!("invalid swarm content: {e}"))

@@ -419,7 +419,7 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             | KIND_AGENT_PROFILE
             // NIP-AP: persona definitions (30175): owner-authored, keyed by (pubkey, kind, d_tag).
             | KIND_PERSONA
-            // NIP-AP: team (30176) + managed-agent (30177) + swarm (30178)
+            // NIP-AP: team (30176) + managed-agent (30177) + swarm (30978)
             // definitions: owner-authored, keyed by (pubkey, kind, d_tag).
             // A stray `h` tag must not channel-scope them.
             | KIND_TEAM

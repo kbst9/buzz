@@ -76,7 +76,7 @@ pub async fn set_connected_agent_instructions(
     .map_err(|e| format!("spawn_blocking failed: {e}"))?
 }
 
-/// Publish (or update) an owner-authored kind:30178 SWARM definition — the
+/// Publish (or update) an owner-authored kind:30978 SWARM definition — the
 /// save path behind the Swarms section's create/edit dialog.
 ///
 /// `content_json` is the serialized swarm content (buzz-sdk `SwarmContent`

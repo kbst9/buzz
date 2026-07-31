@@ -60,7 +60,7 @@ export const KIND_MANAGED_AGENT = 30177;
 // NIP-33 swarm definition (d-tag = swarm id): owner-authored delegation group
 // with a required leader agent. Mirror of buzz-core's KIND_SWARM. See
 // docs/swarms.md.
-export const KIND_SWARM = 30178;
+export const KIND_SWARM = 30978;
 export const KIND_USER_STATUS = 30315;
 export const KIND_AGENT_OBSERVER_FRAME = 24200;
 export const KIND_AGENT_TURN_METRIC = 44200;

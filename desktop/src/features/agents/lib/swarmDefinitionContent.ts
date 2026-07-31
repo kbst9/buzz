@@ -1,5 +1,5 @@
 /**
- * Pure mapping for owner-authored kind:30178 swarm definitions — no app
+ * Pure mapping for owner-authored kind:30978 swarm definitions — no app
  * imports so node tests can exercise it directly. The fetch/query layer
  * lives in `swarmDefinition.ts`.
  *
@@ -45,7 +45,7 @@ function asString(value: unknown): string {
 }
 
 /**
- * Parse a kind:30178 content body into a `SwarmDefinition`. Forgiving by
+ * Parse a kind:30978 content body into a `SwarmDefinition`. Forgiving by
  * design: unknown fields are ignored, malformed JSON or fields yield the
  * empty defaults — an unreadable definition edits like an empty one.
  */
@@ -108,7 +108,7 @@ export function parseSwarmContent(
 }
 
 /**
- * Serialize a `SwarmDefinition` into the kind:30178 content body buzz-sdk's
+ * Serialize a `SwarmDefinition` into the kind:30978 content body buzz-sdk's
  * `SwarmContent` parses. The dialog owns the full definition state, so every
  * field is written explicitly (the SDK's never-wipe `Option` discipline only
  * matters for partial writers). Member pubkeys are normalized to lowercase;
@@ -133,7 +133,7 @@ export function serializeSwarmContent(
 }
 
 /**
- * Reduce a kind:30178 event list to the NIP-33 head per d-tag: highest
+ * Reduce a kind:30978 event list to the NIP-33 head per d-tag: highest
  * `created_at` wins, ties break to the lexicographically lowest event id
  * (the NIP-01 replaceable-event rule). Events without a d-tag are skipped.
  */
@@ -165,7 +165,7 @@ export function swarmEventId(event: SwarmEventLike): string | null {
 }
 
 /**
- * Map raw kind:30178 events to parsed definitions: NIP-33 head per d-tag,
+ * Map raw kind:30978 events to parsed definitions: NIP-33 head per d-tag,
  * sorted by display order (named swarms alphabetically, then unnamed).
  */
 export function mapSwarmEventsToDefinitions(

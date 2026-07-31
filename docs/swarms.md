@@ -46,7 +46,7 @@ upstream PR later. Teams stays exactly as it is.
 3. **One new event kind, one relay match-arm.** The swarm definition is an
    owner-signed parameterized-replaceable event, published and fetched
    exactly like the 30177 agent definition. The relay's ingest scope map
-   rejects unknown kinds, so 30178 is registered there with the same
+   rejects unknown kinds, so 30978 is registered there with the same
    UsersWrite shape as its NIP-AP siblings (see §7 P1.5 for the
    deployment consequence).
 4. **v1 constraints:** same-owner members only (the sibling rule admits the
@@ -56,7 +56,7 @@ upstream PR later. Teams stays exactly as it is.
 
 ## 3. Event schema
 
-`buzz-core/src/kind.rs`: `KIND_SWARM: u32 = 30178` (parameterized
+`buzz-core/src/kind.rs`: `KIND_SWARM: u32 = 30978` (parameterized
 replaceable; registry entry alongside 30175/30176/30177).
 
 Author: the swarm owner. `d` tag: stable swarm id (uuid). Content follows
@@ -85,7 +85,7 @@ Mirrors the existing owner-definition fetch (the 30177 path) — same query
 seams, same `[System]` assembly:
 
 1. **Fetch:** at session start (and on a freshness window per turn), query
-   kind:30178 authored by the resolved NIP-OA owner whose
+   kind:30978 authored by the resolved NIP-OA owner whose
    `leader_pubkey == self`. No swarm ⇒ zero behavior change.
 2. **Trigger predicate:** inject swarm context only when the triggering
    event p-tags the leader directly (the harness already evaluates mention
@@ -153,7 +153,7 @@ Plus-card at the end of the grid opens the create dialog.
   - Textfield — subtext: *"Define evaluation and success criteria for the
     manager"* (`evaluation_criteria`; disabled while the toggle is off,
     value retained).
-- Save publishes the kind:30178 event owner-signed (the
+- Save publishes the kind:30978 event owner-signed (the
   `setConnectedAgentInstructions` publish pattern); the leader picks it up
   at its next session — works while the leader is offline.
 - Row-level warning when a selected member's directory entry says it will
@@ -177,7 +177,7 @@ Plus-card at the end of the grid opens the create dialog.
   preservation, absent-field never-wipe. **Done** (`feat/swarms`).
 - **P1.5 — relay acceptance (discovered while landing):** the ingest scope
   map REJECTS unknown kinds (`handlers/ingest.rs::required_scope_for_kind`),
-  so 30178 needed explicit acceptance (UsersWrite + h-tag immunity, same as
+  so 30978 needed explicit acceptance (UsersWrite + h-tag immunity, same as
   persona/team/managed-agent). **Done** (`f1b3fe24`). **Deployment
   consequence:** the production relay runs the pinned upstream image —
   swarm publishes bounce with "unknown kind" until the relay runs a build
@@ -218,7 +218,7 @@ three operator steps that are blocked on access/keys, in order:
 1. **Gradient SSH re-auth** — the Cloudflare Access session expired
    mid-rollout (`ssh gradient-ssh` now stalls in the browser SSO dance).
    Open any `ssh gradient-ssh` from a terminal and complete the SSO prompt.
-2. **Relay must accept kind:30178** — prod runs the pinned upstream image,
+2. **Relay must accept kind:30978** — prod runs the pinned upstream image,
    which rejects the kind. Either build + pin a fork image
    (`cd ~/buzz && git pull && DOCKER_BUILDKIT=1 docker build …` then set
    `BUZZ_IMAGE` in `deploy/compose/.env` and `./run.sh restart`;

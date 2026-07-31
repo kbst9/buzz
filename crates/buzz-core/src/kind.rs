@@ -267,7 +267,7 @@ pub const KIND_MANAGED_AGENT: u32 = 30177;
 /// The leader's harness fetches definitions authored by its NIP-OA owner and
 /// enters delegation mode when mentioned together with a `["swarm", <id>]`
 /// tag; members need no swarm awareness. See docs/swarms.md.
-pub const KIND_SWARM: u32 = 30178;
+pub const KIND_SWARM: u32 = 30978;
 
 // NIP-56 reporting
 /// NIP-56: Report an event, pubkey, or blob to relay moderators (kind:1984).
@@ -796,7 +796,7 @@ const _: () = assert!(is_replaceable(KIND_AGENT_PROFILE)); // 10100 ∈ 10000–
 const _: () = assert!(is_parameterized_replaceable(KIND_PERSONA)); // 30175 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM)); // 30176 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_MANAGED_AGENT)); // 30177 ∈ 30000–39999
-const _: () = assert!(is_parameterized_replaceable(KIND_SWARM)); // 30178 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_SWARM)); // 30978 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_EVENT_REMINDER)); // 30300 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_DM_VISIBILITY)); // 30622 ∈ 30000–39999

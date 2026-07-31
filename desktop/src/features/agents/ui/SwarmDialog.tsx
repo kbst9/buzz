@@ -69,7 +69,7 @@ const MEMBER_DESCRIPTION_PLACEHOLDER =
 
 /**
  * Create/edit dialog for a SWARM — an owner-authored delegation group with a
- * required leader (docs/swarms.md §6). Save publishes the kind:30178
+ * required leader (docs/swarms.md §6). Save publishes the kind:30978
  * definition owner-signed via `publishSwarmDefinition`; the leader picks it
  * up at its next session, so this works while the leader is offline.
  *

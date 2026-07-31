@@ -1,4 +1,4 @@
-//! Fetch the swarms this agent leads (kind:30178) and render the
+//! Fetch the swarms this agent leads (kind:30978) and render the
 //! `[Swarm Leader]` prompt section for swarm-addressed turns.
 //!
 //! Mirrors `definition_fetch`: owner-authored events only, one bounded query
@@ -64,7 +64,7 @@ impl SwarmDirectoryCache {
             .is_empty()
     }
 
-    /// Refresh from the relay: owner-authored kind:30178 heads whose
+    /// Refresh from the relay: owner-authored kind:30978 heads whose
     /// `leader_pubkey` is this agent, plus member kind:0 metadata.
     ///
     /// Same overwrite discipline as `DefinitionPromptCache::refresh`:
@@ -150,7 +150,7 @@ async fn fetch_leader_swarms(
 }
 
 /// Pure decoder: NIP-33 head per `d` tag among verified owner-authored
-/// kind:30178 events, kept when `leader_pubkey` is this agent.
+/// kind:30978 events, kept when `leader_pubkey` is this agent.
 ///
 /// - Empty array → confirmed absence (`Ok(vec![])`).
 /// - Non-empty array with zero verifiable candidates → `Err` (fail closed).

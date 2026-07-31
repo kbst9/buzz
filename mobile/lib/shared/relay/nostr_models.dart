@@ -21,7 +21,7 @@ abstract final class EventKind {
   static const huddleReaction = 24810;
   static const readState = 30078;
   // Owner-authored swarm definition (leader-delegation agent group).
-  static const swarm = 30178;
+  static const swarm = 30978;
   static const eventReminder = 30300;
   static const userStatus = 30315;
   static const dmVisibility = 30622;

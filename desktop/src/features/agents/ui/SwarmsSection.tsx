@@ -16,7 +16,7 @@ import { AGENT_CARD_GRID_CLASS } from "./UnifiedAgentsSection";
 
 /**
  * Agents page › Swarms: the current user's owner-authored delegation groups
- * (kind:30178) — a named agent group with a required leader that attributes
+ * (kind:30978) — a named agent group with a required leader that attributes
  * mentioned tasks to exactly one member (docs/swarms.md §6). Rendered below
  * Teams with the same collapsible section-heading idiom as Connected agents;
  * cards show the swarm name (falling back to "{Leader}'s swarm"), the
