@@ -903,7 +903,8 @@ mod tests {
         // Claiming binds the claimant to agent_owner inside the claim txn;
         // NULL preserves plain member invites bit-for-bit. Single-use pin is
         // a schema-level CHECK so no future caller can mint a multi-use one.
-        assert_eq!(migrations[25].version, 26);
+        // Renumbered 0026 -> 0027: upstream took 0026 for replica_heartbeat.
+        assert_eq!(migrations[25].version, 27);
         let agent_invites = migrations[25].sql.as_str();
         assert!(agent_invites.contains("ADD COLUMN agent_owner TEXT"));
         assert!(
