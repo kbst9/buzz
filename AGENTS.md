@@ -637,7 +637,12 @@ checks therefore use upstream CI's own delta semantic: `buzz-sync` exports
 `CHECK_FILE_SIZES_BASE=HEAD^1` for its remote `just ci`, and manual runs on
 deploy need the same (`CHECK_FILE_SIZES_BASE=HEAD^1 pnpm run check`).
 Feature branches off `main` keep the default merge-base ratchet — they must
-pass it to be upstreamable.
+pass it to be upstreamable. **On a sync merge commit even `HEAD^1` can fail**:
+if upstream itself grew a file the fork already carries over the 1000-line
+cap (seen 2026-08-01: ChannelPane.tsx, ChannelScreen.tsx), the merge grows it
+relative to the deploy parent through no fork change. For that one CI run use
+`CHECK_FILE_SIZES_BASE=HEAD` (self-base); the durable fix is extracting those
+files below the cap on a feature branch.
 
 ### Building and CI
 
