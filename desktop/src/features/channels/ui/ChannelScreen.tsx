@@ -27,6 +27,7 @@ import {
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
 import { mergeChannelKnownAgentPubkeys } from "@/features/agents/knownAgentPubkeys";
+import { buildAgentPersonaLookups } from "@/features/agents/personaLookups";
 import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
 import { pickWelcomeGuideAgent } from "@/features/onboarding/welcomeGuide";
 import { useWelcomeKickoffEntrance } from "@/features/onboarding/useWelcomeKickoffEntrance";
@@ -50,11 +51,8 @@ import {
 } from "@/features/messages/lib/channelWindowStore";
 import { DeleteMessageConfirmDialog } from "@/features/messages/ui/DeleteMessageConfirmDialog";
 import { getThreadReference } from "@/features/messages/lib/threading";
-import { imetaMediaFromTags } from "@/features/messages/lib/imetaMediaMarkdown";
-import {
-  resolveTimelineLoadingLatch,
-  selectTimelineLoadingState,
-} from "@/features/messages/lib/timelineLoadingState";
+import { composerEditTargetFromMessage } from "@/features/messages/lib/composerEditTarget";
+import { useTimelineLoadingLatch } from "@/features/messages/useTimelineLoadingLatch";
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
 import { useIndependentThreadPanel } from "@/features/messages/useIndependentThreadPanel";
 import { useThreadReplies } from "@/features/messages/useThreadReplies";
@@ -62,7 +60,7 @@ import { useChannelTyping } from "@/features/messages/useChannelTyping";
 import type { TimelineMessage } from "@/features/messages/types";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useRelaySelfQuery } from "@/features/moderation/hooks";
-import type { RelayEvent, RespondToMode, SearchHit } from "@/shared/api/types";
+import type { RelayEvent, SearchHit } from "@/shared/api/types";
 import { useChannelFind } from "@/features/search/useChannelFind";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
 import { AgentSessionProvider } from "@/shared/context/AgentSessionContext";
@@ -76,6 +74,7 @@ import { AUXILIARY_PANEL_SINGLE_COLUMN_BREAKPOINT_PX } from "@/shared/layout/Aux
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { useChannelActivityTyping } from "./useChannelActivityTyping";
 import { useChannelAgentSessions } from "./useChannelAgentSessions";
+import { useChannelComposerTargets } from "./useChannelComposerTargets";
 import { useMessageProfiles } from "./useMessageProfiles";
 import { useChannelPanelHistoryState } from "./useChannelPanelHistoryState";
 import { useChannelProfilePanel } from "./useChannelProfilePanel";
@@ -143,48 +142,28 @@ export function ChannelScreen({
   const [isAddBotOpen, setIsAddBotOpen] = React.useState(false);
   const [channelContentRef, channelContentWidthPx] =
     useElementWidth<HTMLDivElement>();
-  const [expandedThreadReplyIds, setExpandedThreadReplyIds] = React.useState(
-    () => new Set<string>(),
-  );
-  const [threadScrollTargetId, setThreadScrollTargetId] = React.useState<
-    string | null
-  >(null);
-  const [threadReplyTargetId, setThreadReplyTargetId] = React.useState<
-    string | null
-  >(null);
-  const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
-  // URL-backed thread state catches up after navigation; this override keeps urgent open/close renders responsive.
-  const [optimisticOpenThreadHeadId, setOptimisticOpenThreadHeadId] =
-    React.useState<string | null | undefined>(undefined);
-  const clearOptimisticThreadOverride = React.useCallback(() => {
-    setOptimisticOpenThreadHeadId(undefined);
-  }, []);
+  const activeChannelId = activeChannel?.id ?? null;
+  const {
+    editTargetId,
+    effectiveOpenThreadHeadId,
+    expandedThreadReplyIds,
+    clearOptimisticThreadOverride,
+    handleThreadScrollTargetResolved,
+    setEditTargetId,
+    setExpandedThreadReplyIds,
+    setOptimisticOpenThreadHeadId,
+    setThreadReplyTargetId,
+    setThreadScrollTargetId,
+    threadReplyTargetId,
+    threadScrollTargetId,
+  } = useChannelComposerTargets({ activeChannelId, openThreadHeadId });
   const mainInsetRef = useMainInsetRef();
   const currentPubkey = currentIdentity?.pubkey;
-  const activeChannelId = activeChannel?.id ?? null;
   const relaySelfPubkey = useRelaySelfQuery(activeChannel !== null).data;
-  const effectiveOpenThreadHeadId =
-    optimisticOpenThreadHeadId === undefined
-      ? openThreadHeadId
-      : optimisticOpenThreadHeadId;
   const isNotifiedForEffectiveThread =
     effectiveOpenThreadHeadId != null
       ? isNotifiedForThread(effectiveOpenThreadHeadId)
       : false;
-  const previousActiveChannelIdRef = React.useRef(activeChannelId);
-  React.useEffect(() => {
-    const didChangeChannel =
-      previousActiveChannelIdRef.current !== activeChannelId;
-    previousActiveChannelIdRef.current = activeChannelId;
-    setOptimisticOpenThreadHeadId((current) => {
-      if (current === undefined) {
-        return current;
-      }
-      return didChangeChannel || openThreadHeadId === current
-        ? undefined
-        : current;
-    });
-  }, [activeChannelId, openThreadHeadId]);
   const messagesQuery = useChannelMessagesQuery(activeChannel);
   const windowQuery = useChannelWindowQuery(activeChannel);
   const threadRepliesQuery = useThreadReplies(
@@ -371,21 +350,14 @@ export function ChannelScreen({
     return pubkeys;
   }, [knownAgentPubkeys, messageProfiles, communityAgentPubkeys]);
   const personasQuery = usePersonasQuery();
-  const { personaLookup, respondToLookup } = React.useMemo(() => {
-    const agents = managedAgentsQuery.data ?? [];
-    const personaById = new Map(
-      (personasQuery.data ?? []).map((p) => [p.id, p.displayName]),
-    );
-    const pLookup = new Map<string, string>();
-    const rLookup = new Map<string, RespondToMode>();
-    for (const agent of agents) {
-      const key = agent.pubkey.toLowerCase();
-      rLookup.set(key, agent.respondTo);
-      const pName = agent.personaId ? personaById.get(agent.personaId) : null;
-      if (pName) pLookup.set(key, pName);
-    }
-    return { personaLookup: pLookup, respondToLookup: rLookup };
-  }, [managedAgentsQuery.data, personasQuery.data]);
+  const { personaLookup, respondToLookup } = React.useMemo(
+    () =>
+      buildAgentPersonaLookups(
+        managedAgentsQuery.data ?? [],
+        personasQuery.data ?? [],
+      ),
+    [managedAgentsQuery.data, personasQuery.data],
+  );
   const timelineMessages = React.useMemo(
     () =>
       formatTimelineMessages(
@@ -614,52 +586,20 @@ export function ChannelScreen({
       setThreadReplyTargetId,
       setThreadScrollTargetId,
     });
-  const settledChannelIdRef = React.useRef<string | null>(null);
-  const hasSettledThisChannel =
-    activeChannelId !== null && settledChannelIdRef.current === activeChannelId;
-  const timelineLoadingNow =
-    activeChannel !== null &&
-    activeChannel.channelType !== "forum" &&
-    selectTimelineLoadingState(
-      {
-        isPending: messagesQuery.isPending,
-        isFetching: messagesQuery.isFetching,
-        isPlaceholderData: messagesQuery.isPlaceholderData,
-        dataLength: messagesQuery.data?.length ?? null,
-      },
-      hasSettledThisChannel,
-    );
-  const { settledChannelId, isLoading: isTimelineLoading } =
-    resolveTimelineLoadingLatch(
-      settledChannelIdRef.current,
-      activeChannelId,
-      timelineLoadingNow,
-    );
-  settledChannelIdRef.current = settledChannelId;
+  const isTimelineLoading = useTimelineLoadingLatch({
+    activeChannel,
+    activeChannelId,
+    query: messagesQuery,
+  });
   const { welcomeKickoffStage, welcomeKickoffSettingUp } =
     useWelcomeKickoffStagePresence(
       activeChannel,
       timelineMessages,
       isTimelineLoading,
     );
-  const resetComposerTargets = React.useCallback(
-    (_channelId: string | null) => {
-      setExpandedThreadReplyIds(new Set());
-      setThreadScrollTargetId(null);
-      setThreadReplyTargetId(null);
-      setEditTargetId(null);
-    },
-    [],
-  );
-  const handleThreadScrollTargetResolved = React.useCallback(() => {
-    setThreadScrollTargetId(null);
-  }, []);
   const handleTargetReached = React.useCallback(() => {
     clearMessageRouteTarget({ replace: true });
   }, [clearMessageRouteTarget]);
-  React.useEffect(() => {
-    resetComposerTargets(activeChannelId);
-  }, [activeChannelId, resetComposerTargets]);
   const mainTimelineTargetMessageId = useChannelRouteTarget({
     activeChannel,
     activeChannelId,
@@ -746,7 +686,10 @@ export function ChannelScreen({
     channelManagementOpen,
     openGlobalChannelManagement,
     setChannelManagementOpen,
+    setExpandedThreadReplyIds,
     setOpenThreadHeadId,
+    setThreadReplyTargetId,
+    setThreadScrollTargetId,
     handleCloseAgentSession,
     setProfilePanelPubkey,
   ]);
@@ -877,18 +820,7 @@ export function ChannelScreen({
                   onEntranceMessageComplete={handleWelcomeEntranceComplete}
                   welcomeKickoffStage={welcomeKickoffStage}
                   welcomeKickoffSettingUp={welcomeKickoffSettingUp}
-                  editTarget={
-                    editTargetMessage
-                      ? {
-                          author: editTargetMessage.author,
-                          body: editTargetMessage.body,
-                          id: editTargetMessage.id,
-                          imetaMedia: imetaMediaFromTags(
-                            editTargetMessage.tags,
-                          ),
-                        }
-                      : null
-                  }
+                  editTarget={composerEditTargetFromMessage(editTargetMessage)}
                   followThreadById={followThread}
                   unfollowThreadById={unfollowThread}
                   isFollowingThreadById={isFollowingThread}
