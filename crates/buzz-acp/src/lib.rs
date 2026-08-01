@@ -11,6 +11,7 @@ mod queue;
 mod relay;
 mod setup_mode;
 mod usage;
+mod workspace;
 
 pub use usage::TurnUsage;
 
@@ -1279,6 +1280,10 @@ async fn tokio_main() -> Result<()> {
         .init();
 
     let mut config = Config::from_cli().map_err(|e| anyhow::anyhow!("configuration error: {e}"))?;
+
+    // Resolve, seed, and enter the agent workspace before anything captures
+    // the working directory (PromptContext, session creation). Non-fatal.
+    workspace::prepare(config.workspace.as_deref());
 
     // ── Setup-mode early branch ───────────────────────────────────────────────
     //
@@ -5008,6 +5013,7 @@ mod build_mcp_servers_tests {
             heartbeat_prompt: None,
             system_prompt: None,
             team_instructions: None,
+            workspace: None,
             initial_message: None,
             subscribe_mode: config::SubscribeMode::All,
             dedup_mode: config::DedupMode::Queue,
@@ -5229,6 +5235,7 @@ mod error_outcome_emission_tests {
             heartbeat_prompt: None,
             system_prompt: None,
             team_instructions: None,
+            workspace: None,
             initial_message: None,
             subscribe_mode: config::SubscribeMode::All,
             dedup_mode: config::DedupMode::Queue,

@@ -470,6 +470,13 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_TEAM_INSTRUCTIONS")]
     pub team_instructions: Option<String>,
 
+    /// Agent workspace directory. Seeded with the Buzz Nest scaffold
+    /// (AGENTS.md, knowledge dirs, buzz-cli skill) and made the working
+    /// directory before agents start. When unset, the harness keeps a cwd
+    /// that already contains a nest, and otherwise defaults to `~/.buzz`.
+    #[arg(long, env = "BUZZ_ACP_WORKSPACE")]
+    pub workspace: Option<String>,
+
     /// Publish encrypted ACP observer frames over the relay.
     #[arg(long, env = "BUZZ_ACP_RELAY_OBSERVER", default_value_t = false)]
     pub relay_observer: bool,
@@ -507,6 +514,8 @@ pub struct Config {
     pub system_prompt: Option<String>,
     /// Team-owned instructions layered separately from the agent system prompt.
     pub team_instructions: Option<String>,
+    /// Explicit workspace directory override (`--workspace` / `BUZZ_ACP_WORKSPACE`).
+    pub workspace: Option<String>,
     pub initial_message: Option<String>,
     pub subscribe_mode: SubscribeMode,
     pub dedup_mode: DedupMode,
@@ -1072,6 +1081,12 @@ impl Config {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
+            workspace: args
+                .workspace
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
             initial_message: args.initial_message,
             subscribe_mode: args.subscribe,
             dedup_mode: args.dedup,
@@ -1445,6 +1460,7 @@ mod tests {
             heartbeat_prompt: None,
             system_prompt: None,
             team_instructions: None,
+            workspace: None,
             initial_message: None,
             subscribe_mode: mode,
             dedup_mode: DedupMode::Queue,
