@@ -1,0 +1,199 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Buzz agent prompt anatomy.
+  What buzz-acp injects into an ACP agent session: the session/new system
+  prompt, the per-turn session/prompt user message, special turns, and the
+  tool wiring that rides JSON + environment instead of prose.
+  Sources: crates/buzz-acp (pool.rs, queue.rs, base_prompt.md,
+  definition_fetch.rs, engram_fetch.rs), desktop managed_agents.
+  Edit by hand; open in a browser.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1520" height="1512" viewBox="0 0 1520 1512">
+  <style>
+    svg { font-family: Inter, -apple-system, 'Segoe UI', sans-serif; }
+    .h0  { font-size: 24px; font-weight: 700; fill: #0f172a; }
+    .h0s { font-size: 13.5px; fill: #5b6472; }
+    .lane  { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; }
+    .lanes { font-size: 11px; fill: #6b7280; }
+    .gap   { font-size: 10.5px; fill: #6b7280; font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; }
+    .pt  { font-size: 14.5px; font-weight: 700; }
+    .pd  { font-size: 12px; fill: #374151; }
+    .ps  { font-size: 10.5px; fill: #6b7280; font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; }
+    .code  { font-size: 12px; fill: #cbd5e1; font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; }
+    .ck { fill: #7dd3fc; }
+    .cc { fill: #64748b; }
+    .nv { font-size: 12px; fill: #6f3535; }
+    .foot { font-size: 11px; fill: #9ca3af; }
+    .pa  { fill: #eef4fb; stroke: #bcd0e8; }
+    .pb  { fill: #fdf7ec; stroke: #e8d3ab; }
+    .pc  { fill: #f5f0fb; stroke: #d2c3e8; }
+    .pdl { fill: #eefaf3; stroke: #b9dfc7; }
+    .pn  { fill: #fdf2f2; stroke: #eac5c5; }
+    .plg { fill: #ffffff; stroke: #b6bec9; stroke-dasharray: 5 4; }
+    .jcard { fill: #101828; }
+  </style>
+
+  <rect x="0" y="0" width="1520" height="1512" fill="#fcfcfa"/>
+  <rect x="0.5" y="0.5" width="1519" height="1511" fill="none" stroke="#e2e2dc"/>
+
+  <!-- ================= header ================= -->
+  <text x="48" y="54" class="h0">Buzz — agent prompt anatomy</text>
+  <text x="48" y="80" class="h0s">What buzz-acp injects into an ACP agent session — content blocks, where each one is sourced, and the tool wiring that rides JSON payloads + environment instead of prose.</text>
+
+  <!-- ================= lane 1: session/new ================= -->
+  <text x="48" y="150" class="lane" fill="#1e3a5f">① SESSION BIRTH — session/new · once per ACP session</text>
+  <text x="48" y="168" class="lanes">system role + tool wiring, JSON-RPC over stdio  ·  pool.rs create_session_and_apply_model()</text>
+
+  <rect x="48" y="182" width="688" height="148" rx="10" class="jcard"/>
+  <text xml:space="preserve" x="68" y="208" class="code">{</text>
+  <text xml:space="preserve" x="68" y="229" class="code">  <tspan class="ck">"cwd"</tspan>: "/…/&lt;agent-workspace&gt;",</text>
+  <text xml:space="preserve" x="68" y="250" class="code">  <tspan class="ck">"mcpServers"</tspan>: [ { name, command, args, env } ],  <tspan class="cc">// tool wiring → ④</tspan></text>
+  <text xml:space="preserve" x="68" y="271" class="code">  <tspan class="ck">"systemPrompt"</tspan>: "…",  <tspan class="cc">// system role — expands below ↓</tspan></text>
+  <text xml:space="preserve" x="68" y="292" class="code">  <tspan class="ck">"title"</tspan>: "&lt;Agent&gt; — #&lt;channel&gt;"</text>
+  <text xml:space="preserve" x="68" y="313" class="code">}</text>
+
+  <text x="48" y="345" class="gap">systemPrompt = the sections below, joined with blank lines ↓</text>
+
+  <!-- A1 Workspace -->
+  <rect x="48" y="352" width="688" height="82" rx="10" class="pa"/>
+  <text x="66" y="378" class="pt" fill="#1e3a5f">[Workspace]</text>
+  <text x="66" y="398" class="pd">Absolute working-directory anchor, so the model doesn't wander $HOME hunting for its workspace.</text>
+  <text x="66" y="418" class="ps">src: pool.rs workspace_section() · only emitted when a base prompt is present</text>
+
+  <!-- A2 Base -->
+  <rect x="48" y="446" width="688" height="98" rx="10" class="pa"/>
+  <text x="66" y="472" class="pt" fill="#1e3a5f">[Base]</text>
+  <text x="66" y="492" class="pd">Harness manual: buzz-CLI index table, mention &amp; threading etiquette, workspace layout,</text>
+  <text x="66" y="509" class="pd">memory + engineering discipline.</text>
+  <text x="66" y="528" class="ps">src: base_prompt.md compiled into buzz-acp · --base-prompt-file override · --no-base-prompt disables</text>
+
+  <!-- A3 System -->
+  <rect x="48" y="556" width="688" height="82" rx="10" class="pa"/>
+  <text x="66" y="582" class="pt" fill="#1e3a5f">[System]</text>
+  <text x="66" y="602" class="pd">The agent's own instructions from the desktop Agents menu (record → persona → global resolve).</text>
+  <text x="66" y="622" class="ps">src: BUZZ_ACP_SYSTEM_PROMPT at spawn, else owner-published kind:30177 — re-fetched each new session</text>
+
+  <!-- A4 Team Instructions -->
+  <rect x="48" y="650" width="688" height="98" rx="10" class="pa"/>
+  <text x="66" y="676" class="pt" fill="#1e3a5f">[Team Instructions]</text>
+  <text x="66" y="696" class="pd">Present whenever the agent belongs to a team with non-empty instructions — never gated on the</text>
+  <text x="66" y="713" class="pd">team being addressed. Baked at spawn; edits need an agent restart.</text>
+  <text x="66" y="732" class="ps">src: team record → BUZZ_ACP_TEAM_INSTRUCTIONS spawn env · spawn_hash.rs effective_team_instructions()</text>
+
+  <!-- A5 Agent Memory -->
+  <rect x="48" y="760" width="688" height="82" rx="10" class="pa"/>
+  <text x="66" y="786" class="pt" fill="#1e3a5f">[Agent Memory — core]</text>
+  <text x="66" y="806" class="pd">Durable identity, rules, and goals — auto-injected every session; the agent edits it via buzz mem.</text>
+  <text x="66" y="826" class="ps">src: relay kind:30174 engram, fetched + decrypted per new session · --no-memory disables</text>
+
+  <!-- A6 Channel Canvas -->
+  <rect x="48" y="854" width="688" height="98" rx="10" class="pa"/>
+  <text x="66" y="880" class="pt" fill="#1e3a5f">[Channel Canvas]</text>
+  <text x="66" y="900" class="pd">Pointer only — revision event id, last-modified, and the fetch command. Canvas content is</text>
+  <text x="66" y="917" class="pd">never inlined. Skipped for DMs and heartbeat turns.</text>
+  <text x="66" y="936" class="ps">src: relay kind:40100 latest for #h=&lt;channel&gt; · pool.rs render_canvas_section()</text>
+
+  <!-- ================= lane 2: session/prompt ================= -->
+  <text x="784" y="150" class="lane" fill="#6d4c13">② EVERY TURN — session/prompt · user message</text>
+  <text x="784" y="168" class="lanes">ordered text blocks — one per section, so the desktop observer can trim bodies but keep headers  ·  queue.rs format_prompt()</text>
+
+  <rect x="784" y="182" width="688" height="148" rx="10" class="jcard"/>
+  <text xml:space="preserve" x="804" y="208" class="code">{</text>
+  <text xml:space="preserve" x="804" y="229" class="code">  <tspan class="ck">"sessionId"</tspan>: "sess_…",</text>
+  <text xml:space="preserve" x="804" y="250" class="code">  <tspan class="ck">"prompt"</tspan>: [</text>
+  <text xml:space="preserve" x="804" y="271" class="code">    { <tspan class="ck">"type"</tspan>: "text", <tspan class="ck">"text"</tspan>: "[Context] …" },  <tspan class="cc">// one block per section ↓</tspan></text>
+  <text xml:space="preserve" x="804" y="292" class="code">    …  <tspan class="cc">// text-only: attachment bytes never ride the prompt</tspan></text>
+  <text xml:space="preserve" x="804" y="313" class="code">  ]</text>
+
+  <text x="784" y="345" class="gap">prompt[] = these blocks, in this order ↓</text>
+
+  <!-- B0 slash command -->
+  <rect x="784" y="352" width="688" height="98" rx="10" class="pb"/>
+  <text x="802" y="378" class="pt" fill="#6d4c13">/command args   (optional block 0)</text>
+  <text x="802" y="398" class="pd">Slash-command pass-through: a lone "@Agent /cmd" mention sends the bare command as the first</text>
+  <text x="802" y="415" class="pd">block, so ACP connectors detect it as a native command.</text>
+  <text x="802" y="434" class="ps">src: pool.rs · queue.rs slash_command_for_batch()</text>
+
+  <!-- B1 Context -->
+  <rect x="784" y="462" width="688" height="82" rx="10" class="pb"/>
+  <text x="802" y="488" class="pt" fill="#6d4c13">[Context]</text>
+  <text x="802" y="508" class="pd">Scope (channel / thread / dm), channel name + UUID, resolved reply-to anchor, fetch-more hints.</text>
+  <text x="802" y="528" class="ps">src: queue.rs format_context_hints() — computed from trigger tags + channel metadata</text>
+
+  <!-- B2 Thread / Conversation Context -->
+  <rect x="784" y="556" width="688" height="98" rx="10" class="pb"/>
+  <text x="802" y="582" class="pt" fill="#6d4c13">[Thread Context] / [Conversation Context]</text>
+  <text x="802" y="602" class="pd">Prior messages oldest→newest — thread replies and DMs only; a plain top-level mention gets</text>
+  <text x="802" y="619" class="pd">none (just a hint to fetch). Default 12 messages, max 100.</text>
+  <text x="802" y="638" class="ps">src: per-turn relay fetch (root + #e replies, or DM history) · BUZZ_ACP_CONTEXT_MESSAGE_LIMIT</text>
+
+  <!-- B3 Buzz event -->
+  <rect x="784" y="666" width="688" height="114" rx="10" class="pb"/>
+  <text x="802" y="692" class="pt" fill="#6d4c13">[Buzz event: @mention]  /  [Buzz events — N events]</text>
+  <text x="802" y="712" class="pd">The trigger(s), batched ≤50: event id, kind, sender (name via kind:0 profile lookup), time,</text>
+  <text x="802" y="729" class="pd">content, full Tags JSON + parsed root / parent / mentions. Attachments ride here as NIP-92</text>
+  <text x="802" y="746" class="pd">imeta tags — URLs only, never bytes; the agent fetches via buzz media get or view_image.</text>
+  <text x="802" y="764" class="ps">src: subscribed relay events · queue.rs format_event_block() · prompt_tag from the matched rule</text>
+
+  <!-- B4 steer framing -->
+  <rect x="784" y="792" width="688" height="98" rx="10" class="pb"/>
+  <text x="802" y="818" class="pt" fill="#6d4c13">[What you were working on] / [New message — arrived while you were working]</text>
+  <text x="802" y="838" class="pd">Merge framing when events land mid-turn or after a cancel: prior work first, then the fresh</text>
+  <text x="802" y="855" class="pd">arrivals, plus a closing instruction.</text>
+  <text x="802" y="874" class="ps">src: queue.rs MergeFraming — cancel / steer requeue path</text>
+
+  <!-- B5 legacy -->
+  <rect x="784" y="902" width="688" height="62" rx="10" class="plg"/>
+  <text x="802" y="926" class="pt" fill="#475569">Legacy agents (protocol_version &lt; 2)</text>
+  <text x="802" y="946" class="pd">No system role — the entire ① stack repeats as user-message sections here, every turn.</text>
+
+  <!-- ================= lane 3: special turns ================= -->
+  <text x="48" y="1008" class="lane" fill="#4c3175">③ SPECIAL TURNS — separate prompts through the same pipe</text>
+
+  <rect x="48" y="1022" width="688" height="98" rx="10" class="pc"/>
+  <text x="66" y="1048" class="pt" fill="#4c3175">[Initial message] — first turn of a fresh session</text>
+  <text x="66" y="1068" class="pd">Operator-configured first prompt — sent alone right after session/new, before any event turn.</text>
+  <text x="66" y="1102" class="ps">src: BUZZ_ACP_INITIAL_MESSAGE</text>
+
+  <rect x="784" y="1022" width="688" height="98" rx="10" class="pc"/>
+  <text x="802" y="1048" class="pt" fill="#4c3175">[System: Heartbeat]</text>
+  <text x="802" y="1068" class="pd">Timed wake-up: UTC timestamp + fixed checklist (buzz feed get needs_action / mentions → act).</text>
+  <text x="802" y="1085" class="pd">Carries no context, memory, or canvas sections.</text>
+  <text x="802" y="1102" class="ps">src: lib.rs default_heartbeat_prompt() · --heartbeat-prompt / --heartbeat-prompt-file override</text>
+
+  <!-- ================= lane 4: tooling ================= -->
+  <text x="48" y="1166" class="lane" fill="#1d5c34">④ TOOLING — delivered as wiring + environment, not prose</text>
+
+  <rect x="48" y="1180" width="452" height="130" rx="10" class="pdl"/>
+  <text x="66" y="1206" class="pt" fill="#1d5c34">mcpServers → buzz-dev-mcp (stdio)</text>
+  <text x="66" y="1226" class="pd">shell · read_file · str_replace · view_image · todo</text>
+  <text x="66" y="1243" class="pd">+ hidden _Stop / _PostCompact hooks (filtered from</text>
+  <text x="66" y="1260" class="pd">the model's tool list). buzz-agent + codex only —</text>
+  <text x="66" y="1277" class="pd">Claude Code &amp; Goose bring their own native tools.</text>
+  <text x="66" y="1296" class="ps">src: lib.rs build_mcp_servers() → session/new JSON</text>
+
+  <rect x="534" y="1180" width="452" height="130" rx="10" class="pdl"/>
+  <text x="552" y="1206" class="pt" fill="#1d5c34">Ambient env + PATH</text>
+  <text x="552" y="1226" class="pd">buzz CLI first on PATH — ~/.local/bin symlink, or the</text>
+  <text x="552" y="1243" class="pd">dev-mcp shim dir (also rg, tree, git-credential-nostr,</text>
+  <text x="552" y="1260" class="pd">git-sign-nostr). Creds inherited from the harness:</text>
+  <text x="552" y="1277" class="pd">BUZZ_RELAY_URL · BUZZ_PRIVATE_KEY · BUZZ_AUTH_TAG.</text>
+  <text x="552" y="1296" class="ps">src: runtime/path.rs · nest.rs · dev-mcp shim.rs</text>
+
+  <rect x="1020" y="1180" width="452" height="130" rx="10" class="pdl"/>
+  <text x="1038" y="1206" class="pt" fill="#1d5c34">CLI disclosure ladder (progressive)</text>
+  <text x="1038" y="1226" class="pd">① base-prompt table: 13 of 24 groups, key commands</text>
+  <text x="1038" y="1243" class="pd">② buzz --help / buzz &lt;group&gt; --help on demand</text>
+  <text x="1038" y="1260" class="pd">③ skills/buzz-cli/SKILL.md — output contracts, exit</text>
+  <text x="1038" y="1277" class="pd">codes, gotchas: only what --help can't say.</text>
+  <text x="1038" y="1296" class="ps">src: base_prompt.md · nest_skill.md → skill-dir symlinks</text>
+
+  <!-- ================= never strip ================= -->
+  <text x="48" y="1354" class="lane" fill="#8a2f2f">✕ NEVER IN THE PROMPT</text>
+  <rect x="48" y="1368" width="1424" height="80" rx="10" class="pn"/>
+  <text x="66" y="1401" class="nv">canvas content (pointer only) · channel history on plain top-level mentions · attachment bytes (URLs pass through) · the full CLI reference · "projects" — no such concept in the pipeline</text>
+  <text x="66" y="1424" class="nv">persona pack instructions.md (resolved but never consumed) · setup-mode requirement nudges — published to the channel as messages, never prompted into an agent</text>
+
+  <!-- ================= footer ================= -->
+  <text x="48" y="1486" class="foot">buzz-acp session lifecycle — sources: pool.rs · queue.rs · base_prompt.md · definition_fetch.rs · engram_fetch.rs · desktop managed_agents (spawn_hash.rs, runtime.rs, nest.rs) · 2026-07</text>
+</svg>

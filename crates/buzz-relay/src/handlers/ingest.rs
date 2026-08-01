@@ -14,27 +14,27 @@ use buzz_core::kind::{
     event_kind_u32, is_identity_archive_request_kind, is_parameterized_replaceable,
     is_relay_admin_kind, KIND_AGENT_ENGRAM, KIND_AGENT_PROFILE, KIND_AGENT_TURN_METRIC,
     KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_AUTH, KIND_BOOKMARK_LIST, KIND_BOOKMARK_SET,
-    KIND_CANVAS, KIND_CONTACT_LIST, KIND_DELETION, KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN,
-    KIND_EMOJI_LIST, KIND_EMOJI_SET, KIND_EVENT_REMINDER, KIND_FOLLOW_SET, KIND_FORUM_COMMENT,
-    KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_GIFT_WRAP, KIND_GIT_ISSUE, KIND_GIT_PATCH,
-    KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST, KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE,
-    KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT, KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN,
-    KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES, KIND_HUDDLE_PARTICIPANT_JOINED,
-    KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_STARTED, KIND_IA_ARCHIVE_REQUEST,
-    KIND_IA_UNARCHIVE_REQUEST, KIND_LONG_FORM, KIND_MANAGED_AGENT, KIND_MEMBER_ADDED_NOTIFICATION,
-    KIND_MEMBER_REMOVED_NOTIFICATION, KIND_MODERATION_BAN, KIND_MODERATION_RESOLVE_REPORT,
-    KIND_MODERATION_TIMEOUT, KIND_MODERATION_UNBAN, KIND_MODERATION_UNTIMEOUT, KIND_MUTE_LIST,
-    KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP,
-    KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST,
-    KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER, KIND_NIP43_LEAVE_REQUEST,
-    KIND_NIP65_RELAY_LIST_METADATA, KIND_PERSONA, KIND_PIN_LIST, KIND_PRESENCE_UPDATE,
-    KIND_PRODUCT_FEEDBACK, KIND_PROFILE, KIND_PROJECT, KIND_REACTION, KIND_READ_STATE, KIND_REPORT,
-    KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
-    KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
-    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_SWARM, KIND_TEAM, KIND_TEAM_CATALOG,
-    KIND_TEXT_NOTE, KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER,
-    RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
-    RELAY_ADMIN_SET_WORKSPACE_PROFILE,
+    KIND_CANVAS, KIND_COMMUNITY_GUIDE, KIND_CONTACT_LIST, KIND_DELETION, KIND_DM_ADD_MEMBER,
+    KIND_DM_HIDE, KIND_DM_OPEN, KIND_EMOJI_LIST, KIND_EMOJI_SET, KIND_EVENT_REMINDER,
+    KIND_FOLLOW_SET, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_GIFT_WRAP,
+    KIND_GIT_ISSUE, KIND_GIT_PATCH, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST,
+    KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE, KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT,
+    KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN, KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES,
+    KIND_HUDDLE_PARTICIPANT_JOINED, KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_STARTED,
+    KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST, KIND_LONG_FORM, KIND_MANAGED_AGENT,
+    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_MODERATION_BAN,
+    KIND_MODERATION_RESOLVE_REPORT, KIND_MODERATION_TIMEOUT, KIND_MODERATION_UNBAN,
+    KIND_MODERATION_UNTIMEOUT, KIND_MUTE_LIST, KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT,
+    KIND_NIP29_DELETE_GROUP, KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST,
+    KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER,
+    KIND_NIP43_LEAVE_REQUEST, KIND_NIP65_RELAY_LIST_METADATA, KIND_PERSONA, KIND_PIN_LIST,
+    KIND_PRESENCE_UPDATE, KIND_PRODUCT_FEEDBACK, KIND_PROFILE, KIND_PROJECT, KIND_REACTION,
+    KIND_READ_STATE, KIND_REPORT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED,
+    KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED,
+    KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_SWARM,
+    KIND_TEAM, KIND_TEAM_CATALOG, KIND_TEXT_NOTE, KIND_USER_STATUS, KIND_WORKFLOW_DEF,
+    KIND_WORKFLOW_TRIGGER, RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE,
+    RELAY_ADMIN_REMOVE_MEMBER, RELAY_ADMIN_SET_WORKSPACE_PROFILE,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_core::verification::verify_event;
@@ -215,7 +215,8 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         KIND_TEXT_NOTE | KIND_LONG_FORM => Ok(Scope::MessagesWrite),
         KIND_CONTACT_LIST | KIND_READ_STATE | KIND_USER_STATUS | KIND_AGENT_ENGRAM
         | KIND_EVENT_REMINDER | KIND_PERSONA | KIND_TEAM | KIND_MANAGED_AGENT
-        | KIND_TEAM_CATALOG | KIND_SWARM | super::push_lease::KIND_PUSH_LEASE => {
+        | KIND_TEAM_CATALOG | KIND_SWARM | KIND_COMMUNITY_GUIDE
+        | super::push_lease::KIND_PUSH_LEASE => {
             Ok(Scope::UsersWrite)
         }
         // NIP-AM: agent turn metrics are agent-authored global events (encrypted to owner).
@@ -447,6 +448,9 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             // `buzz-channel` tag is a metadata reference, not a routing directive,
             // so a project's state is never channel-scoped.
             | KIND_PROJECT
+            // Community guide (30979): community-global orientation, owner/
+            // admin-authored. A stray `h` tag must never channel-scope it.
+            | KIND_COMMUNITY_GUIDE
             // Community moderation commands (9040–9044): community-global
             // direct commands, same model as the NIP-43 9030-series. A stray
             // `h` tag must never channel-scope them (pinned contract —
@@ -1167,6 +1171,38 @@ fn validate_team_catalog_envelope(event: &Event) -> Result<(), String> {
     const LABEL: &str = "team-catalog event";
     validate_shared_tag(event, LABEL)?;
     single_bounded_d_tag(event, LABEL)?;
+    Ok(())
+}
+
+/// Fixed `d` tag of the community guide head. One addressable slot per
+/// author; readers take the newest head across owner/admin authors.
+pub(crate) const COMMUNITY_GUIDE_D_TAG: &str = "guide";
+
+/// Maximum byte length of a kind:30979 community-guide body. Generous for
+/// markdown orientation content while keeping the head far below relay frame
+/// limits — the guide is injected into agent prompts, not a document store.
+const COMMUNITY_GUIDE_CONTENT_MAX_LEN: usize = 65_536;
+
+/// Validate the envelope of a kind:30979 community-guide event.
+///
+/// Enforces exactly one `d` tag with the fixed value
+/// [`COMMUNITY_GUIDE_D_TAG`] — the guide is a community singleton, not a
+/// namespace — plus a bounded content length. The author-role gate lives in
+/// the ingest chain (owner/admin only), not here.
+fn validate_community_guide_envelope(event: &Event) -> Result<(), String> {
+    const LABEL: &str = "community-guide event";
+    let d = single_bounded_d_tag(event, LABEL)?;
+    if d != COMMUNITY_GUIDE_D_TAG {
+        return Err(format!(
+            "{LABEL} `d` tag must be \"{COMMUNITY_GUIDE_D_TAG}\" (got {d:?})"
+        ));
+    }
+    if event.content.len() > COMMUNITY_GUIDE_CONTENT_MAX_LEN {
+        return Err(format!(
+            "{LABEL} content too long ({} bytes, max {COMMUNITY_GUIDE_CONTENT_MAX_LEN})",
+            event.content.len()
+        ));
+    }
     Ok(())
 }
 
@@ -2421,6 +2457,30 @@ async fn ingest_event_inner(
     if kind_u32 == KIND_PROJECT {
         validate_project_envelope(&event)
             .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+    }
+
+    if kind_u32 == KIND_COMMUNITY_GUIDE {
+        validate_community_guide_envelope(&event)
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+
+        // Role gate: only the community owner or an admin may publish the
+        // guide — it steers every agent's system prompt.
+        let author_hex = event.pubkey.to_hex();
+        let member = state
+            .db
+            .get_relay_member(tenant.community(), &author_hex)
+            .await
+            .map_err(|e| {
+                IngestError::Internal(format!(
+                    "error: db error checking community-guide author role: {e}"
+                ))
+            })?;
+        let role = member.as_ref().map(|m| m.role.as_str()).unwrap_or("");
+        if role != "owner" && role != "admin" {
+            return Err(IngestError::AuthFailed(
+                "restricted: community guide (kind 30979) requires the owner or admin role".into(),
+            ));
+        }
     }
 
     // Track pre-created channel UUID for compensation on insert failure.
@@ -4242,6 +4302,69 @@ mod tests {
     fn team_catalog_is_global_only() {
         assert!(is_global_only_kind(KIND_TEAM_CATALOG));
         assert!(!requires_h_channel_scope(KIND_TEAM_CATALOG));
+    }
+
+    // ─── community-guide (30979) envelope tests ──────────────────────────────
+
+    fn make_community_guide(tags: &[&[&str]]) -> Event {
+        make_event_with_tags(KIND_COMMUNITY_GUIDE, "# How we work here", tags)
+    }
+
+    #[test]
+    fn community_guide_envelope_accepts_fixed_d_tag() {
+        let ev = make_community_guide(&[&["d", COMMUNITY_GUIDE_D_TAG]]);
+        assert!(validate_community_guide_envelope(&ev).is_ok());
+    }
+
+    #[test]
+    fn community_guide_envelope_rejects_missing_d_tag() {
+        let ev = make_community_guide(&[]);
+        let err = validate_community_guide_envelope(&ev).unwrap_err();
+        assert!(err.contains("exactly one `d` tag"), "got: {err}");
+    }
+
+    #[test]
+    fn community_guide_envelope_rejects_wrong_d_tag() {
+        // Any non-"guide" d value would silently create a second addressable
+        // slot the fetch path never reads.
+        let ev = make_community_guide(&[&["d", "guide-2"]]);
+        let err = validate_community_guide_envelope(&ev).unwrap_err();
+        assert!(err.contains("must be \"guide\""), "got: {err}");
+    }
+
+    #[test]
+    fn community_guide_envelope_rejects_duplicate_d_tags() {
+        let ev =
+            make_community_guide(&[&["d", COMMUNITY_GUIDE_D_TAG], &["d", COMMUNITY_GUIDE_D_TAG]]);
+        let err = validate_community_guide_envelope(&ev).unwrap_err();
+        assert!(err.contains("exactly one `d` tag"), "got: {err}");
+    }
+
+    #[test]
+    fn community_guide_envelope_bounds_content_length() {
+        let long = "x".repeat(COMMUNITY_GUIDE_CONTENT_MAX_LEN + 1);
+        let ev = make_event_with_tags(
+            KIND_COMMUNITY_GUIDE,
+            &long,
+            &[&["d", COMMUNITY_GUIDE_D_TAG]],
+        );
+        let err = validate_community_guide_envelope(&ev).unwrap_err();
+        assert!(err.contains("content too long"), "got: {err}");
+    }
+
+    #[test]
+    fn community_guide_is_in_scope_allowlist() {
+        let dummy = make_dummy_event();
+        assert_eq!(
+            required_scope_for_kind(KIND_COMMUNITY_GUIDE, &dummy).unwrap(),
+            Scope::UsersWrite,
+        );
+    }
+
+    #[test]
+    fn community_guide_is_global_only() {
+        assert!(is_global_only_kind(KIND_COMMUNITY_GUIDE));
+        assert!(!requires_h_channel_scope(KIND_COMMUNITY_GUIDE));
     }
 
     // ─── project (NIP-MP kind:30621) envelope tests ──────────────────────────

@@ -1,0 +1,401 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Buzz desktop theme playground
+  ==============================================================================
+  A static mock of the desktop app whose every surface is painted through the
+  SAME CSS custom properties the real app uses (desktop/src/shared/styles/
+  globals/theme.css). Open this file in a browser, then edit the values inside
+  the style block below; both panels repaint on reload.
+
+  Notes (variable names written without their leading dashes here, because XML
+  comments cannot contain a double hyphen):
+  * Values are HSL triplets ("H S% L%"), copy-paste compatible with theme.css.
+  * .theme-light mirrors :root (Catppuccin Latte), .theme-dark mirrors .dark
+    (Catppuccin Macchiato).
+  * In the real app most of these vars are DERIVED at runtime from a syntax
+    theme's seed colors (bg / fg / comment / git) by createThemeVars() in
+    desktop/src/shared/theme/adaptive-theme.ts. This file lets you skip the
+    derivation and audition final values directly.
+  * primary, sidebar-primary and sidebar-active (+foregrounds) are overwritten
+    at runtime by the accent picker (default #3b82f6). Buzz themes pin them to
+    the neutral fg/bg swap.
+  * status-added/deleted/modified and ui-warning(+bg) are not in theme.css;
+    defaults here are the adaptive-theme.ts fallbacks (GitHub-ish colors).
+  * CSS var() support requires a browser engine; Quick Look / Inkscape will
+    render this incorrectly.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="1900" height="790" viewBox="0 0 1900 790">
+  <style>
+    /* ================= EDIT ME: theme tokens ================= */
+
+    .theme-light {
+      /* Catppuccin Latte (mauve accent) — mirrors :root in theme.css */
+      --background: 220 23.08% 94.9%;
+      --foreground: 234 16.02% 35.49%;
+      --card: 220 23.08% 94.9%;
+      --card-foreground: 234 16.02% 35.49%;
+      --popover: 220 23.08% 94.9%;
+      --popover-foreground: 234 16.02% 35.49%;
+      --primary: 266 85.05% 58.04%;
+      --primary-foreground: 220 23.08% 94.9%;
+      --secondary: 223 15.91% 82.75%;
+      --secondary-foreground: 234 16.02% 35.49%;
+      --muted: 223 15.91% 82.75%;
+      --muted-foreground: 233 12.8% 41.37%;
+      --accent: 223 15.91% 82.75%;
+      --accent-foreground: 234 16.02% 35.49%;
+      --destructive: 347 86.67% 44.12%;
+      --destructive-foreground: 220 23.08% 94.9%;
+      --border: 225 13.56% 76.86%;
+      --input: 225 13.56% 76.86%;
+      --ring: 234 16.02% 35.49%;
+      --chart-1: 345 57.65% 74.12%;
+      --chart-2: 185 37.25% 70.59%;
+      --chart-3: 219 81.96% 78.43%;
+      --chart-4: 35 61.18% 76.86%;
+      --chart-5: 113 32.94% 73.33%;
+      --sidebar-background: 218 25.1% 93.73%;
+      --sidebar-foreground: 234 16.02% 35.49%;
+      --sidebar-primary: 266 85.05% 58.04%;
+      --sidebar-primary-foreground: 220 23.08% 94.9%;
+      --sidebar-active: var(--sidebar-primary);
+      --sidebar-active-foreground: var(--sidebar-primary-foreground);
+      --sidebar-accent: 220 23.08% 94.9%;
+      --sidebar-accent-foreground: 234 16.02% 35.49%;
+      --sidebar-border: 225 13.56% 76.86%;
+      /* adaptive-theme.ts fallbacks (hex, used directly) */
+      --status-added: #1a7f37;
+      --status-deleted: #cf222e;
+      --status-modified: #9a6700;
+      --ui-warning: #9a6700;
+      --ui-warning-bg: rgba(154, 103, 0, 0.08);
+    }
+
+    .theme-dark {
+      /* Catppuccin Macchiato (mauve accent) — mirrors .dark in theme.css */
+      --background: 232 23.4% 18.43%;
+      --foreground: 227 68.25% 87.65%;
+      --card: 232 23.4% 18.43%;
+      --card-foreground: 227 68.25% 87.65%;
+      --popover: 232 23.4% 18.43%;
+      --popover-foreground: 227 68.25% 87.65%;
+      --primary: 267 82.69% 79.61%;
+      --primary-foreground: 232 23.4% 18.43%;
+      --secondary: 230 18.8% 26.08%;
+      --secondary-foreground: 227 68.25% 87.65%;
+      --muted: 230 18.8% 26.08%;
+      --muted-foreground: 228 39.22% 80%;
+      --accent: 230 18.8% 26.08%;
+      --accent-foreground: 227 68.25% 87.65%;
+      --destructive: 351 73.91% 72.94%;
+      --destructive-foreground: 232 23.4% 18.43%;
+      --border: 231 15.61% 33.92%;
+      --input: 231 15.61% 33.92%;
+      --ring: 227 68.25% 87.65%;
+      --chart-1: 333 20.78% 38.04%;
+      --chart-2: 193 19.61% 38.04%;
+      --chart-3: 224 26.67% 41.18%;
+      --chart-4: 30 8.24% 42.35%;
+      --chart-5: 139 10.98% 38.82%;
+      --sidebar-background: 234 22.75% 17.25%;
+      --sidebar-foreground: 227 68.25% 87.65%;
+      --sidebar-primary: 267 82.69% 79.61%;
+      --sidebar-primary-foreground: 232 23.4% 18.43%;
+      --sidebar-active: var(--sidebar-primary);
+      --sidebar-active-foreground: var(--sidebar-primary-foreground);
+      --sidebar-accent: 232 23.4% 18.43%;
+      --sidebar-accent-foreground: 227 68.25% 87.65%;
+      --sidebar-border: 231 15.61% 33.92%;
+      --status-added: #3fb950;
+      --status-deleted: #f85149;
+      --status-modified: #d29922;
+      --ui-warning: #d29922;
+      --ui-warning-bg: rgba(210, 153, 34, 0.1);
+    }
+
+    /* ================= plumbing (no need to touch) ================= */
+
+    text { font-family: 'Inter Variable', Inter, -apple-system, 'Segoe UI', sans-serif; }
+    .mono { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
+
+    .f-bg           { fill: hsl(var(--background)); }
+    .f-fg           { fill: hsl(var(--foreground)); }
+    .f-card         { fill: hsl(var(--card)); }
+    .f-pop          { fill: hsl(var(--popover)); }
+    .f-pop-fg       { fill: hsl(var(--popover-foreground)); }
+    .f-pri          { fill: hsl(var(--primary)); }
+    .f-pri-fg       { fill: hsl(var(--primary-foreground)); }
+    .f-pri-soft     { fill: hsl(var(--primary) / 0.15); }
+    .f-sec          { fill: hsl(var(--secondary)); }
+    .f-sec-fg       { fill: hsl(var(--secondary-foreground)); }
+    .f-muted        { fill: hsl(var(--muted)); }
+    .f-muted-fg     { fill: hsl(var(--muted-foreground)); }
+    .f-destr        { fill: hsl(var(--destructive)); }
+    .f-destr-fg     { fill: hsl(var(--destructive-foreground)); }
+    .f-sb           { fill: hsl(var(--sidebar-background)); }
+    .f-sb-fg        { fill: hsl(var(--sidebar-foreground)); }
+    .f-sb-acc       { fill: hsl(var(--sidebar-accent)); }
+    .f-sb-acc-fg    { fill: hsl(var(--sidebar-accent-foreground)); }
+    .f-sb-active    { fill: hsl(var(--sidebar-active)); }
+    .f-sb-active-fg { fill: hsl(var(--sidebar-active-foreground)); }
+    .f-added        { fill: var(--status-added); }
+    .f-deleted      { fill: var(--status-deleted); }
+    .f-modified     { fill: var(--status-modified); }
+    .f-warn         { fill: var(--ui-warning); }
+    .f-warn-bg      { fill: var(--ui-warning-bg); }
+    .f-chart1       { fill: hsl(var(--chart-1)); }
+    .f-chart2       { fill: hsl(var(--chart-2)); }
+    .f-chart3       { fill: hsl(var(--chart-3)); }
+    .f-chart4       { fill: hsl(var(--chart-4)); }
+    .f-chart5       { fill: hsl(var(--chart-5)); }
+
+    .s-border    { stroke: hsl(var(--border)); }
+    .s-input     { stroke: hsl(var(--input)); }
+    .s-sb-border { stroke: hsl(var(--sidebar-border)); }
+    .s-sb-fg     { stroke: hsl(var(--sidebar-foreground)); }
+    .s-sb-bg     { stroke: hsl(var(--sidebar-background)); }
+    .s-sb-pri    { stroke: hsl(var(--sidebar-primary)); }
+    .s-pri       { stroke: hsl(var(--primary)); }
+    .s-muted-fg  { stroke: hsl(var(--muted-foreground)); }
+    .s-destr     { stroke: hsl(var(--destructive)); }
+    .s-warn      { stroke: var(--ui-warning); }
+  </style>
+
+  <defs>
+    <clipPath id="win"><rect width="860" height="580" rx="12"/></clipPath>
+    <filter id="shadow" x="-10%" y="-8%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#000000" flood-opacity="0.16"/>
+    </filter>
+
+    <!-- ======================= the app mock (drawn once, used twice) ======================= -->
+    <g id="mock">
+      <!-- window base = sidebar canvas -->
+      <rect class="f-sb s-border" width="860" height="580" rx="12" stroke-width="1" filter="url(#shadow)"/>
+
+      <g clip-path="url(#win)">
+        <!-- content surface -->
+        <rect class="f-bg" x="252" y="36" width="608" height="544"/>
+
+        <!-- ============ top chrome ============ -->
+        <circle cx="22" cy="19" r="5.5" fill="#ff5f57"/>
+        <circle cx="40" cy="19" r="5.5" fill="#febc2e"/>
+        <circle cx="58" cy="19" r="5.5" fill="#28c840"/>
+        <text class="f-sb-fg" x="84" y="24" font-size="13" opacity="0.5">‹</text>
+        <text class="f-sb-fg" x="98" y="24" font-size="13" opacity="0.5">›</text>
+        <text class="f-sb-fg" x="430" y="23" font-size="11" opacity="0.55" text-anchor="middle">Buzz — Acme Inc</text>
+
+        <!-- ============ community rail ============ -->
+        <line class="s-sb-border" x1="44.5" y1="36" x2="44.5" y2="580" stroke-width="1" opacity="0.8"/>
+        <rect class="s-sb-pri" x="6" y="50" width="32" height="32" rx="10" fill="none" stroke-width="2" opacity="0.9"/>
+        <rect class="f-pri" x="9" y="53" width="26" height="26" rx="8"/>
+        <text class="f-pri-fg" x="22" y="70.5" font-size="12" font-weight="700" text-anchor="middle">A</text>
+        <rect class="f-sec" x="9" y="93" width="26" height="26" rx="8"/>
+        <text class="f-sec-fg" x="22" y="110.5" font-size="12" font-weight="700" text-anchor="middle">N</text>
+        <rect class="s-sb-border" x="9" y="133" width="26" height="26" rx="8" fill="none" stroke-width="1.2"/>
+        <text class="f-sb-fg" x="22" y="150.5" font-size="14" opacity="0.5" text-anchor="middle">+</text>
+
+        <!-- ============ sidebar ============ -->
+        <text class="f-sb-fg" x="58" y="60" font-size="13" font-weight="700">Acme Inc</text>
+        <text class="f-sb-fg" x="120" y="59" font-size="10" opacity="0.55">▾</text>
+
+        <!-- search -->
+        <rect class="f-sb-acc s-sb-border" x="56" y="72" width="188" height="26" rx="7" stroke-width="1"/>
+        <circle class="s-sb-fg" cx="70" cy="84" r="4" fill="none" stroke-width="1.3" opacity="0.5"/>
+        <line class="s-sb-fg" x1="73" y1="87" x2="76" y2="90" stroke-width="1.3" opacity="0.5"/>
+        <text class="f-sb-fg" x="84" y="89" font-size="11" opacity="0.5">Search</text>
+        <text class="f-sb-fg" x="236" y="88.5" font-size="10" opacity="0.4" text-anchor="end">⌘K</text>
+
+        <!-- nav -->
+        <rect class="s-sb-fg" x="58" y="108" width="13" height="11" rx="2.5" fill="none" stroke-width="1.3" opacity="0.75"/>
+        <line class="s-sb-fg" x1="61" y1="114" x2="68" y2="114" stroke-width="1.3" opacity="0.75"/>
+        <text class="f-sb-fg" x="79" y="119" font-size="12">Inbox</text>
+        <rect class="f-pri" x="216" y="106" width="24" height="15" rx="7.5"/>
+        <text class="f-pri-fg" x="228" y="117" font-size="9.5" font-weight="700" text-anchor="middle">2</text>
+
+        <circle class="s-sb-fg" cx="64.5" cy="141" r="5.5" fill="none" stroke-width="1.3" opacity="0.75"/>
+        <line class="s-sb-fg" x1="64.5" y1="135.5" x2="64.5" y2="132" stroke-width="1.3" opacity="0.75"/>
+        <circle class="f-sb-fg" cx="64.5" cy="131" r="1.4" opacity="0.75"/>
+        <text class="f-sb-fg" x="79" y="145" font-size="12">Agents</text>
+
+        <polyline class="s-sb-fg" points="58 166.5 61.5 166.5 64 161 67 171 69.5 166.5 72 166.5" fill="none" stroke-width="1.4" opacity="0.75"/>
+        <text class="f-sb-fg" x="79" y="171" font-size="12">Pulse</text>
+
+        <!-- channels -->
+        <text class="f-sb-fg" x="58" y="200" font-size="9.5" font-weight="600" letter-spacing="0.09em" opacity="0.5">CHANNELS</text>
+
+        <!-- active channel (accent pill) -->
+        <rect class="f-sb-active" x="52" y="208" width="192" height="26" rx="6"/>
+        <text class="f-sb-active-fg" x="64" y="225" font-size="11" opacity="0.65">#</text>
+        <text class="f-sb-active-fg" x="76" y="225" font-size="12" font-weight="600">general</text>
+
+        <!-- unread channel -->
+        <text class="f-sb-fg" x="64" y="253" font-size="11" opacity="0.5">#</text>
+        <text class="f-sb-fg" x="76" y="253" font-size="12" font-weight="700">random</text>
+        <rect class="f-pri" x="218" y="240" width="20" height="15" rx="7.5"/>
+        <text class="f-pri-fg" x="228" y="251.5" font-size="9.5" font-weight="700" text-anchor="middle">3</text>
+
+        <!-- hovered channel -->
+        <rect class="f-sb-acc" x="52" y="264" width="192" height="26" rx="6"/>
+        <text class="f-sb-acc-fg" x="64" y="281" font-size="11" opacity="0.5">#</text>
+        <text class="f-sb-acc-fg" x="76" y="281" font-size="12">design</text>
+
+        <!-- plain channel -->
+        <text class="f-sb-fg" x="64" y="309" font-size="11" opacity="0.5">#</text>
+        <text class="f-sb-fg" x="76" y="309" font-size="12" opacity="0.8">engineering</text>
+
+        <!-- DMs -->
+        <text class="f-sb-fg" x="58" y="340" font-size="9.5" font-weight="600" letter-spacing="0.09em" opacity="0.5">DIRECT MESSAGES</text>
+
+        <circle cx="66" cy="361" r="9" fill="#d97b8f"/>
+        <circle class="f-added s-sb-bg" cx="72.5" cy="367.5" r="3.5" stroke-width="1.5"/>
+        <text class="f-sb-fg" x="82" y="365" font-size="12">alice</text>
+
+        <circle cx="66" cy="389" r="9" fill="#7f9cf5"/>
+        <circle class="f-sb s-sb-fg" cx="72.5" cy="395.5" r="3" stroke-width="1.2" opacity="0.45"/>
+        <text class="f-sb-fg" x="82" y="393" font-size="12" opacity="0.8">bob</text>
+
+        <rect class="f-pri" x="57" y="408" width="18" height="18" rx="5"/>
+        <text class="f-pri-fg" x="66" y="420.5" font-size="7.5" font-weight="700" text-anchor="middle">AI</text>
+        <circle class="f-added s-sb-bg" cx="73" cy="423.5" r="3.5" stroke-width="1.5"/>
+        <text class="f-sb-fg" x="82" y="421" font-size="12" opacity="0.8">palette-bot</text>
+
+        <!-- sidebar footer -->
+        <line class="s-sb-border" x1="44" y1="536.5" x2="252" y2="536.5" stroke-width="1"/>
+        <circle cx="68" cy="557" r="11" fill="#74a892"/>
+        <circle class="f-added s-sb-bg" cx="76" cy="564" r="3.5" stroke-width="1.5"/>
+        <text class="f-sb-fg" x="86" y="554" font-size="12" font-weight="600">tyler</text>
+        <text class="f-added" x="86" y="566" font-size="9.5">Active</text>
+        <circle class="s-sb-fg" cx="234" cy="557" r="7" fill="none" stroke-width="1.3" opacity="0.5"/>
+        <circle class="s-sb-fg" cx="234" cy="557" r="2.5" fill="none" stroke-width="1.3" opacity="0.5"/>
+
+        <!-- ============ content header ============ -->
+        <text class="f-muted-fg" x="270" y="63" font-size="14">#</text>
+        <text class="f-fg" x="284" y="63" font-size="14" font-weight="700">general</text>
+        <rect class="f-muted-fg" x="356" y="50" width="1" height="16" opacity="0.35"/>
+        <text class="f-muted-fg" x="368" y="62" font-size="11.5">Team-wide announcements</text>
+        <circle class="s-muted-fg" cx="798" cy="55" r="5.5" fill="none" stroke-width="1.3" opacity="0.85"/>
+        <line class="s-muted-fg" x1="802" y1="59.5" x2="806" y2="63.5" stroke-width="1.3" opacity="0.85"/>
+        <circle class="f-muted-fg" cx="826" cy="56" r="1.6" opacity="0.85"/>
+        <circle class="f-muted-fg" cx="832" cy="56" r="1.6" opacity="0.85"/>
+        <circle class="f-muted-fg" cx="838" cy="56" r="1.6" opacity="0.85"/>
+        <line class="s-border" x1="252" y1="80.5" x2="860" y2="80.5" stroke-width="1"/>
+
+        <!-- ============ message 1 ============ -->
+        <circle cx="286" cy="112" r="14" fill="#d97b8f"/>
+        <text class="f-fg" x="310" y="104" font-size="12.5" font-weight="700">alice</text>
+        <text class="f-muted-fg" x="350" y="104" font-size="10">9:42 AM</text>
+        <text class="f-fg" x="310" y="124" font-size="12.5">Morning! The new palette derivation just landed.</text>
+        <rect class="f-pri-soft" x="310" y="133" width="44" height="16" rx="4"/>
+        <text class="f-pri" x="315" y="145" font-size="11" font-weight="600">@tyler</text>
+        <text class="f-fg" x="360" y="145" font-size="12.5">want to sanity-check the new palette?</text>
+
+        <!-- floating context menu (popover) -->
+        <rect x="659" y="92" width="152" height="96" rx="9" fill="#000000" opacity="0.14"/>
+        <rect class="f-pop s-border" x="656" y="88" width="152" height="96" rx="9" stroke-width="1"/>
+        <text class="f-pop-fg" x="670" y="110" font-size="11.5">Reply in thread</text>
+        <text class="f-pop-fg" x="670" y="132" font-size="11.5">Copy link</text>
+        <line class="s-border" x1="656" y1="144.5" x2="808" y2="144.5" stroke-width="1" opacity="0.8"/>
+        <text class="f-destr" x="670" y="166" font-size="11.5">Delete message</text>
+
+        <!-- ============ message 2 (agent) ============ -->
+        <rect class="f-pri" x="272" y="168" width="28" height="28" rx="8"/>
+        <text class="f-pri-fg" x="286" y="186.5" font-size="10.5" font-weight="700" text-anchor="middle">AI</text>
+        <text class="f-fg" x="310" y="178" font-size="12.5" font-weight="700">palette-bot</text>
+        <rect class="f-sec s-border" x="388" y="167" width="42" height="14" rx="4" stroke-width="0.75"/>
+        <text class="f-sec-fg" x="409" y="177" font-size="7.5" font-weight="700" letter-spacing="0.08em" text-anchor="middle">AGENT</text>
+        <text class="f-muted-fg" x="438" y="178" font-size="10">9:44 AM</text>
+        <text class="f-fg" x="310" y="198" font-size="12.5">Seeds → derived tokens. Edit the vars up top and every surface shifts:</text>
+
+        <!-- code block -->
+        <rect class="f-muted s-border" x="310" y="208" width="440" height="100" rx="8" stroke-width="1" stroke-opacity="0.7"/>
+        <text class="f-muted-fg mono" x="738" y="222" font-size="9" text-anchor="end">theme.css</text>
+        <text class="f-muted-fg mono" x="324" y="230" font-size="11">// --muted-foreground is fed by the comment color</text>
+        <text class="mono" x="324" y="248" font-size="11"><tspan class="f-pri">const</tspan><tspan class="f-fg"> surface = elevate(</tspan><tspan class="f-modified">0.06</tspan><tspan class="f-fg">)</tspan></text>
+        <rect class="f-added" x="311" y="254" width="438" height="16" opacity="0.12"/>
+        <text class="f-added mono" x="324" y="266" font-size="11">+ --sidebar-active: 266 85% 58%;</text>
+        <rect class="f-deleted" x="311" y="272" width="438" height="16" opacity="0.12"/>
+        <text class="f-deleted mono" x="324" y="284" font-size="11">- --sidebar-active: 220 14% 60%;</text>
+        <text class="mono" x="324" y="302" font-size="11"><tspan class="f-pri">return</tspan><tspan class="f-fg"> </tspan><tspan class="f-added">"themed"</tspan></text>
+
+        <!-- reactions + thread -->
+        <rect class="f-sec s-border" x="310" y="318" width="46" height="20" rx="10" stroke-width="0.75"/>
+        <text class="f-fg" x="333" y="332" font-size="10.5" text-anchor="middle">👍 4</text>
+        <rect class="f-pri-soft s-pri" x="362" y="318" width="46" height="20" rx="10" stroke-width="1"/>
+        <text class="f-pri" x="385" y="332" font-size="10.5" text-anchor="middle">🎨 2</text>
+        <text class="f-pri" x="420" y="332" font-size="11" font-weight="600">3 replies</text>
+        <text class="f-muted-fg" x="478" y="332" font-size="10.5">· last reply 2m ago</text>
+
+        <!-- warning banner -->
+        <rect class="f-warn-bg s-warn" x="268" y="352" width="556" height="32" rx="8" stroke-width="1" stroke-opacity="0.45"/>
+        <path class="f-warn" d="M 284 374 L 291 361 L 298 374 Z"/>
+        <text class="f-warn" x="308" y="372" font-size="11.5">Relay connection lost — reconnecting in 3s…</text>
+
+        <!-- ============ message 3 ============ -->
+        <circle cx="286" cy="412" r="14" fill="#7f9cf5"/>
+        <text class="f-fg" x="310" y="404" font-size="12.5" font-weight="700">bob</text>
+        <text class="f-muted-fg" x="342" y="404" font-size="10">9:47 AM</text>
+        <text class="f-fg" x="310" y="424" font-size="12.5">Dark pair auto-switches with the OS — try tweaking --primary up top ✨</text>
+
+        <!-- unread divider -->
+        <line class="s-destr" x1="268" y1="452.5" x2="782" y2="452.5" stroke-width="1" opacity="0.6"/>
+        <rect class="f-destr" x="786" y="445" width="38" height="15" rx="7.5"/>
+        <text class="f-destr-fg" x="805" y="456" font-size="8" font-weight="700" text-anchor="middle">NEW</text>
+
+        <!-- ============ message 4 ============ -->
+        <circle cx="286" cy="482" r="14" fill="#d97b8f"/>
+        <text class="f-fg" x="310" y="474" font-size="12.5" font-weight="700">alice</text>
+        <text class="f-muted-fg" x="350" y="474" font-size="10">9:52 AM</text>
+        <text class="f-fg" x="310" y="494" font-size="12.5">the unread divider is --destructive, badges ride --primary.</text>
+
+        <!-- ============ composer ============ -->
+        <rect class="f-card s-input" x="268" y="516" width="556" height="40" rx="10" stroke-width="1.2"/>
+        <circle class="s-muted-fg" cx="290" cy="536" r="8" fill="none" stroke-width="1.3" opacity="0.8"/>
+        <line class="s-muted-fg" x1="286" y1="536" x2="294" y2="536" stroke-width="1.3" opacity="0.8"/>
+        <line class="s-muted-fg" x1="290" y1="532" x2="290" y2="540" stroke-width="1.3" opacity="0.8"/>
+        <text class="f-muted-fg" x="308" y="540" font-size="12">Message #general</text>
+        <rect class="f-pri" x="788" y="522" width="28" height="28" rx="8"/>
+        <path class="f-pri-fg" d="M 796 543 L 812 536 L 796 529 L 799.5 536 Z"/>
+      </g>
+
+      <!-- ============ token swatches (below window) ============ -->
+      <g>
+        <rect class="f-chart1" x="2" y="602" width="22" height="22" rx="6" stroke="#00000022" stroke-width="1"/>
+        <text x="13" y="640" font-size="8.5" fill="#7c7c85" text-anchor="middle">chart-1</text>
+        <rect class="f-chart2" x="66" y="602" width="22" height="22" rx="6" stroke="#00000022" stroke-width="1"/>
+        <text x="77" y="640" font-size="8.5" fill="#7c7c85" text-anchor="middle">chart-2</text>
+        <rect class="f-chart3" x="130" y="602" width="22" height="22" rx="6" stroke="#00000022" stroke-width="1"/>
+        <text x="141" y="640" font-size="8.5" fill="#7c7c85" text-anchor="middle">chart-3</text>
+        <rect class="f-chart4" x="194" y="602" width="22" height="22" rx="6" stroke="#00000022" stroke-width="1"/>
+        <text x="205" y="640" font-size="8.5" fill="#7c7c85" text-anchor="middle">chart-4</text>
+        <rect class="f-chart5" x="258" y="602" width="22" height="22" rx="6" stroke="#00000022" stroke-width="1"/>
+        <text x="269" y="640" font-size="8.5" fill="#7c7c85" text-anchor="middle">chart-5</text>
+        <rect class="f-added" x="322" y="602" width="22" height="22" rx="6" stroke="#00000022" stroke-width="1"/>
+        <text x="333" y="640" font-size="8.5" fill="#7c7c85" text-anchor="middle">added</text>
+        <rect class="f-deleted" x="386" y="602" width="22" height="22" rx="6" stroke="#00000022" stroke-width="1"/>
+        <text x="397" y="640" font-size="8.5" fill="#7c7c85" text-anchor="middle">deleted</text>
+        <rect class="f-modified" x="450" y="602" width="22" height="22" rx="6" stroke="#00000022" stroke-width="1"/>
+        <text x="461" y="640" font-size="8.5" fill="#7c7c85" text-anchor="middle">modified</text>
+        <rect class="f-warn" x="514" y="602" width="22" height="22" rx="6" stroke="#00000022" stroke-width="1"/>
+        <text x="525" y="640" font-size="8.5" fill="#7c7c85" text-anchor="middle">warning</text>
+      </g>
+    </g>
+  </defs>
+
+  <!-- ============================== canvas ============================== -->
+  <rect width="1900" height="790" fill="#e9e9ec"/>
+  <text x="50" y="34" font-size="17" font-weight="700" fill="#3f3f46">Buzz theme playground</text>
+  <text x="50" y="54" font-size="11.5" fill="#71717a">Open in a browser · edit the custom properties in the &lt;style&gt; block · values are copy-paste compatible with desktop/src/shared/styles/globals/theme.css</text>
+
+  <text x="50" y="96" font-size="13" font-weight="600" fill="#52525b">Light · :root defaults (Catppuccin Latte, mauve accent)</text>
+  <g class="theme-light" transform="translate(50, 110)">
+    <use href="#mock" xlink:href="#mock"/>
+  </g>
+
+  <text x="990" y="96" font-size="13" font-weight="600" fill="#52525b">Dark · .dark defaults (Catppuccin Macchiato)</text>
+  <g class="theme-dark" transform="translate(990, 110)">
+    <use href="#mock" xlink:href="#mock"/>
+  </g>
+
+  <text x="50" y="778" font-size="10.5" fill="#8a8a93">Runtime note: --primary / --sidebar-primary / --sidebar-active (+foregrounds) are overwritten by the accent picker (default #3b82f6; Buzz themes pin the neutral fg/bg swap) · --status-* and --ui-warning* come from adaptive-theme.ts fallbacks, not theme.css · --chart-* only exist as static values and are never re-derived per theme.</text>
+</svg>

@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "buzz-e2e-preview",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--dir", "desktop", "exec", "vite", "preview", "--port", "4173", "--strictPort"],
+      "port": 4173
+    },
+    {
+      "name": "buzz-dev-mock",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--dir", "desktop", "exec", "vite", "--port", "5174", "--strictPort"],
+      "port": 5174
+    }
+  ]
+}

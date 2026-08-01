@@ -1351,6 +1351,8 @@ fn format_conversation_context(
 /// Arguments for [`format_prompt`] beyond the required [`FlushBatch`].
 #[derive(Default)]
 pub struct FormatPromptArgs<'a> {
+    /// Community-guide section (kind:30979), pre-headered `[Community Guide]`.
+    pub agent_guide: Option<&'a str>,
     pub agent_core: Option<&'a str>,
     pub channel_info: Option<&'a PromptChannelInfo>,
     pub conversation_context: Option<&'a ConversationContext>,
@@ -1444,6 +1446,11 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
         }
         if let Some(sp) = args.system_prompt {
             sections.push(format!("[System]\n{sp}"));
+        }
+        // Community guide rides between [System] and [Team Instructions],
+        // matching the protocol-v2 system-prompt assembly order.
+        if let Some(guide) = args.agent_guide {
+            sections.push(guide.to_string());
         }
         if let Some(team) = args
             .team_instructions
@@ -2297,6 +2304,47 @@ mod tests {
         assert!(
             prompt.starts_with("[Agent Memory — core]\nbe helpful\n\n[Context]"),
             "expected core block first, then [Context]; got: {prompt}"
+        );
+    }
+
+    #[test]
+    fn test_format_prompt_legacy_guide_between_system_and_team() {
+        // Legacy agents (no system-prompt support) get the guide as a user-
+        // message section between [System] and [Team Instructions] — the same
+        // relative order the v2 session/new assembly uses.
+        let ch = Uuid::new_v4();
+        let event = make_event("hello");
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+        let prompt = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                has_system_prompt_support: false,
+                system_prompt: Some("persona"),
+                team_instructions: Some("team rules"),
+                agent_guide: Some("[Community Guide]\nconventions"),
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+        let system_pos = prompt.find("[System]\npersona").expect("system section");
+        let guide_pos = prompt
+            .find("[Community Guide]\nconventions")
+            .expect("guide section");
+        let team_pos = prompt
+            .find("[Team Instructions]\nteam rules")
+            .expect("team section");
+        assert!(
+            system_pos < guide_pos && guide_pos < team_pos,
+            "order must be [System] < [Community Guide] < [Team Instructions]; got: {prompt}"
         );
     }
 

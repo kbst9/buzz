@@ -531,6 +531,16 @@ pub fn build_set_canvas(channel_id: Uuid, content: &str) -> Result<EventBuilder,
     Ok(EventBuilder::new(Kind::Custom(40100), content).tags(tags))
 }
 
+/// Build a community-guide event (kind 30979, parameterized replaceable).
+///
+/// The `d` tag is fixed to `"guide"` — the guide is a community singleton,
+/// and the relay rejects any other value. Owner/admin role is enforced
+/// relay-side at ingest; publishing empty content clears the guide.
+pub fn build_set_community_guide(content: &str) -> Result<EventBuilder, SdkError> {
+    let tags = vec![tag(&["d", "guide"])?];
+    Ok(EventBuilder::new(Kind::Custom(30979), content).tags(tags))
+}
+
 /// Build a NIP-01 profile metadata event (kind 0).
 ///
 /// Only present (Some) fields are included in the JSON object.
@@ -2330,6 +2340,14 @@ mod tests {
         assert_eq!(ev.kind.as_u16(), 40100);
         assert!(has_tag(&ev, "h", &cid.to_string()));
         assert_eq!(ev.content, "# Canvas\nHello");
+    }
+
+    #[test]
+    fn set_community_guide_happy_path() {
+        let ev = sign(build_set_community_guide("# How we work here").unwrap());
+        assert_eq!(ev.kind.as_u16(), 30979);
+        assert!(has_tag(&ev, "d", "guide"));
+        assert_eq!(ev.content, "# How we work here");
     }
 
     #[test]

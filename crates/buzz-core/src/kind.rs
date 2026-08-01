@@ -319,6 +319,34 @@ pub const KIND_TEAM_CATALOG: u32 = 30178;
 /// (30178 raced with [`KIND_TEAM_CATALOG`] and lost).
 pub const KIND_SWARM: u32 = 30978;
 
+/// Community Guide (parameterized replaceable, owner/admin-authored).
+///
+/// Community-level orientation for agents: conventions, "how we work here",
+/// pointers to canonical channels and repos. Addressed by
+/// `(pubkey, kind, d_tag)` with the fixed `d` tag `"guide"`; the community
+/// boundary is host-derived like everything else, so one head per author per
+/// community. Readers take the newest head across authors — with several
+/// admins, last writer wins.
+///
+/// # Access control
+///
+/// Ingest requires the author to hold the `owner` or `admin` community role
+/// (`relay_members`), and exactly the single bounded `d` tag `"guide"`.
+/// Readable by every member: deliberately NOT a member of
+/// [`AUTHOR_ONLY_KINDS`], [`P_GATED_KINDS`], [`RESULT_GATED_KINDS`], or
+/// [`SHARED_GATED_KINDS`] — it is orientation content, and a plain member
+/// `{kinds:[30979]}` query must return it. Global-only: an `h` tag can never
+/// channel-scope it.
+///
+/// # Why 30979 and not next-in-sequence
+///
+/// The 3017x block is allocated sequentially by concurrent feature work,
+/// which makes next-in-sequence numbers race-prone across branches and
+/// deployments. 30979 sits in the same NIP-33 parameterized-replaceable
+/// range without sequence contention; replaceable events republish cheaply
+/// if review prefers another number.
+pub const KIND_COMMUNITY_GUIDE: u32 = 30979;
+
 // NIP-56 reporting
 /// NIP-56: Report an event, pubkey, or blob to relay moderators (kind:1984).
 ///
@@ -658,6 +686,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_MANAGED_AGENT,
     KIND_TEAM_CATALOG,
     KIND_SWARM,
+    KIND_COMMUNITY_GUIDE,
     KIND_REPORT,
     KIND_PRODUCT_FEEDBACK,
     KIND_NIP29_PUT_USER,
@@ -859,6 +888,8 @@ const _: () = assert!(is_parameterized_replaceable(KIND_TEAM)); // 30176 ∈ 300
 const _: () = assert!(is_parameterized_replaceable(KIND_MANAGED_AGENT)); // 30177 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM_CATALOG)); // 30178 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_SWARM)); // 30978 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_COMMUNITY_GUIDE)); // 30979 ∈ 30000–39999
+const _: () = assert!(KIND_COMMUNITY_GUIDE <= u16::MAX as u32);
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_EVENT_REMINDER)); // 30300 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_DM_VISIBILITY)); // 30622 ∈ 30000–39999

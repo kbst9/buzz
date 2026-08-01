@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Buzz theme previews, appearance-menu style.
+  Same mini-window the in-app picker draws (ThemePreviewSvg in
+  desktop/src/shared/theme/ThemePreviewFrame.tsx), one tile per theme.
+  Edit the custom properties in the style block; open in a browser.
+  (Variable names in this comment omit their leading dashes: XML comments
+  cannot contain a double hyphen.)
+
+  Tokens per tile: background, foreground, muted, muted-foreground, border,
+  primary, sidebar-background, sidebar-foreground. Buzz tiles paint the
+  sidebar with the brand gradient instead of sidebar-background, and pin
+  primary to the neutral accent (= foreground). Latte/Macchiato tiles show
+  the theme.css mauve primary; at runtime the accent picker replaces it
+  (default #3b82f6).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="580" height="512" viewBox="0 0 580 512">
+  <style>
+    svg { font-family: Inter, -apple-system, 'Segoe UI', sans-serif; }
+
+    /* ============ EDIT ME ============ */
+
+    :root {
+      /* Buzz brand gradient (theme.css: buzz-gradient-* tokens) */
+      --buzz-gradient-light-top: #e6e6b6;
+      --buzz-gradient-light-bottom: #c4d0da;
+      --buzz-gradient-dark-top: #4a4616;
+      --buzz-gradient-dark-bottom: #0a1423;
+    }
+
+    .buzz { /* GitHub Light base, run through createThemeVars() */
+      --background: 0 0% 100%;
+      --foreground: 210 12.2% 16.1%;
+      --muted: 0 0% 94.1%;
+      --muted-foreground: 211.6 8.22% 45.3%;
+      --border: 240 1.96% 90%;
+      --primary: 210 12.2% 16.1%;            /* neutral accent = foreground */
+      --sidebar-background: 0 0% 96.2%;      /* unused here: gradient wins */
+      --sidebar-foreground: 210 12.2% 16.1%;
+    }
+
+    .buzz-dark { /* GitHub Dark base, run through createThemeVars() */
+      --background: 210 12.2% 16.1%;
+      --foreground: 214.3 13.21% 89.6%;
+      --muted: 210 9.26% 21.2%;
+      --muted-foreground: 211.6 8.22% 45.3%;
+      --border: 210 7.25% 27.1%;
+      --primary: 214.3 13.21% 89.6%;
+      --sidebar-background: 206 13% 10.8%;
+      --sidebar-foreground: 214.3 13.21% 89.6%;
+    }
+
+    .latte { /* theme.css :root fallback (Catppuccin Latte) */
+      --background: 220 23.08% 94.9%;
+      --foreground: 234 16.02% 35.49%;
+      --muted: 223 15.91% 82.75%;
+      --muted-foreground: 233 12.8% 41.37%;
+      --border: 225 13.56% 76.86%;
+      --primary: 266 85.05% 58.04%;
+      --sidebar-background: 218 25.1% 93.73%;
+      --sidebar-foreground: 234 16.02% 35.49%;
+    }
+
+    .macchiato { /* theme.css .dark fallback (Catppuccin Macchiato) */
+      --background: 232 23.4% 18.43%;
+      --foreground: 227 68.25% 87.65%;
+      --muted: 230 18.8% 26.08%;
+      --muted-foreground: 228 39.22% 80%;
+      --border: 231 15.61% 33.92%;
+      --primary: 267 82.69% 79.61%;
+      --sidebar-background: 234 22.75% 17.25%;
+      --sidebar-foreground: 227 68.25% 87.65%;
+    }
+
+    /* ============ plumbing ============ */
+
+    .frame     { fill: hsl(var(--muted)); stroke: hsl(var(--border)); }
+    .w-bg      { fill: hsl(var(--background)); }
+    .w-sb      { fill: hsl(var(--sidebar-background)); }
+    .w-sb-fg   { fill: hsl(var(--sidebar-foreground) / 0.58); }
+    .w-muted-fg{ fill: hsl(var(--muted-foreground)); }
+    .w-fg      { fill: hsl(var(--foreground)); }
+    .w-pri     { fill: hsl(var(--primary)); }
+    .w-pri-soft{ fill: hsl(var(--primary) / 0.68); }
+    .w-border  { stroke: hsl(var(--border)); }
+  </style>
+
+  <defs>
+    <clipPath id="tileclip"><rect width="240" height="160" rx="16"/></clipPath>
+    <linearGradient id="grad-light" x1="0" y1="0" x2="0" y2="80" gradientUnits="userSpaceOnUse">
+      <stop offset="0" style="stop-color: var(--buzz-gradient-light-top)"/>
+      <stop offset="1" style="stop-color: var(--buzz-gradient-light-bottom)"/>
+    </linearGradient>
+    <linearGradient id="grad-dark" x1="0" y1="0" x2="0" y2="80" gradientUnits="userSpaceOnUse">
+      <stop offset="0" style="stop-color: var(--buzz-gradient-dark-top)"/>
+      <stop offset="1" style="stop-color: var(--buzz-gradient-dark-bottom)"/>
+    </linearGradient>
+
+    <!-- everything in the mini window except bg + sidebar fill -->
+    <g id="chrome">
+      <line class="w-border" x1="57" y1="10.5" x2="117" y2="10.5" stroke-width="0.6"/>
+      <rect class="w-sb-fg" x="3.6" y="15.975" width="3.6" height="3.6" rx="0.9"/>
+      <rect class="w-sb-fg" x="3.6" y="21.375" width="3.6" height="3.6" rx="0.9"/>
+      <rect class="w-sb-fg" x="3.6" y="26.775" width="3.6" height="3.6" rx="0.9"/>
+      <rect class="w-sb-fg" x="3.6" y="32.175" width="3.6" height="3.6" rx="0.9"/>
+      <rect class="w-sb-fg" x="9" y="16.875" width="45.225" height="1.8" rx="0.225"/>
+      <rect class="w-sb-fg" x="9" y="22.275" width="45.225" height="1.8" rx="0.225"/>
+      <rect class="w-sb-fg" x="9" y="27.675" width="45.225" height="1.8" rx="0.225"/>
+      <rect class="w-sb-fg" x="9" y="33.075" width="45.225" height="1.8" rx="0.225"/>
+      <rect class="w-muted-fg" x="3.6" y="43.875" width="26.775" height="1.8" rx="0.225"/>
+      <rect x="3.5" y="4.725" width="2.7" height="2.7" rx="1.35" fill="#FF5F57" stroke="rgba(0,0,0,0.2)" stroke-width="0.11"/>
+      <rect x="8" y="4.725" width="2.7" height="2.7" rx="1.35" fill="#FEBC2E" stroke="rgba(0,0,0,0.2)" stroke-width="0.11"/>
+      <rect x="12.5" y="4.725" width="2.7" height="2.7" rx="1.35" fill="#28C840" stroke="rgba(0,0,0,0.2)" stroke-width="0.11"/>
+      <rect class="w-fg" x="60" y="4" width="21" height="2" rx="0.5"/>
+      <rect class="w-pri" x="105" y="3" width="4" height="4" rx="1"/>
+      <rect class="w-pri-soft" x="111" y="3" width="4" height="4" rx="1"/>
+    </g>
+  </defs>
+
+  <rect width="580" height="512" fill="#f4f4f5"/>
+  <text x="30" y="36" font-size="14" font-weight="700" fill="#3f3f46">Buzz theme previews</text>
+
+  <!-- Buzz -->
+  <g class="buzz" transform="translate(30,64)">
+    <rect class="frame" width="240" height="160" rx="16" stroke-width="1"/>
+    <g clip-path="url(#tileclip)">
+      <g transform="translate(25,17) scale(1.83)">
+        <rect class="w-bg" width="288" height="180" rx="3.6"/>
+        <rect fill="url(#grad-light)" width="57.375" height="180"/>
+        <use href="#chrome"/>
+      </g>
+    </g>
+    <text x="2" y="180" font-size="11.5" font-weight="600" fill="#52525b">Buzz (default) · GitHub Light base + gradient</text>
+  </g>
+
+  <!-- Buzz Dark -->
+  <g class="buzz-dark" transform="translate(310,64)">
+    <rect class="frame" width="240" height="160" rx="16" stroke-width="1"/>
+    <g clip-path="url(#tileclip)">
+      <g transform="translate(25,17) scale(1.83)">
+        <rect class="w-bg" width="288" height="180" rx="3.6"/>
+        <rect fill="url(#grad-dark)" width="57.375" height="180"/>
+        <use href="#chrome"/>
+      </g>
+    </g>
+    <text x="2" y="180" font-size="11.5" font-weight="600" fill="#52525b">Buzz Dark · GitHub Dark base + gradient</text>
+  </g>
+
+  <!-- Catppuccin Latte -->
+  <g class="latte" transform="translate(30,304)">
+    <rect class="frame" width="240" height="160" rx="16" stroke-width="1"/>
+    <g clip-path="url(#tileclip)">
+      <g transform="translate(25,17) scale(1.83)">
+        <rect class="w-bg" width="288" height="180" rx="3.6"/>
+        <rect class="w-sb" width="57.375" height="180"/>
+        <use href="#chrome"/>
+      </g>
+    </g>
+    <text x="2" y="180" font-size="11.5" font-weight="600" fill="#52525b">Catppuccin Latte · :root fallback</text>
+  </g>
+
+  <!-- Catppuccin Macchiato -->
+  <g class="macchiato" transform="translate(310,304)">
+    <rect class="frame" width="240" height="160" rx="16" stroke-width="1"/>
+    <g clip-path="url(#tileclip)">
+      <g transform="translate(25,17) scale(1.83)">
+        <rect class="w-bg" width="288" height="180" rx="3.6"/>
+        <rect class="w-sb" width="57.375" height="180"/>
+        <use href="#chrome"/>
+      </g>
+    </g>
+    <text x="2" y="180" font-size="11.5" font-weight="600" fill="#52525b">Catppuccin Macchiato · .dark fallback</text>
+  </g>
+
+  <text x="30" y="500" font-size="10" fill="#8a8a93">Edit the custom properties in the style block · gradient stops are the buzz-gradient-* tokens from theme.css</text>
+</svg>

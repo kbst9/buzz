@@ -2978,3 +2978,101 @@ async fn test_nip29_relay_rejects_last_owner_self_demotion() {
         "the last owner must keep their role"
     );
 }
+
+/// Community guide (kind 30979): writes are owner/admin-only, reads are open
+/// to every member, and the head is NIP-33 replaceable.
+///
+/// Requires a running relay + Postgres (`just test`).
+#[tokio::test]
+#[ignore]
+async fn test_community_guide_owner_write_member_read() {
+    let url = relay_url();
+
+    let owner = Keys::generate();
+    seed_relay_owner(&owner).await;
+    let member = Keys::generate();
+    seed_relay_member("localhost:3000", &member, "member").await;
+
+    let guide_event = |keys: &Keys, content: &str| {
+        EventBuilder::new(Kind::Custom(30979), content)
+            .tags([Tag::parse(["d", "guide"]).unwrap()])
+            .sign_with_keys(keys)
+            .expect("sign guide")
+    };
+
+    // A plain member must not be able to steer every agent's prompt.
+    let mut ws = BuzzTestClient::connect(&url, &member)
+        .await
+        .expect("connect as member");
+    let ok = ws
+        .send_event(guide_event(&member, "member-authored guide"))
+        .await
+        .expect("send member guide");
+    ws.disconnect().await.ok();
+    assert!(!ok.accepted, "member write must be rejected");
+    assert!(
+        ok.message.contains("restricted"),
+        "rejection must be the role gate, got: {}",
+        ok.message
+    );
+
+    // A wrong `d` tag must be rejected even for the owner — the guide is a
+    // singleton, not a namespace.
+    let mut ws = BuzzTestClient::connect(&url, &owner)
+        .await
+        .expect("connect as owner");
+    let wrong_d = EventBuilder::new(Kind::Custom(30979), "guide body")
+        .tags([Tag::parse(["d", "guide-2"]).unwrap()])
+        .sign_with_keys(&owner)
+        .expect("sign wrong-d guide");
+    let ok = ws.send_event(wrong_d).await.expect("send wrong-d guide");
+    assert!(!ok.accepted, "wrong d tag must be rejected: {}", ok.message);
+
+    // The owner publishes, then replaces the guide.
+    let ok = ws
+        .send_event(guide_event(&owner, "v1 conventions"))
+        .await
+        .expect("send owner guide v1");
+    assert!(ok.accepted, "owner write rejected: {}", ok.message);
+    // NIP-33 identity is (pubkey, kind, d); a strictly newer created_at is
+    // required for replacement, so step past the v1 timestamp explicitly.
+    let v2 = EventBuilder::new(Kind::Custom(30979), "v2 conventions")
+        .tags([Tag::parse(["d", "guide"]).unwrap()])
+        .custom_created_at(nostr::Timestamp::now() + 2)
+        .sign_with_keys(&owner)
+        .expect("sign guide v2");
+    let ok = ws.send_event(v2).await.expect("send owner guide v2");
+    ws.disconnect().await.ok();
+    assert!(ok.accepted, "owner replace rejected: {}", ok.message);
+
+    // A plain member reads the head back with a bare kinds+d filter — the
+    // kind must not be caught by any read gate — and sees only the newest.
+    let mut ws = BuzzTestClient::connect(&url, &member)
+        .await
+        .expect("reconnect as member");
+    let sid = sub_id("community-guide");
+    let filter = Filter::new()
+        .kind(Kind::Custom(30979))
+        .custom_tags(SingleLetterTag::lowercase(Alphabet::D), ["guide"]);
+    ws.subscribe(&sid, vec![filter]).await.expect("subscribe");
+    let events = ws
+        .collect_until_eose(&sid, Duration::from_secs(5))
+        .await
+        .expect("collect guide events");
+    ws.disconnect().await.ok();
+
+    let owner_heads: Vec<_> = events
+        .iter()
+        .filter(|e| e.pubkey == owner.public_key())
+        .collect();
+    assert_eq!(
+        owner_heads.len(),
+        1,
+        "exactly one replaceable head must survive, got {}",
+        owner_heads.len()
+    );
+    assert_eq!(
+        owner_heads[0].content, "v2 conventions",
+        "the newest head must win"
+    );
+}
