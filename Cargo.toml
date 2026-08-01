@@ -17,6 +17,7 @@ members = [
     "crates/buzz-admin",
     "crates/buzz-workflow",
     "crates/buzz-media",
+    "crates/buzz-nest",
     "crates/buzz-cli",
     "crates/buzz-pairing-cli",
     "crates/buzz-sdk",
@@ -124,6 +125,7 @@ schemars = { version = "1", default-features = false }
 
 # Internal crates
 buzz-core = { path = "crates/buzz-core" }
+buzz-nest = { path = "crates/buzz-nest" }
 buzz-conformance = { path = "crates/buzz-conformance" }
 buzz-db = { path = "crates/buzz-db" }
 buzz-auth = { path = "crates/buzz-auth" }

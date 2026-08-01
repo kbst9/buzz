@@ -1,0 +1,10 @@
+[package]
+name = "buzz-nest"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Buzz Nest — shared agent workspace scaffolding (AGENTS.md, knowledge dirs, buzz-cli skill)"
+
+[dependencies]
+dirs = "6"
+tempfile = "3"
