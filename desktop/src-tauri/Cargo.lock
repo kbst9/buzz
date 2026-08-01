@@ -1047,6 +1047,7 @@ dependencies = [
  "buzz-agent",
  "buzz-core",
  "buzz-media",
+ "buzz-nest",
  "buzz-persona",
  "buzz-sdk",
  "buzz-voice",
@@ -1150,6 +1151,14 @@ dependencies = [
  "tracing",
  "ulid",
  "uuid",
+]
+
+[[package]]
+name = "buzz-nest"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "tempfile",
 ]
 
 [[package]]

@@ -1,0 +1,688 @@
+use super::*;
+
+#[test]
+fn nest_skill_contains_safe_mention_workflow() {
+    assert!(BUZZ_CLI_SKILL_MD.contains("--mention <hex-or-npub>"));
+    assert!(BUZZ_CLI_SKILL_MD.contains("every presentation-only name that should notify"));
+    assert!(BUZZ_CLI_SKILL_MD
+        .contains("permits unresolved or ambiguous `@Name` text as presentation-only"));
+    assert!(BUZZ_CLI_SKILL_MD.contains("signed event's `mention_pubkeys`"));
+    assert!(BUZZ_CLI_SKILL_MD.contains("no follow-up verification command is needed"));
+    assert!(BUZZ_CLI_SKILL_MD.contains("Add membership separately only when authorized"));
+    assert!(BUZZ_CLI_SKILL_MD.contains("never changes membership automatically"));
+}
+
+#[test]
+fn default_nest_dir_is_under_home() {
+    if let Some(dir) = default_nest_dir() {
+        assert_eq!(
+            dir.file_name().and_then(|n| n.to_str()),
+            Some(NEST_DIR_NAME),
+            "default nest dir must end with {NEST_DIR_NAME}, got {dir:?}"
+        );
+    }
+}
+
+#[test]
+fn ensure_nest_creates_all_dirs_and_agents_md() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(".buzz");
+
+    ensure_nest_at(&root).unwrap();
+
+    // All subdirectories exist.
+    for dir in NEST_DIRS {
+        assert!(root.join(dir).is_dir(), "{dir}/ should exist");
+    }
+    // REPOS is provisioned separately (may be a symlink); with no
+    // external repos dir configured it lands as a real directory.
+    assert!(root.join("REPOS").is_dir(), "REPOS/ should exist");
+
+    // AGENTS.md was written with default content.
+    let content = fs::read_to_string(root.join("AGENTS.md")).unwrap();
+    assert_eq!(content, AGENTS_MD);
+
+    // Permissions are 700 on Unix for root and all subdirs.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "root should be 700");
+        for dir in NEST_DIRS {
+            let mode = fs::metadata(root.join(dir)).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "{dir}/ should be 700");
+        }
+        let repos_mode = fs::metadata(root.join("REPOS"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(repos_mode, 0o700, "REPOS/ should be 700");
+    }
+}
+
+#[test]
+fn ensure_nest_is_idempotent_and_preserves_custom_content() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(".buzz");
+
+    // First call creates everything.
+    ensure_nest_at(&root).unwrap();
+
+    // User customizes AGENTS.md.
+    let agents = root.join("AGENTS.md");
+    fs::write(&agents, "my custom instructions").unwrap();
+
+    // Second call succeeds and does not overwrite.
+    ensure_nest_at(&root).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(&agents).unwrap(),
+        "my custom instructions"
+    );
+
+    // All dirs still exist.
+    for dir in NEST_DIRS {
+        assert!(root.join(dir).is_dir(), "{dir}/ should still exist");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_nest_rejects_symlink_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("real_dir");
+    fs::create_dir(&target).unwrap();
+    let link = tmp.path().join(".buzz");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let result = ensure_nest_at(&link);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("symlink"));
+}
+
+#[test]
+fn ensure_nest_preserves_existing_repos_symlink() {
+    #[cfg(unix)]
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".buzz");
+        fs::create_dir_all(&root).unwrap();
+        let external = tmp.path().join("external-repos");
+        fs::create_dir(&external).unwrap();
+        std::os::unix::fs::symlink(&external, root.join("REPOS")).unwrap();
+
+        ensure_nest_at(&root).unwrap();
+
+        // The configured symlink survives seeding untouched.
+        let meta = root.join("REPOS").symlink_metadata().unwrap();
+        assert!(meta.file_type().is_symlink(), "REPOS symlink must survive");
+        assert_eq!(fs::read_link(root.join("REPOS")).unwrap(), external);
+    }
+}
+
+#[test]
+fn ensure_nest_creates_skill_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(".buzz");
+    ensure_nest_at(&root).unwrap();
+
+    // Canonical location under .agents.
+    let skill = root.join(".agents/skills/buzz-cli/SKILL.md");
+    assert!(skill.exists(), "SKILL.md should exist at .agents path");
+    let content = fs::read_to_string(&skill).unwrap();
+    assert_eq!(content, BUZZ_CLI_SKILL_MD);
+
+    // On unix, harness-specific symlinks should resolve to the canonical dir.
+    #[cfg(unix)]
+    {
+        for dir in KNOWN_SKILL_DIRS {
+            let link = root.join(dir).join("buzz-cli");
+            assert!(
+                link.symlink_metadata().unwrap().file_type().is_symlink(),
+                "{dir}/buzz-cli should be a symlink"
+            );
+            assert!(
+                link.join("SKILL.md").exists(),
+                "symlink at {dir}/buzz-cli should resolve to dir with SKILL.md"
+            );
+        }
+    }
+}
+
+#[test]
+fn ensure_nest_does_not_overwrite_skill_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(".buzz");
+    ensure_nest_at(&root).unwrap();
+
+    let skill = root.join(".agents/skills/buzz-cli/SKILL.md");
+    fs::write(&skill, "custom skill content").unwrap();
+
+    ensure_nest_at(&root).unwrap();
+    assert_eq!(fs::read_to_string(&skill).unwrap(), "custom skill content");
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_nest_skill_dir_has_700_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(".buzz");
+    ensure_nest_at(&root).unwrap();
+    // Canonical path and all provider parent dirs should be locked down.
+    // Symlinks (e.g. .goose/skills/buzz-cli) are skipped by the chmod loop.
+    for dir in [
+        ".agents",
+        ".agents/skills",
+        ".agents/skills/buzz-cli",
+        ".goose",
+        ".goose/skills",
+        ".claude",
+        ".claude/skills",
+        ".codex",
+        ".codex/skills",
+    ] {
+        let path = root.join(dir);
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "{dir} should be 700");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_nest_skips_permissions_on_symlinked_child() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(".buzz");
+
+    // First call creates the real nest.
+    ensure_nest_at(&root).unwrap();
+
+    // Replace REPOS/ with a symlink to an external directory.
+    let external = tmp.path().join("external");
+    fs::create_dir(&external).unwrap();
+    fs::set_permissions(&external, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::remove_dir(root.join("REPOS")).unwrap();
+    std::os::unix::fs::symlink(&external, root.join("REPOS")).unwrap();
+
+    // Second call should succeed — it skips chmod on the symlinked child.
+    ensure_nest_at(&root).unwrap();
+
+    // The external directory's permissions should be unchanged (755, not 700).
+    let mode = fs::metadata(&external).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        mode, 0o755,
+        "symlinked child's target should not be chmod'd"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_nest_migrates_old_skill_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(".buzz");
+
+    // Simulate a pre-migration install: real directory at old path.
+    // Create the nest first to get all dirs, then simulate old layout.
+    ensure_nest_at(&root).unwrap();
+
+    // Remove the symlink and new skill dir, recreate old real dir.
+    let _ = fs::remove_file(root.join(".claude/skills/buzz-cli"));
+    let _ = fs::remove_dir_all(root.join(".agents/skills/buzz-cli"));
+    let old_skill_dir = root.join(".claude/skills/buzz-cli");
+    fs::create_dir_all(&old_skill_dir).unwrap();
+    fs::write(old_skill_dir.join("SKILL.md"), "user edited skill").unwrap();
+
+    // Delete version file to force refresh.
+    let _ = fs::remove_file(root.join(".agents/skills/buzz-cli/.skill-version"));
+
+    // Re-run ensure_nest_at — should trigger migration in refresh_skill_md_if_stale.
+    ensure_nest_at(&root).unwrap();
+
+    // New canonical location exists with user's content preserved.
+    let new_skill = root.join(".agents/skills/buzz-cli/SKILL.md");
+    assert!(new_skill.exists(), "SKILL.md should exist at new path");
+    assert_eq!(fs::read_to_string(&new_skill).unwrap(), "user edited skill");
+
+    // Old path is now a symlink, not a real directory.
+    let old_path = root.join(".claude/skills/buzz-cli");
+    assert!(
+        old_path
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "old path should now be a symlink"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_skill_symlinks_are_idempotent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(".buzz");
+    ensure_nest_at(&root).unwrap();
+    // Second call should succeed without errors.
+    ensure_nest_at(&root).unwrap();
+    // All symlinks still valid and point to relative targets.
+    for dir in KNOWN_SKILL_DIRS {
+        let link = root.join(dir).join("buzz-cli");
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(
+            link.join("SKILL.md").exists(),
+            "symlink at {dir}/buzz-cli should resolve to dir with SKILL.md"
+        );
+        let target = fs::read_link(&link).unwrap();
+        assert_eq!(
+            target.to_str().unwrap(),
+            format!("../../{CANONICAL_SKILL_DIR}"),
+            "symlink at {dir}/buzz-cli should use relative target"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_skill_symlinks_skips_existing_path_during_initial_pass() {
+    // ensure_skill_symlinks skips any path where symlink_metadata succeeds.
+    // However, refresh_skill_md_if_stale (called after ensure_skill_symlinks)
+    // migrates pre-existing real directories at .claude/skills/buzz-cli to
+    // symlinks. This test verifies the end-to-end behavior: a pre-existing real
+    // dir at the claude path is migrated to a symlink.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(".buzz");
+    // Pre-create a real directory where a symlink would go.
+    let real_dir = root.join(".claude/skills/buzz-cli");
+    fs::create_dir_all(&real_dir).unwrap();
+    // Place SKILL.md so migration preserves it.
+    fs::write(real_dir.join("SKILL.md"), "custom skill content").unwrap();
+
+    ensure_nest_at(&root).unwrap();
+
+    // Migration converts the real dir to a symlink; content is moved to canonical path.
+    assert!(
+        real_dir
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        ".claude/skills/buzz-cli should be migrated to a symlink"
+    );
+    // The canonical path now holds the migrated content.
+    let canonical = root.join(".agents/skills/buzz-cli/SKILL.md");
+    assert_eq!(
+        fs::read_to_string(&canonical).unwrap(),
+        "custom skill content"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_skill_symlinks_skip_dangling_symlink() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(".buzz");
+    // Pre-create a dangling symlink where the .codex link would go.
+    let codex_skills = root.join(".codex/skills");
+    fs::create_dir_all(&codex_skills).unwrap();
+    let dangling = codex_skills.join("buzz-cli");
+    std::os::unix::fs::symlink("/nonexistent/target", &dangling).unwrap();
+
+    ensure_nest_at(&root).unwrap();
+
+    // Dangling symlink should be left alone (not clobbered).
+    assert!(dangling
+        .symlink_metadata()
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(
+        fs::read_link(&dangling).unwrap().to_str().unwrap(),
+        "/nonexistent/target"
+    );
+}
+
+#[test]
+fn test_upsert_managed_section_with_markers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("AGENTS.md");
+    fs::write(
+            &file,
+            "# Header\n\nsome content\n\n<!-- BEGIN BUZZ MANAGED — regenerated automatically, do not edit below -->\nold section\n<!-- END BUZZ MANAGED -->\n\nafter\n",
+        )
+        .unwrap();
+
+    upsert_managed_section(&file, "new section").unwrap();
+
+    let result = fs::read_to_string(&file).unwrap();
+    assert!(result.contains("<!-- BEGIN BUZZ MANAGED"));
+    assert!(result.contains("<!-- END BUZZ MANAGED -->"));
+    assert!(result.contains("new section"));
+    assert!(!result.contains("old section"));
+    assert!(result.contains("# Header"));
+    assert!(result.contains("some content"));
+    assert!(result.contains("after"));
+}
+
+#[test]
+fn test_upsert_managed_section_without_markers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("AGENTS.md");
+    fs::write(&file, "# Header\n\nexisting content\n").unwrap();
+
+    upsert_managed_section(&file, "injected section").unwrap();
+
+    let result = fs::read_to_string(&file).unwrap();
+    assert!(result.contains("# Header"));
+    assert!(result.contains("existing content"));
+    assert!(result.contains("<!-- BEGIN BUZZ MANAGED"));
+    assert!(result.contains("<!-- END BUZZ MANAGED -->"));
+    assert!(result.contains("injected section"));
+    let begin_pos = result.find("<!-- BEGIN BUZZ MANAGED").unwrap();
+    let header_pos = result.find("# Header").unwrap();
+    assert!(
+        header_pos < begin_pos,
+        "original content should precede the managed section"
+    );
+}
+
+#[test]
+fn test_upsert_managed_section_no_tmp_leftover() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("AGENTS.md");
+    fs::write(&file, "# Header\n").unwrap();
+
+    upsert_managed_section(&file, "content").unwrap();
+
+    // Verify no stray temp files in the directory
+    let entries: Vec<_> = fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "only AGENTS.md should remain, no temp files"
+    );
+    assert_eq!(entries[0].file_name(), "AGENTS.md");
+}
+
+#[test]
+fn test_upsert_end_before_begin() {
+    // An END marker that precedes a BEGIN marker forms no valid ordered pair.
+    // find_managed_markers returns None (BEGIN found, but no END after it),
+    // so the orphan BEGIN line is stripped and a new block is appended.
+    // The stray END line and content between END and BEGIN remain in the file
+    // because strip_orphan_begin_marker only removes the BEGIN line itself.
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("AGENTS.md");
+    fs::write(
+            &file,
+            "# Header\n\n<!-- END BUZZ MANAGED -->\nsome middle content\n<!-- BEGIN BUZZ MANAGED — regenerated automatically, do not edit below -->\nold section\n",
+        )
+        .unwrap();
+
+    upsert_managed_section(&file, "new section").unwrap();
+
+    let result = fs::read_to_string(&file).unwrap();
+
+    assert!(result.contains("# Header"), "original header must survive");
+    assert!(
+        result.contains("new section"),
+        "new content must be present"
+    );
+    assert!(
+        result.contains("some middle content"),
+        "content between markers must survive"
+    );
+
+    // Exactly one BEGIN marker in the output (the orphan was stripped, new one appended).
+    assert_eq!(
+        result.matches(BEGIN_MARKER).count(),
+        1,
+        "exactly one BEGIN marker after orphan cleanup"
+    );
+
+    // The single BEGIN marker must have a matching END marker after it.
+    let begin_pos = result
+        .find(BEGIN_MARKER)
+        .expect("BEGIN marker must be present");
+    let end_pos = result[begin_pos..].find(END_MARKER).map(|p| begin_pos + p);
+    assert!(
+        end_pos.is_some(),
+        "an END marker must appear after the appended BEGIN marker"
+    );
+}
+
+#[test]
+fn test_upsert_begin_only_no_end() {
+    // A file with BEGIN but no END has an orphan marker.
+    // find_managed_markers returns None (no END found after BEGIN),
+    // so strip_orphan_begin_marker removes the BEGIN line.
+    // Content that followed the orphan BEGIN is preserved (only the marker line is stripped,
+    // not the body that came after it).
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("AGENTS.md");
+    fs::write(
+            &file,
+            "# Header\n\nsome content\n\n<!-- BEGIN BUZZ MANAGED — regenerated automatically, do not edit below -->\norphaned section without end marker\n",
+        )
+        .unwrap();
+
+    upsert_managed_section(&file, "fresh section").unwrap();
+
+    let result = fs::read_to_string(&file).unwrap();
+
+    assert!(result.contains("# Header"), "original header must survive");
+    assert!(
+        result.contains("some content"),
+        "original body must survive"
+    );
+    assert!(
+        result.contains("fresh section"),
+        "new content must be present"
+    );
+
+    let begin_pos = result
+        .find(BEGIN_MARKER)
+        .expect("BEGIN marker must be present");
+    let end_pos = result.find(END_MARKER).expect("END marker must be present");
+    assert!(
+        begin_pos < end_pos,
+        "the appended BEGIN marker must precede the appended END marker"
+    );
+
+    // Exactly one BEGIN marker after orphan cleanup.
+    assert_eq!(
+        result.matches(BEGIN_MARKER).count(),
+        1,
+        "exactly one BEGIN marker after orphan cleanup"
+    );
+}
+
+#[test]
+fn test_upsert_duplicate_markers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("AGENTS.md");
+    fs::write(
+            &file,
+            "# Header\n\n<!-- BEGIN BUZZ MANAGED — regenerated automatically, do not edit below -->\nfirst block\n<!-- END BUZZ MANAGED -->\n\nbetween blocks\n\n<!-- BEGIN BUZZ MANAGED — regenerated automatically, do not edit below -->\nsecond block\n<!-- END BUZZ MANAGED -->\n",
+        )
+        .unwrap();
+
+    upsert_managed_section(&file, "replaced").unwrap();
+
+    let result = fs::read_to_string(&file).unwrap();
+
+    assert!(
+        result.contains("replaced"),
+        "replacement content must be present"
+    );
+    assert!(
+        !result.contains("first block"),
+        "first block must be replaced"
+    );
+    assert!(
+        result.contains("second block"),
+        "second pair content must survive"
+    );
+    assert!(
+        result.contains("between blocks"),
+        "text between pairs must survive"
+    );
+}
+
+#[test]
+fn test_upsert_marker_in_code_block() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("AGENTS.md");
+    // Indented by 4 spaces — not at column 0, so should NOT match as a real marker.
+    fs::write(
+        &file,
+        "# Header\n\n    <!-- BEGIN BUZZ MANAGED — some indented marker -->\n\nReal content here\n",
+    )
+    .unwrap();
+
+    upsert_managed_section(&file, "appended content").unwrap();
+
+    let result = fs::read_to_string(&file).unwrap();
+
+    assert!(
+        result.contains("    <!-- BEGIN BUZZ MANAGED — some indented marker -->"),
+        "indented marker inside code block must be preserved verbatim"
+    );
+    assert!(
+        result.contains("appended content"),
+        "new content must be appended"
+    );
+    assert!(
+        result.contains("Real content here"),
+        "existing body must survive"
+    );
+
+    // The real markers appended at the end must be at line-start (column 0).
+    let begin_pos = result
+        .find("<!-- BEGIN BUZZ MANAGED — regenerated")
+        .expect("regenerated BEGIN marker must be present");
+    assert!(
+        begin_pos == 0 || result.as_bytes()[begin_pos - 1] == b'\n',
+        "appended BEGIN marker must be at line start"
+    );
+}
+
+#[test]
+fn test_upsert_idempotent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("AGENTS.md");
+    fs::write(
+            &file,
+            "# Header\n\n<!-- BEGIN BUZZ MANAGED — regenerated automatically, do not edit below -->\nexisting section\n<!-- END BUZZ MANAGED -->\n",
+        )
+        .unwrap();
+
+    upsert_managed_section(&file, "same content").unwrap();
+    let after_first = fs::read_to_string(&file).unwrap();
+
+    upsert_managed_section(&file, "same content").unwrap();
+    let after_second = fs::read_to_string(&file).unwrap();
+
+    assert_eq!(
+        after_first, after_second,
+        "upsert must be idempotent: second call must not alter the file"
+    );
+}
+
+#[test]
+fn refresh_agents_md_writes_version_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(".buzz");
+    ensure_nest_at(&root).unwrap();
+    let version = fs::read_to_string(root.join(NEST_AGENTS_VERSION_FILE)).unwrap();
+    assert_eq!(version.trim(), NEST_AGENTS_VERSION.to_string());
+}
+
+#[test]
+fn refresh_skill_md_writes_version_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(".buzz");
+    ensure_nest_at(&root).unwrap();
+    let version = fs::read_to_string(root.join(".agents/skills/buzz-cli/.skill-version")).unwrap();
+    assert_eq!(version.trim(), NEST_SKILL_VERSION.to_string());
+}
+
+#[test]
+fn refresh_agents_md_preserves_managed_section() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(".buzz");
+    ensure_nest_at(&root).unwrap();
+
+    // Simulate a managed section update.
+    let agents_md = root.join("AGENTS.md");
+    upsert_managed_section(
+        &agents_md,
+        "## Active Agents\n\n| Name | Role |\n|------|------|\n| Kit | Builder |",
+    )
+    .unwrap();
+
+    // Remove version file to simulate an upgrade.
+    fs::remove_file(root.join(NEST_AGENTS_VERSION_FILE)).unwrap();
+
+    // Re-run ensure_nest_at (triggers refresh).
+    ensure_nest_at(&root).unwrap();
+
+    let content = fs::read_to_string(&agents_md).unwrap();
+    // Static content should be refreshed (from template).
+    assert!(
+        content.starts_with("# Buzz Nest"),
+        "template header must be present"
+    );
+    // Managed section should be preserved.
+    assert!(
+        content.contains("Kit"),
+        "managed section agent table must survive refresh"
+    );
+    assert!(content.contains(BEGIN_MARKER), "BEGIN marker must survive");
+    assert!(content.contains(END_MARKER), "END marker must survive");
+}
+
+#[test]
+fn refresh_skips_when_version_current() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(".buzz");
+    ensure_nest_at(&root).unwrap();
+
+    // Manually change AGENTS.md content after version file is written.
+    let agents_md = root.join("AGENTS.md");
+    fs::write(&agents_md, "user modified content").unwrap();
+
+    // Re-run ensure_nest_at — version file is current, so no refresh.
+    ensure_nest_at(&root).unwrap();
+
+    let content = fs::read_to_string(&agents_md).unwrap();
+    assert_eq!(
+        content, "user modified content",
+        "should not overwrite when version is current"
+    );
+}
+
+#[test]
+fn refresh_skill_overwrites_on_version_bump() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(".buzz");
+    ensure_nest_at(&root).unwrap();
+
+    let skill_md = root.join(".agents/skills/buzz-cli/SKILL.md");
+    fs::write(&skill_md, "stale skill content").unwrap();
+
+    // Remove version file to simulate upgrade.
+    let _ = fs::remove_file(root.join(".agents/skills/buzz-cli/.skill-version"));
+
+    ensure_nest_at(&root).unwrap();
+
+    let content = fs::read_to_string(&skill_md).unwrap();
+    assert_eq!(
+        content, BUZZ_CLI_SKILL_MD,
+        "SKILL.md must be refreshed on version bump"
+    );
+}

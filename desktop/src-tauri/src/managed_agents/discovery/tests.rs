@@ -1837,3 +1837,18 @@ fn discovery_publish_path_drops_mid_flight_delete() {
         "discovery's publish must not resurrect a harness deleted mid-discovery"
     );
 }
+
+#[test]
+fn runtime_skill_dirs_are_covered_by_shared_nest_crate() {
+    // The nest scaffold (shared `buzz-nest` crate) creates a skill symlink for
+    // every harness skill directory. If a runtime is added here with a new
+    // `skill_dir`, buzz_nest_pkg::KNOWN_SKILL_DIRS must learn it too —
+    // otherwise harness-seeded nests silently miss that runtime's skill.
+    for dir in known_skill_dirs() {
+        assert!(
+            buzz_nest_pkg::KNOWN_SKILL_DIRS.contains(&dir),
+            "runtime skill_dir {dir:?} is missing from buzz_nest_pkg::KNOWN_SKILL_DIRS — \
+             add it there so seeded nests symlink it"
+        );
+    }
+}

@@ -119,6 +119,12 @@ All configuration is via environment variables (or CLI flags — every env var h
 
 **Legacy env vars:** `BUZZ_ACP_PRIVATE_KEY`, `BUZZ_ACP_API_TOKEN`, and `BUZZ_ACP_TURN_TIMEOUT` (replaced by `BUZZ_ACP_IDLE_TIMEOUT`) are still accepted as fallbacks.
 
+### Workspace
+
+| Flag | Env Var | Default | Description |
+|------|---------|---------|-------------|
+| `--workspace` | `BUZZ_ACP_WORKSPACE` | — | Agent workspace directory. At startup the harness seeds it with the Buzz Nest scaffold (`AGENTS.md`, `RESEARCH/`…`OUTBOX/`, the buzz-cli skill — shared `buzz-nest` crate) and chdirs into it. Unset: a cwd that already contains a nest (desktop spawns, including `~/.buzz-dev`) is kept; any other cwd falls through to `~/.buzz`. Seeding failures are warnings, never fatal — the process then keeps its inherited cwd. |
+
 ### Parallel Agents & Heartbeat
 
 | Flag | Env Var | Default | Description |
