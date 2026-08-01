@@ -513,6 +513,9 @@ pub struct PromptContext {
     /// on `session/new`. Never part of the prompt.
     pub session_title: Option<String>,
     pub team_instructions: Option<String>,
+    /// Cached community-guide prompt section (kind:30979), refreshed when a
+    /// new session is born. See `community_fetch`.
+    pub community_guide: crate::community_fetch::CommunityGuideCache,
     pub heartbeat_prompt: Option<String>,
     /// Base prompt content, or `None` if `--no-base-prompt` was passed.
     ///
@@ -872,21 +875,25 @@ async fn resolve_new_session_channel_context(
 async fn create_session_and_apply_model(
     agent: &mut OwnedAgent,
     ctx: &PromptContext,
+    agent_guide: Option<&str>,
     agent_core: Option<&str>,
     agent_canvas: Option<&str>,
     channel_name: Option<&str>,
 ) -> Result<String, AcpError> {
-    // Build base_prompt + system_prompt + agent core + canvas metadata into a
-    // single prompt. Standard protocol-v2 agents receive it in `session/new`;
-    // Goose receives it through the custom request below. Legacy agents receive
-    // the same content as user-message sections via `format_prompt`. Core carries
-    // its own `[Agent Memory — core]` header, and canvas carries its own
-    // `[Channel Canvas]` header; both are appended with a blank-line separator.
+    // Build base_prompt + system_prompt + community guide + agent core +
+    // canvas metadata into a single prompt. Standard protocol-v2 agents
+    // receive it in `session/new`; Goose receives it through the custom
+    // request below. Legacy agents receive the same content as user-message
+    // sections via `format_prompt`. Guide, core, and canvas each carry their
+    // own section header and are appended with blank-line separators.
     let is_goose = agent.agent_name == "goose";
     let combined_system_prompt = with_canvas(
         with_core(
             with_team(
-                framed_system_prompt(&ctx.cwd, ctx.base_prompt, ctx.system_prompt.as_deref()),
+                with_community(
+                    framed_system_prompt(&ctx.cwd, ctx.base_prompt, ctx.system_prompt.as_deref()),
+                    agent_guide,
+                ),
                 ctx.team_instructions.as_deref(),
             ),
             agent_core,
@@ -1251,6 +1258,21 @@ fn workspace_section(cwd: &str) -> Option<String> {
     }
 }
 
+/// Append the community-guide section after the framed prompt (`[System]`)
+/// and before `[Team Instructions]`.
+///
+/// The section already carries its `[Community Guide]` header (from
+/// `community_fetch`), so it is joined with a blank-line separator. Either
+/// side may be absent.
+fn with_community(prompt: Option<String>, guide: Option<&str>) -> Option<String> {
+    match (prompt, guide) {
+        (Some(prompt), Some(guide)) => Some(format!("{prompt}\n\n{guide}")),
+        (Some(prompt), None) => Some(prompt),
+        (None, Some(guide)) => Some(guide.to_string()),
+        (None, None) => None,
+    }
+}
+
 /// Append the team-owned instruction section after `[System]` and before core memory.
 fn with_team(prompt: Option<String>, instructions: Option<&str>) -> Option<String> {
     let instructions = instructions
@@ -1523,6 +1545,33 @@ pub async fn run_prompt_task(
         }
     }
 
+    // Community-guide refresh — community-global (one cache shared by every
+    // channel and heartbeat session), refreshed only when this turn is about
+    // to birth a new session. Same fail-open contract as core/canvas: bounded
+    // timeout, fetch errors keep the cached value, confirmed absence clears
+    // it. Existing sessions keep the prompt they were created with.
+    {
+        let is_new_session = match &source {
+            PromptSource::Channel(cid) => !agent.state.sessions.contains_key(cid),
+            PromptSource::Heartbeat => agent.state.heartbeat_session.is_none(),
+        };
+        if is_new_session {
+            const GUIDE_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+            let refresh = ctx.community_guide.refresh(&ctx.rest_client);
+            if tokio::time::timeout(GUIDE_FETCH_TIMEOUT, refresh)
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    target: "community::guide",
+                    timeout_ms = GUIDE_FETCH_TIMEOUT.as_millis() as u64,
+                    "community guide fetch timed out — keeping cached value"
+                );
+            }
+        }
+    }
+    let agent_guide: Option<String> = ctx.community_guide.get();
+
     // The core section to fold into the system prompt for this turn's session.
     // Channel-scoped; heartbeats carry no owner core.
     let agent_core: Option<String> = match &source {
@@ -1554,6 +1603,7 @@ pub async fn run_prompt_task(
                 match create_session_and_apply_model(
                     &mut agent,
                     &ctx,
+                    agent_guide.as_deref(),
                     agent_core.as_deref(),
                     agent_canvas.as_deref(),
                     title_channel.as_deref(),
@@ -1604,7 +1654,16 @@ pub async fn run_prompt_task(
             if let Some(sid) = &agent.state.heartbeat_session {
                 (sid.clone(), false)
             } else {
-                match create_session_and_apply_model(&mut agent, &ctx, None, None, None).await {
+                match create_session_and_apply_model(
+                    &mut agent,
+                    &ctx,
+                    agent_guide.as_deref(),
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                {
                     Ok(sid) => {
                         tracing::info!(
                             target: "pool::session",
@@ -1852,6 +1911,7 @@ pub async fn run_prompt_task(
         crate::queue::format_prompt(
             b,
             &crate::queue::FormatPromptArgs {
+                agent_guide: agent_guide.as_deref(),
                 agent_core: agent_core.as_deref(),
                 channel_info: channel_info.as_ref(),
                 conversation_context: conversation_context.as_ref(),
@@ -6387,6 +6447,7 @@ mod tests {
             system_prompt: None,
             session_title: None,
             team_instructions: None,
+            community_guide: Default::default(),
             heartbeat_prompt: None,
             base_prompt: None,
             cwd: ".".to_string(),
@@ -6457,6 +6518,71 @@ mod tests {
     fn test_with_canvas_returns_none_when_both_absent() {
         let result = with_canvas(None, None);
         assert!(result.is_none());
+    }
+
+    // ── with_community ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_with_community_appends_to_existing_prompt() {
+        let result = with_community(
+            Some("base content".into()),
+            Some("[Community Guide]\nconventions"),
+        );
+        assert_eq!(
+            result.unwrap(),
+            "base content\n\n[Community Guide]\nconventions"
+        );
+    }
+
+    #[test]
+    fn test_with_community_returns_guide_alone_when_no_prompt() {
+        let result = with_community(None, Some("[Community Guide]\nconventions"));
+        assert_eq!(result.unwrap(), "[Community Guide]\nconventions");
+    }
+
+    #[test]
+    fn test_with_community_returns_prompt_alone_when_no_guide() {
+        let result = with_community(Some("base content".into()), None);
+        assert_eq!(result.unwrap(), "base content");
+    }
+
+    #[test]
+    fn test_with_community_returns_none_when_both_absent() {
+        assert!(with_community(None, None).is_none());
+    }
+
+    #[test]
+    fn test_community_guide_splices_after_system_before_team() {
+        // The full v2 assembly order: [System] … [Community Guide] …
+        // [Team Instructions] … core … canvas.
+        let combined = with_canvas(
+            with_core(
+                with_team(
+                    with_community(
+                        framed_system_prompt("/ws", None, Some("persona")),
+                        Some("[Community Guide]\nconventions"),
+                    ),
+                    Some("team rules"),
+                ),
+                Some("[Agent Memory — core]\nprofile"),
+            ),
+            Some("[Channel Canvas]\nstuff"),
+        )
+        .unwrap();
+        let order = [
+            "[System]\npersona",
+            "[Community Guide]\nconventions",
+            "[Team Instructions]\nteam rules",
+            "[Agent Memory — core]\nprofile",
+            "[Channel Canvas]\nstuff",
+        ];
+        let mut last = 0;
+        for section in order {
+            let pos = combined[last..]
+                .find(section)
+                .unwrap_or_else(|| panic!("missing or out of order: {section}\n--\n{combined}"));
+            last += pos + section.len();
+        }
     }
 
     // ── canvas_sections cache invalidation ───────────────────────────────────

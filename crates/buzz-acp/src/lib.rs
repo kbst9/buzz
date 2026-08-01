@@ -1,6 +1,7 @@
 #![deny(unsafe_code)]
 
 mod acp;
+mod community_fetch;
 mod config;
 mod engram_fetch;
 mod filter;
@@ -1535,6 +1536,7 @@ async fn tokio_main() -> Result<()> {
         system_prompt: config.system_prompt.clone(),
         session_title: config.session_title.clone(),
         team_instructions: config.team_instructions.clone(),
+        community_guide: Default::default(),
         base_prompt: if config.no_base_prompt {
             None
         } else if let Some(content) = base_prompt_content {
