@@ -206,11 +206,6 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
     },
 ];
 
-/// Skill discovery directories declared by known runtimes.
-pub(crate) fn known_skill_dirs() -> impl Iterator<Item = &'static str> {
-    KNOWN_ACP_RUNTIMES.iter().filter_map(|p| p.skill_dir)
-}
-
 fn workspace_root_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
