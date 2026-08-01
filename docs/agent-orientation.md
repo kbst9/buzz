@@ -242,3 +242,25 @@ desktop `nest.rs` shrinks; none of the latent oversized files grow.
 
 `just ci` on both branches; `just test` on the guide branch (relay/db
 touched).
+
+---
+
+## 6. Fork rollout notes (deploy-only — strip this section from upstream PRs)
+
+- **Part A ships first** and alone fixes the broken-on-arrival state of the
+  five gradient units: build `buzz-acp` at the deploy commit on the build
+  host, `sudo install`, restart units. Each unit self-seeds
+  `~<unit-user>/.buzz` on first start — verify with
+  `journalctl -u buzz-acp-<name>` (`workspace seeded`) and `ls` the nest as
+  the unit user. No env-file changes; binary backup to
+  `~/buzz-backups/bin-<ts>/` per the standing convention. Rollback is the
+  binary swap alone — seeded files are inert to old binaries.
+- **Part B needs the relay image rebuilt** (new kind acceptance): local fork
+  image per the compose flow (`BUZZ_IMAGE` in `deploy/compose/.env`,
+  `./run.sh restart`), no DB migration — the kind registry is code-only.
+  Then refresh unit binaries for the fetch, and author the first guide with
+  `buzz community guide set`.
+- The provisioning script (`scripts/new-standalone-agent.sh`) and runbook
+  ([standalone-agents.md](standalone-agents.md)) are fork-carried files;
+  their workspace notes live here on `deploy`, not on the feature branches.
+- Desktop dev builds keep seeding `~/.buzz-dev` untouched (resolution rule 2).

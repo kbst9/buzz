@@ -154,6 +154,9 @@ No restart needed.
 ## 7. Verify
 
 - `journalctl -u buzz-acp-<name> -f` shows one `buzz-acp starting:` line,
+  `workspace seeded` (the harness creates `~<run-user>/.buzz` with
+  `AGENTS.md`, the knowledge dirs, and the buzz-cli skill, then chdirs into
+  it — see [agent-orientation.md](agent-orientation.md)),
   `community invite claimed` (invite flow, first start), `subscribed to
   membership notifications`, `discovered N channel(s)`, and either
   `profile published (kind:0 sync)` or `profile already in sync`.

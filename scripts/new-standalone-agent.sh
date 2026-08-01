@@ -97,6 +97,10 @@ Wants=network-online.target
 
 [Service]
 User=${RUN_USER}
+# buzz-acp resolves, seeds, and enters its workspace (~/.buzz) itself;
+# starting in the home directory is belt-and-braces for older binaries
+# and any non-buzz tools the agent shells out to.
+WorkingDirectory=~
 EnvironmentFile=${ENV_FILE}
 ExecStart=$(command -v buzz-acp) --agents 2
 Restart=on-failure
