@@ -56,7 +56,8 @@ pub const BUZZ_CLI_SKILL_MD: &str = include_str!("nest_skill.md");
 /// Template content version for AGENTS.md static content (above managed markers).
 /// Bump this when changing `nest_agents.md` to trigger refresh on existing installs.
 /// Version 1 is implicitly "before this mechanism existed" (no version file).
-pub const NEST_AGENTS_VERSION: u32 = 4;
+/// Version 5: seeder-neutral wording (desktop app or agent harness).
+pub const NEST_AGENTS_VERSION: u32 = 5;
 
 /// Template content version for SKILL.md.
 /// Bump this when changing `nest_skill.md` to trigger refresh on existing installs.
