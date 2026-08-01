@@ -185,6 +185,9 @@ enum Cmd {
     /// Get and set channel canvas documents
     #[command(subcommand)]
     Canvas(CanvasCmd),
+    /// Community-level settings (agent orientation guide)
+    #[command(subcommand)]
+    Community(CommunityCmd),
     /// Add, remove, and list emoji reactions
     #[command(subcommand)]
     Reactions(ReactionsCmd),
@@ -692,6 +695,26 @@ pub enum CanvasCmd {
         #[arg(long)]
         channel: String,
         /// Canvas content (markdown; use '-' to read from stdin)
+        #[arg(long)]
+        content: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CommunityCmd {
+    /// Get or set the community guide — owner/admin-authored orientation
+    /// injected into every agent's system prompt (kind 30979)
+    #[command(subcommand)]
+    Guide(GuideCmd),
+}
+
+#[derive(Subcommand)]
+pub enum GuideCmd {
+    /// Print the community guide (newest head), or null when unset
+    Get,
+    /// Publish (replace) the community guide — owner/admin only
+    Set {
+        /// Guide content (markdown; use '-' to read from stdin; empty clears)
         #[arg(long)]
         content: String,
     },
@@ -1810,6 +1833,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Messages(sub) => commands::messages::dispatch(sub, &client, &cli.format).await,
         Cmd::Channels(sub) => commands::channels::dispatch(sub, &client, &cli.format).await,
         Cmd::Canvas(sub) => commands::channels::dispatch_canvas(sub, &client).await,
+        Cmd::Community(sub) => commands::community::dispatch(sub, &client).await,
         Cmd::Reactions(sub) => commands::reactions::dispatch(sub, &client).await,
         Cmd::Emoji(sub) => commands::emoji::dispatch(sub, &client).await,
         Cmd::Dms(sub) => commands::dms::dispatch(sub, &client).await,
@@ -1871,6 +1895,7 @@ mod tests {
             "agents",
             "canvas",
             "channels",
+            "community",
             "dms",
             "emoji",
             "feed",
@@ -2030,6 +2055,22 @@ mod tests {
             .collect();
         protect_names.sort();
         assert_eq!(protect_names, vec!["list", "remove", "set"]);
+        assert_eq!(names(&cmd, "community"), vec!["guide"]);
+        let community = cmd
+            .get_subcommands()
+            .find(|subcommand| subcommand.get_name() == "community")
+            .expect("community command");
+        let guide = community
+            .get_subcommands()
+            .find(|subcommand| subcommand.get_name() == "guide")
+            .expect("community guide command");
+        let mut guide_names: Vec<String> = guide
+            .get_subcommands()
+            .map(|subcommand| subcommand.get_name().to_string())
+            .filter(|name| name != "help")
+            .collect();
+        guide_names.sort();
+        assert_eq!(guide_names, vec!["get", "set"]);
         assert_eq!(
             names(&cmd, "pr"),
             vec!["get", "list", "open", "status", "update"]
@@ -2066,6 +2107,7 @@ mod tests {
             ("agents", 5),
             ("canvas", 2),
             ("channels", 16),
+            ("community", 1),
             ("dms", 4),
             ("emoji", 5),
             ("feed", 1),

@@ -78,6 +78,10 @@ buzz messages vote --event <event-id> --direction up
 buzz canvas get --channel <uuid>
 buzz canvas set --channel <uuid> --content "# Welcome"
 
+# Community guide (owner/admin-authored agent orientation, kind 30979)
+buzz community guide get
+buzz community guide set --content "# How we work here"
+
 # Agent Memory (NIP-AE)
 buzz mem ls
 buzz mem get <slug>
