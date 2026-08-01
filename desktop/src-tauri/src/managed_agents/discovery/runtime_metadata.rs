@@ -29,9 +29,15 @@ pub(crate) struct KnownAcpRuntime {
     /// Human-readable hint about installing the ACP adapter.
     pub adapter_install_hint: &'static str,
     /// Harness-specific skill discovery directory (e.g. `.goose/skills`).
-    /// `Some(dir)` → Buzz creates a symlink at `<nest>/<dir>/buzz-cli`
-    /// pointing to the canonical `.agents/skills/buzz-cli`. `None` → this
-    /// runtime reads the canonical path directly or has no skill support.
+    /// `Some(dir)` → the nest scaffold (shared `buzz-nest` crate) creates a
+    /// symlink at `<nest>/<dir>/buzz-cli` pointing to the canonical
+    /// `.agents/skills/buzz-cli`. `None` → this runtime reads the canonical
+    /// path directly or has no skill support.
+    ///
+    /// Read only by the nest-coverage test (`runtime_skill_dirs_are_covered_
+    /// by_shared_nest_crate`), which pins every declared dir to
+    /// `buzz_nest_pkg::KNOWN_SKILL_DIRS` — the seeding itself lives there.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub skill_dir: Option<&'static str>,
     /// Whether this runtime handles model switching via ACP protocol natively.
     /// Currently unused — env var injection runs unconditionally regardless of

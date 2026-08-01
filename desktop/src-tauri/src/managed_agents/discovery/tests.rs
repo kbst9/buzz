@@ -1844,7 +1844,7 @@ fn runtime_skill_dirs_are_covered_by_shared_nest_crate() {
     // every harness skill directory. If a runtime is added here with a new
     // `skill_dir`, buzz_nest_pkg::KNOWN_SKILL_DIRS must learn it too —
     // otherwise harness-seeded nests silently miss that runtime's skill.
-    for dir in known_skill_dirs() {
+    for dir in super::KNOWN_ACP_RUNTIMES.iter().filter_map(|p| p.skill_dir) {
         assert!(
             buzz_nest_pkg::KNOWN_SKILL_DIRS.contains(&dir),
             "runtime skill_dir {dir:?} is missing from buzz_nest_pkg::KNOWN_SKILL_DIRS — \
