@@ -642,7 +642,9 @@ if upstream itself grew a file the fork already carries over the 1000-line
 cap (seen 2026-08-01: ChannelPane.tsx, ChannelScreen.tsx), the merge grows it
 relative to the deploy parent through no fork change. For that one CI run use
 `CHECK_FILE_SIZES_BASE=HEAD` (self-base); the durable fix is extracting those
-files below the cap on a feature branch.
+files below the cap on a feature branch (done for ChannelPane/ChannelScreen
+via `feat/split-channel-screens`, 2026-08-01 — upstream-PR candidate; still
+latent for UserProfilePanel.tsx, nostr_convert.rs, tauri.ts, types.ts).
 
 ### Building and CI
 
