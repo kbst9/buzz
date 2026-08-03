@@ -87,12 +87,27 @@ pub fn invoke_provider(
         cmd.current_dir(home);
     }
     crate::util::configure_no_window(&mut cmd);
-    let mut child = cmd
-        .stdin(std::process::Stdio::piped())
+    cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("failed to spawn {}: {e}", binary.display()))?;
+        .stderr(std::process::Stdio::piped());
+
+    // A provider binary staged to disk moments ago can fail to exec with
+    // ETXTBSY while another thread's fork→exec window still holds the
+    // writer's descriptor open (Unix). The condition clears in microseconds;
+    // retry briefly instead of failing the whole provider call.
+    let mut backoff = Duration::from_millis(10);
+    let mut attempt = 0;
+    let mut child = loop {
+        match cmd.spawn() {
+            Ok(child) => break child,
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 4 => {
+                attempt += 1;
+                std::thread::sleep(backoff);
+                backoff *= 2;
+            }
+            Err(e) => return Err(format!("failed to spawn {}: {e}", binary.display())),
+        }
+    };
 
     // Write request and close stdin immediately so the provider sees EOF.
     let stdin_result = if let Some(mut stdin) = child.stdin.take() {

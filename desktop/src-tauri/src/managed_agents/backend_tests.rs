@@ -316,6 +316,41 @@ printf '%s\n' '{"ok":true,"version":"1.0.0"}'"#,
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn invoke_provider_retries_while_the_binary_is_briefly_held_open_for_write() {
+    let directory = tempfile::tempdir().unwrap();
+    let provider = directory.path().join("provider");
+    write_test_provider(
+        &provider,
+        r#"read request
+printf '%s\n' '{"ok":true}'"#,
+    );
+
+    // Holding a write descriptor makes exec fail with ETXTBSY — the same
+    // condition a concurrent fork→exec window produces under a parallel test
+    // run. Release it while invoke_provider is still inside its retry budget.
+    let writer = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&provider)
+        .unwrap();
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        drop(writer);
+    });
+
+    let response = invoke_provider(
+        &provider,
+        &serde_json::json!({"op": "info"}),
+        std::time::Duration::from_secs(10),
+    );
+    releaser.join().unwrap();
+    assert_eq!(
+        response.unwrap().get("ok"),
+        Some(&serde_json::Value::Bool(true))
+    );
+}
+
 #[test]
 fn provider_info_requires_the_complete_flat_wire_shape() {
     let complete = serde_json::json!({
