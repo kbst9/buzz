@@ -73,8 +73,10 @@ import { UserProfileAgentSettingsMenuSlot } from "@/features/profile/ui/UserProf
 import { useProfileAgentDeletion } from "@/features/profile/ui/UserProfilePanelDeletion";
 import { useProfileFieldBuckets } from "@/features/profile/ui/UserProfilePanelFields";
 import { submitProfilePersonaDialog } from "@/features/profile/ui/UserProfilePanelPersonaSubmit";
-import { UserProfilePersonaDialogs } from "@/features/profile/ui/UserProfilePersonaDialogs";
-import { UserProfileSnapshotExportDialog } from "@/features/profile/ui/UserProfileSnapshotExportDialog";
+import {
+  type CardMintTarget,
+  UserProfilePersonaDialogs,
+} from "@/features/profile/ui/UserProfilePersonaDialogs";
 import {
   deriveProfileChannels,
   type ProfilePanelTab,
@@ -183,6 +185,8 @@ export function UserProfilePanel({
     React.useState<AgentPersona | null>(null);
   const [personaToExportSnapshot, setPersonaToExportSnapshot] =
     React.useState<AgentPersona | null>(null);
+  const [cardMintTarget, setCardMintTarget] =
+    React.useState<CardMintTarget | null>(null);
 
   const personasQuery = usePersonasQuery();
   const managedAgentsQuery = useManagedAgentsQuery({ enabled: true });
@@ -846,6 +850,19 @@ export function UserProfilePanel({
           onOpenInstructions={() => setView("instructions")}
           onTabChange={setTab}
           onOpenDm={onOpenDm}
+          onCreateCard={
+            canManagePersona && resolvedPersona
+              ? () =>
+                  setCardMintTarget({
+                    // Prefer the live instance pubkey; fall back to the
+                    // persona/definition id (same resolution as export).
+                    id: managedAgent?.pubkey ?? resolvedPersona.id,
+                    name: resolvedPersona.displayName,
+                    // Locking needs an instance keypair to encrypt to.
+                    canLock: Boolean(managedAgent?.pubkey),
+                  })
+              : undefined
+          }
           presenceStatus={presenceStatus}
           profile={profile}
           pubkey={effectivePubkey}
@@ -954,6 +971,7 @@ export function UserProfilePanel({
   const personaDialogs = (
     <>
       <UserProfilePersonaDialogs
+        cardMintTarget={cardMintTarget}
         createError={
           createPersonaMutation.error instanceof Error
             ? createPersonaMutation.error
@@ -966,8 +984,11 @@ export function UserProfilePanel({
           updateManagedAgentMutation.isPending ||
           createAgentMutation.isPending
         }
+        linkedAgentPubkey={managedAgent?.pubkey ?? null}
         personaDialogState={personaDialogState}
         personaToDelete={personaToDelete}
+        personaToExportSnapshot={personaToExportSnapshot}
+        resolvedPersona={resolvedPersona}
         runtimes={acpRuntimesQuery.data ?? []}
         runtimesLoading={acpRuntimesQuery.isLoading}
         updateError={
@@ -975,22 +996,16 @@ export function UserProfilePanel({
             ? updatePersonaMutation.error
             : null
         }
+        onCloseCardMint={() => setCardMintTarget(null)}
         onCloseDelete={() => setPersonaToDelete(null)}
         onCloseDialog={() => setPersonaDialogState(null)}
+        onCloseExportSnapshot={() => setPersonaToExportSnapshot(null)}
         onConfirmDelete={(selectedPersona) => {
           void handleConfirmDeletePersona(selectedPersona);
         }}
+        onExportSnapshot={setPersonaToExportSnapshot}
         onSubmit={handleSubmitPersona}
       />
-      {personaToExportSnapshot ? (
-        <UserProfileSnapshotExportDialog
-          linkedAgentPubkey={managedAgent?.pubkey ?? null}
-          onOpenChange={(open) => {
-            if (!open) setPersonaToExportSnapshot(null);
-          }}
-          persona={personaToExportSnapshot}
-        />
-      ) : null}
     </>
   );
   return (

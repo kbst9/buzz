@@ -62,16 +62,12 @@ const settingsNavGroups: Array<{
       "shortcuts",
       "custom-emoji",
       "local-archive",
+      "channel-templates",
     ],
   },
   {
     label: "Communities",
-    sections: [
-      "hosted-communities",
-      "connected-agents",
-      "channel-templates",
-      "community-members",
-    ],
+    sections: ["hosted-communities", "connected-agents", "community-members"],
   },
   {
     label: "App",

@@ -2,7 +2,10 @@ import * as React from "react";
 
 import type { ActiveChannelTurnSummary } from "@/features/agents/activeAgentTurnsStore";
 import { useWorkingChannels } from "@/features/agents/agentWorkingSignal";
-import { useManagedAgentsQuery } from "@/features/agents/hooks";
+import {
+  useManagedAgentsQuery,
+  useRelayAgentsQuery,
+} from "@/features/agents/hooks";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
@@ -39,9 +42,14 @@ export function useActiveWorkingChannelsById(): ReadonlyMap<
   ActiveChannelTurnSummary
 > {
   const managedAgentsQuery = useManagedAgentsQuery();
+  const relayAgentsQuery = useRelayAgentsQuery();
   const managedAgents = React.useMemo(
     () => managedAgentsQuery.data ?? [],
     [managedAgentsQuery.data],
+  );
+  const namedAgents = React.useMemo(
+    () => [...(relayAgentsQuery.data ?? []), ...managedAgents],
+    [managedAgents, relayAgentsQuery.data],
   );
 
   // Unified working signal: observer-derived turns primary, bot typing as
@@ -87,12 +95,12 @@ export function useActiveWorkingChannelsById(): ReadonlyMap<
         activeWorkingChannels.map((summary) => {
           const resolvedSummary = resolveActiveWorkingChannelNames(
             summary,
-            managedAgents,
+            namedAgents,
             profileNamesByPubkey,
           );
           return [resolvedSummary.channelId, resolvedSummary];
         }),
       ),
-    [activeWorkingChannels, managedAgents, profileNamesByPubkey],
+    [activeWorkingChannels, namedAgents, profileNamesByPubkey],
   );
 }
