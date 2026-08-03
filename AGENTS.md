@@ -652,6 +652,14 @@ latent for UserProfilePanel.tsx, nostr_convert.rs, tauri.ts, types.ts).
 
 ### Building and CI
 
+**desktop-tauri-test ETXTBSY on gradient:** upstream's provider tests
+(#4289) deterministically failed on the high-core-count build host with
+`Text file busy` — a fork→exec fd race when execing a just-written provider
+script. Fixed by a spawn retry in `invoke_provider` via
+`feat/provider-spawn-etxtbsy-retry` (merged into deploy 2026-08-03,
+upstream-PR candidate). If a similar ETXTBSY appears in a different spawn
+path, apply the same retry pattern rather than rerunning CI.
+
 The local Mac disk is chronically near-full — **run heavy Rust builds and
 full CI on the build host** (`ssh gradient-ssh`, clone at `~/buzz`, CI log at
 `/tmp/buzz-ci.log`), not locally. Local is fine for: single-crate
