@@ -650,9 +650,13 @@ mobile-fix:
 mobile-check:
     unset GIT_DIR GIT_WORK_TREE; cd {{mobile_dir}} && dart format --output=none --set-exit-if-changed . && flutter analyze && node ./scripts/check-file-sizes.mjs
 
-# Run mobile tests
+# Run mobile tests. Concurrency is capped: with the default (half the
+# cores), high-core-count hosts flood flutter_tester VM-service WebSocket
+# handshakes and suite loads intermittently fail with "Unable to connect
+# to flutter_tester process: WebSocketException: Invalid WebSocket
+# upgrade request".
 mobile-test:
-    unset GIT_DIR GIT_WORK_TREE; cd {{mobile_dir}} && flutter test
+    unset GIT_DIR GIT_WORK_TREE; cd {{mobile_dir}} && flutter test --concurrency=8
 
 # Regenerate the emoji dataset asset from desktop's emoji-mart install.
 # Output is committed — rerun after bumping @emoji-mart/data.
