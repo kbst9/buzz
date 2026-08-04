@@ -895,6 +895,10 @@ async fn resolve_new_session_channel_context(
 /// On error from `session_new_full()`, returns the `AcpError` — caller handles
 /// error reporting. Model-switch failures are logged and gracefully ignored
 /// (the agent proceeds with its default model).
+// Fork-carried prompt/guide params on top of upstream's channel context push
+// this past clippy's arity limit; a params struct here would diverge the
+// signature from upstream and re-conflict every sync.
+#[allow(clippy::too_many_arguments)]
 async fn create_session_and_apply_model(
     agent: &mut OwnedAgent,
     ctx: &PromptContext,
