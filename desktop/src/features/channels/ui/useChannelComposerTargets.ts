@@ -22,6 +22,12 @@ export function useChannelComposerTargets({
   expandedThreadReplyIds: Set<string>;
   clearOptimisticThreadOverride: () => void;
   handleThreadScrollTargetResolved: () => void;
+  /**
+   * Raw optimistic override, exposed for callers that resolve the effective
+   * open thread themselves (huddle transcripts route it through
+   * `useHuddleThreadIsolation`).
+   */
+  optimisticOpenThreadHeadId: string | null | undefined;
   setEditTargetId: React.Dispatch<React.SetStateAction<string | null>>;
   setExpandedThreadReplyIds: React.Dispatch<React.SetStateAction<Set<string>>>;
   setOptimisticOpenThreadHeadId: React.Dispatch<
@@ -87,6 +93,7 @@ export function useChannelComposerTargets({
     expandedThreadReplyIds,
     clearOptimisticThreadOverride,
     handleThreadScrollTargetResolved,
+    optimisticOpenThreadHeadId,
     setEditTargetId,
     setExpandedThreadReplyIds,
     setOptimisticOpenThreadHeadId,

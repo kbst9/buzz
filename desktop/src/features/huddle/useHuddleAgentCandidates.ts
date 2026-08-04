@@ -3,7 +3,7 @@ import * as React from "react";
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import { useVerifiedAgents } from "@/features/agents/lib/useVerifiedAgents";
 import { usePresenceQuery } from "@/features/presence/hooks";
-import type { PresenceLookup } from "@/shared/api/types";
+import type { ManagedAgentBackend, PresenceLookup } from "@/shared/api/types";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 
 /** Where an offerable huddle agent comes from. */
@@ -16,21 +16,29 @@ export type HuddleAgentCandidate = {
   name: string;
   source: HuddleAgentCandidateSource;
   /**
-   * Managed running agents count as online (their process is local);
-   * connected agents follow relay presence.
+   * Managed running/deployed agents count as online (their process is
+   * desktop-controlled); connected agents follow relay presence.
    */
   online: boolean;
+  avatarUrl: string | null;
+  /** Managed-only: drives the dialog's start-on-add flow. */
+  status?: string;
+  /** Managed-only: local backends start before add, remote ones after. */
+  backend?: ManagedAgentBackend;
 };
 
 type ManagedAgentLike = {
   pubkey: string;
   name: string;
   status: string;
+  avatarUrl?: string | null;
+  backend?: ManagedAgentBackend;
 };
 
 type DirectoryUserLike = {
   pubkey: string;
   displayName: string | null;
+  avatarUrl?: string | null;
   nip05Handle: string | null;
   isAgent: boolean;
 };
@@ -39,12 +47,12 @@ type DirectoryUserLike = {
  * Merge managed agents and community directory results into the huddle
  * "Add Agent" candidate list:
  *
- * - managed agents are offered only while `status === "running"` (a stopped
- *   process cannot join a huddle) and count as online;
+ * - every managed agent is offered — the dialog starts stopped/undeployed
+ *   ones as part of the add flow — and running/deployed ones count as
+ *   online;
  * - directory users are offered only when they are verified agents
  *   (`isAgent === true`) and not managed by this desktop — managed pubkeys
- *   stay under their managed entry (or stay hidden while stopped) instead of
- *   being re-offered as connected;
+ *   stay under their managed entry instead of being re-offered as connected;
  * - pubkeys are normalized and deduped, first entry wins.
  */
 export function mergeHuddleAgentCandidates(
@@ -60,7 +68,7 @@ export function mergeHuddleAgentCandidates(
 
   for (const agent of managedAgents) {
     const pubkey = normalizePubkey(agent.pubkey);
-    if (agent.status !== "running" || seen.has(pubkey)) {
+    if (seen.has(pubkey)) {
       continue;
     }
     seen.add(pubkey);
@@ -68,7 +76,10 @@ export function mergeHuddleAgentCandidates(
       pubkey,
       name: agent.name,
       source: "managed",
-      online: true,
+      online: agent.status === "running" || agent.status === "deployed",
+      avatarUrl: agent.avatarUrl ?? null,
+      status: agent.status,
+      backend: agent.backend,
     });
   }
 
@@ -86,6 +97,7 @@ export function mergeHuddleAgentCandidates(
         truncatePubkey(pubkey),
       source: "connected",
       online: presence?.[pubkey] === "online",
+      avatarUrl: user.avatarUrl ?? null,
     });
   }
 

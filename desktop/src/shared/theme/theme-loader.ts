@@ -6,6 +6,10 @@
  */
 
 import type { ThemeRegistrationRaw } from "shiki";
+import {
+  type TerminalPalette,
+  extractTerminalPalette,
+} from "./terminal-palette";
 
 /**
  * Buzz theme name. Buzz is a first-party light theme that reuses GitHub
@@ -398,6 +402,7 @@ export interface ThemeInfo {
   added: string | null;
   deleted: string | null;
   modified: string | null;
+  terminalPalette: TerminalPalette;
 }
 
 export function extractThemeInfo(
@@ -420,6 +425,7 @@ export function extractThemeInfo(
       fg,
     ),
     ...gitColors,
+    terminalPalette: extractTerminalPalette(theme),
   };
 }
 

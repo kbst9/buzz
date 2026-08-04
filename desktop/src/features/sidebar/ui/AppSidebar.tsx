@@ -22,7 +22,7 @@ import {
 import { useChannelSortPreference } from "@/features/sidebar/lib/useChannelSortPreference";
 import { useSidebarScrollLock } from "@/features/sidebar/lib/useSidebarScrollLock";
 import { isSidebarBackgroundTarget } from "@/features/sidebar/lib/sidebarBackgroundTarget";
-import { useUnreadOverflow } from "@/features/sidebar/lib/useUnreadOverflow";
+import { useSidebarActivityOverflow } from "@/features/sidebar/lib/useSidebarActivityOverflow";
 import {
   CreateSectionDialog,
   DeleteSectionAlertDialog,
@@ -45,6 +45,11 @@ import {
 } from "@/features/sidebar/ui/CustomChannelSection";
 import { CreateChannelDialog } from "@/features/sidebar/ui/CreateChannelDialog";
 import { SidebarProfileCard } from "@/features/sidebar/ui/SidebarProfileCard";
+import { HuddleProfileControl } from "@/features/huddle";
+import type {
+  CollapsibleSidebarGroup,
+  CreateChannelKind,
+} from "@/features/sidebar/ui/AppSidebar.types";
 import { SidebarRelayConnectionCard } from "@/features/sidebar/ui/SidebarRelayConnectionCard";
 import type { useSidebarRelayConnectionCard } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
 import {
@@ -74,14 +79,6 @@ import {
   useSidebar,
 } from "@/shared/ui/sidebar";
 
-type CollapsibleSidebarGroup =
-  | "starred"
-  | "channels"
-  | "forums"
-  | "directMessages";
-
-type CreateChannelKind = "stream" | "forum";
-
 type AppSidebarProps = {
   addCommunityPrefill?: AddCommunityPrefillRequest | null;
   activeCommunity: Community | null;
@@ -109,6 +106,7 @@ type AppSidebarProps = {
     | "projects";
   unreadChannelCounts: ReadonlyMap<string, number>;
   unreadChannelIds: ReadonlySet<string>;
+  previewActivityChannelIds: ReadonlySet<string>;
   communities: Community[];
   onAddCommunity: (community: Community) => void;
   onAddCommunityOpenChange?: (open: boolean) => void;
@@ -168,6 +166,8 @@ type AppSidebarProps = {
   onNewMessage: () => void;
   onBackgroundClick?: () => void;
   isCreateChannelOpen?: boolean;
+  isHuddleCompanionOpen?: boolean;
+  onHuddleEnded?: (ephemeralChannelId: string | null) => void;
   onCreateChannelOpenChange?: (open: boolean) => void;
   mutedChannelIds?: ReadonlySet<string>;
   onMuteChannel?: (channelId: string) => void;
@@ -197,6 +197,7 @@ export function AppSidebar({
   selectedView,
   unreadChannelCounts,
   unreadChannelIds,
+  previewActivityChannelIds,
   communities,
   onAddCommunity,
   onAddCommunityOpenChange,
@@ -232,6 +233,8 @@ export function AppSidebar({
   isPresencePending,
   onNewMessage,
   isCreateChannelOpen: isCreateChannelOpenProp,
+  isHuddleCompanionOpen = false,
+  onHuddleEnded,
   onCreateChannelOpenChange,
   mutedChannelIds,
   onMuteChannel,
@@ -252,6 +255,8 @@ export function AppSidebar({
   const [dmActionsMenuOpen, setDmActionsMenuOpen] = React.useState(false);
   const scrollRef = React.useRef<HTMLDivElement>(null);
   useSidebarScrollLock(scrollRef);
+  // biome-ignore format: keep compact to stay within file size limit
+  const { scrollToNextAbove, scrollToNextBelow, unreadAboveCount, unreadBelowCount, unreadAboveLabel, unreadBelowLabel } = useSidebarActivityOverflow({ activeWorkingByChannelId, previewActivityChannelIds, scrollRef, unreadChannelIds });
 
   React.useEffect(() => {
     const scrollElement = scrollRef.current;
@@ -505,13 +510,6 @@ export function AppSidebar({
     profile?.displayName?.trim() ||
     fallbackDisplayName?.trim() ||
     "Current identity";
-  const {
-    scrollToNextAbove,
-    scrollToNextBelow,
-    unreadAboveCount,
-    unreadBelowCount,
-  } = useUnreadOverflow({ scrollRef, unreadChannelIds });
-
   const isCreatingAny =
     createDialogKind === "stream"
       ? isCreatingChannel
@@ -554,7 +552,7 @@ export function AppSidebar({
 
   return (
     <Sidebar
-      className="!border-r-0"
+      className="!z-[100] !border-r-0"
       collapsible="offcanvas"
       data-testid="app-sidebar"
       onClick={(event) => {
@@ -593,6 +591,7 @@ export function AppSidebar({
           {unreadAboveCount > 0 ? (
             <MoreUnreadButton
               count={unreadAboveCount}
+              label={unreadAboveLabel}
               onClick={scrollToNextAbove}
               position="top"
               testId="sidebar-more-unread-above"
@@ -865,6 +864,7 @@ export function AppSidebar({
             <MoreUnreadButton
               bottomClassName="bottom-full"
               count={unreadBelowCount}
+              label={unreadBelowLabel}
               onClick={scrollToNextBelow}
               position="bottom"
               testId="sidebar-more-unread-below"
@@ -892,6 +892,11 @@ export function AppSidebar({
                 />
               </div>
             ) : null}
+            <HuddleProfileControl
+              channels={channels}
+              onHuddleEnded={onHuddleEnded}
+              visible={isHuddleCompanionOpen}
+            />
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarProfileCard

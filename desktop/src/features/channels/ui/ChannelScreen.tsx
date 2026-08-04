@@ -35,7 +35,6 @@ import { useWelcomeKickoffStagePresence } from "@/features/onboarding/useWelcome
 import { useWelcomeAgentCreate } from "@/features/channels/useWelcomeAgentCreate";
 import { useCommunities } from "@/features/communities/useCommunities";
 import {
-  mergeMessages,
   useChannelMessagesQuery,
   useChannelSubscription,
   useChannelWindowQuery,
@@ -45,10 +44,6 @@ import {
   useToggleReactionMutation,
 } from "@/features/messages/hooks";
 import { formatTimelineMessages } from "@/features/messages/lib/formatTimelineMessages";
-import {
-  channelWindowThreadSummaries,
-  type ChannelWindowThreadSummary,
-} from "@/features/messages/lib/channelWindowStore";
 import { DeleteMessageConfirmDialog } from "@/features/messages/ui/DeleteMessageConfirmDialog";
 import { getThreadReference } from "@/features/messages/lib/threading";
 import { composerEditTargetFromMessage } from "@/features/messages/lib/composerEditTarget";
@@ -62,7 +57,13 @@ import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useRelaySelfQuery } from "@/features/moderation/hooks";
 import type { RelayEvent, SearchHit } from "@/shared/api/types";
 import { useChannelFind } from "@/features/search/useChannelFind";
-import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
+import { ChannelScreenLoadingFallback } from "@/features/channels/ui/ChannelScreenLoadingFallback";
+import {
+  useHuddleChannelMessages,
+  useIsHuddleTranscript,
+} from "@/features/channels/ui/useHuddleChannelMessages";
+import { useHuddleReadMarker } from "@/features/channels/ui/useHuddleReadMarker";
+import { useHuddleThreadIsolation } from "@/features/channels/ui/useHuddleThreadIsolation";
 import { AgentSessionProvider } from "@/shared/context/AgentSessionContext";
 import { ProfilePanelProvider } from "@/shared/context/ProfilePanelContext";
 import { useMainInsetRef } from "@/shared/layout/MainInsetContext";
@@ -100,6 +101,7 @@ export function ChannelScreen({
   const { activeCommunity } = useCommunities();
   const {
     clearChannelUnreadSource,
+    markChannelRead,
     markChannelUnread,
     getChannelReadAt,
     getMessageReadAt,
@@ -148,10 +150,10 @@ export function ChannelScreen({
   const activeChannelId = activeChannel?.id ?? null;
   const {
     editTargetId,
-    effectiveOpenThreadHeadId,
     expandedThreadReplyIds,
     clearOptimisticThreadOverride,
     handleThreadScrollTargetResolved,
+    optimisticOpenThreadHeadId,
     setEditTargetId,
     setExpandedThreadReplyIds,
     setOptimisticOpenThreadHeadId,
@@ -162,7 +164,17 @@ export function ChannelScreen({
   } = useChannelComposerTargets({ activeChannelId, openThreadHeadId });
   const mainInsetRef = useMainInsetRef();
   const currentPubkey = currentIdentity?.pubkey;
+  const isHuddleTranscript = useIsHuddleTranscript(activeChannelId);
   const relaySelfPubkey = useRelaySelfQuery(activeChannel !== null).data;
+  // Huddle transcripts isolate threads: the isolation hook owns the
+  // optimistic-vs-routed resolution the composer-targets hook would
+  // otherwise provide.
+  const effectiveOpenThreadHeadId = useHuddleThreadIsolation({
+    closeThread: setOpenThreadHeadId,
+    isHuddleTranscript,
+    openThreadHeadId,
+    optimisticOpenThreadHeadId,
+  });
   const isNotifiedForEffectiveThread =
     effectiveOpenThreadHeadId != null
       ? isNotifiedForThread(effectiveOpenThreadHeadId)
@@ -222,18 +234,26 @@ export function ChannelScreen({
   const editMessageMutation = useEditMessageMutation(activeChannel);
   const joinChannelMutation = useJoinChannelMutation(activeChannelId);
   const [findEvents, setFindEvents] = React.useState<RelayEvent[]>([]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: clear spliced find results exactly when the active channel changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional
   React.useEffect(() => {
     setFindEvents([]);
   }, [activeChannelId]);
-  const resolvedMessages = React.useMemo(() => {
-    const currentMessages = messagesQuery.data ?? [];
-    const extraEvents = [...targetMessageEvents, ...findEvents];
-    if (!activeChannel || extraEvents.length === 0) {
-      return currentMessages;
-    }
-    return extraEvents.reduce(mergeMessages, currentMessages);
-  }, [activeChannel, findEvents, messagesQuery.data, targetMessageEvents]);
+  const { resolvedMessages, threadSummaries } = useHuddleChannelMessages({
+    activeChannel,
+    findEvents,
+    isHuddleTranscript,
+    messages: messagesQuery.data ?? EMPTY_RELAY_EVENTS,
+    targetMessageEvents,
+    windowStore: windowQuery.data,
+  });
+  useHuddleReadMarker({
+    activeChannelId,
+    activeChannelIsMember: activeChannel?.isMember,
+    isHuddleTranscript,
+    markChannelRead,
+    messages: messagesQuery.data,
+    resolvedMessages,
+  });
   const threadReplyEvents = threadRepliesQuery.data ?? EMPTY_RELAY_EVENTS;
   const {
     entranceMessageId: welcomeEntranceMessageId,
@@ -335,11 +355,6 @@ export function ChannelScreen({
     relayAgents,
   });
   const messageOwnerProfiles = useMessageOwnerProfiles(messageProfiles);
-  // Agent set for ChannelPane's own consumers (DM huddle member resolution,
-  // the agents list): the community-scoped baseline shared by every surface,
-  // widened with channel-member roles and this screen's profile lookup.
-  // Message rows no longer take this — MessageRow derives agent-ness itself
-  // from useKnownAgentPubkeys + per-pubkey profile checks.
   const communityAgentPubkeys = useKnownAgentPubkeys();
   const agentPubkeys = React.useMemo(() => {
     const pubkeys = new Set([...communityAgentPubkeys, ...knownAgentPubkeys]);
@@ -386,14 +401,6 @@ export function ChannelScreen({
       resolvedMessages,
     ],
   );
-  const threadSummaries: ReadonlyMap<string, ChannelWindowThreadSummary> =
-    React.useMemo(
-      () =>
-        windowQuery.data
-          ? channelWindowThreadSummaries(windowQuery.data)
-          : new Map(),
-      [windowQuery.data],
-    );
   const handleFindSearchHit = React.useCallback((hit: SearchHit) => {
     const event = cacheSearchHitEvent(hit);
     setFindEvents((currentEvents) =>
@@ -458,7 +465,6 @@ export function ChannelScreen({
       timelineMessages.find((message) => message.id === editTargetId) ?? null,
     [editTargetId, timelineMessages],
   );
-  // Event id awaiting the empty-edit deletion confirmation.
   const [emptyDeleteId, setEmptyDeleteId] = React.useState<string | null>(null);
   const {
     handleCancelEdit,
@@ -695,12 +701,10 @@ export function ChannelScreen({
       openGlobalChannelManagement();
       return;
     }
-
     if (channelManagementOpen) {
       setChannelManagementOpen(false);
       return;
     }
-
     setOpenThreadHeadId(null);
     setExpandedThreadReplyIds(new Set());
     setThreadScrollTargetId(null);
@@ -729,7 +733,6 @@ export function ChannelScreen({
     () => setIsMembersSidebarOpen((prev) => !prev),
     [],
   );
-
   const channelHeader = React.useMemo(
     () => (
       <ChannelScreenHeader
@@ -749,7 +752,7 @@ export function ChannelScreen({
         onManageChannel={handleManageChannel}
         onToggleFiles={handleToggleFiles}
         onToggleMembers={handleToggleMembers}
-        showHeaderContent={!isSinglePanelView}
+        showHeaderContent={!isSinglePanelView && !isHuddleTranscript}
         transparentChrome={activeChannel?.channelType !== "forum"}
       />
     ),
@@ -770,6 +773,7 @@ export function ChannelScreen({
       handleToggleFiles,
       handleToggleMembers,
       isSinglePanelView,
+      isHuddleTranscript,
     ],
   );
   return (
@@ -826,7 +830,11 @@ export function ChannelScreen({
               />
             ) : (
               <React.Suspense
-                fallback={<ViewLoadingFallback includeHeader kind="channel" />}
+                fallback={
+                  <ChannelScreenLoadingFallback
+                    isHuddleTranscript={isHuddleTranscript}
+                  />
+                }
               >
                 <ChannelPane
                   activeChannel={activeChannel}
@@ -852,6 +860,7 @@ export function ChannelScreen({
                   onCreateChannel={openCreateChannel}
                   onOpenMembers={handleOpenMembersSidebar}
                   isFetchingOlder={isFetchingOlder}
+                  isHuddleTranscript={isHuddleTranscript}
                   entranceMessageId={welcomeEntranceMessageId}
                   onEntranceMessageComplete={handleWelcomeEntranceComplete}
                   welcomeKickoffStage={welcomeKickoffStage}

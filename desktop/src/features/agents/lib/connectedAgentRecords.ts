@@ -88,6 +88,7 @@ export function synthesizeConnectedAgentRecord(
     personaOutOfDate: false,
     personaOrphaned: false,
     needsRestart: false,
+    restartDiff: [],
     envVars: {},
     status: "deployed",
     pid: null,
