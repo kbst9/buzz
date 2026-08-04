@@ -11,7 +11,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "smoke": "pnpm build && tsx scripts/live-smoke.ts"
   },
   "engines": {
     "node": ">=22.19.0"
