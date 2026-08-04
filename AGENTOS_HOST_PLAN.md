@@ -1,277 +1,255 @@
-# agentOS Remote Execution Host — Implementation Plan
+# Isolated Agent Execution — Plan of Record
 
 > **Fork-local planning doc (deploy branch only — never upstream).**
-> Status: draft v1, 2026-07-29. Owner: Kevin. Companion code lives in a
-> **separate repo** (`buzz-agentos-host`, to be created) — this doc is the
-> plan of record and tracks the block/buzz-side touchpoints.
+> Status: **v2, 2026-08-04** (v1 2026-07-29). Owner: Kevin.
+> v2 decision: **Flue is the default harness tier** (topology T2, below), and
+> its v1 implementation ships **in this repo** at [`flue-host/`](flue-host/).
+> The agentOS isolate tier is retained as the sandbox-hardening phase, not
+> the entry point.
 
 ## Goal
 
 Move Buzz agent execution from host-trusted local processes to isolated,
-supervised, remote-friendly execution — without modifying block/buzz. The
-execution tier is [Rivet agentOS](https://github.com/rivet-dev/agentos)
-(Apache-2.0, npm `@rivet-dev/agentos`, **preview**): a per-agent virtual OS
-(V8 isolates + WASM, in-process kernel) providing per-agent filesystem /
-network / process isolation, default-deny egress, supervised processes,
-automatic session persistence, and S3-compatible filesystem mounts.
+supervised, remote-friendly execution — without modifying block/buzz. Two
+properties drive everything:
 
-What agentOS buys us that nothing else in the current stack does:
+1. **Attach compute, not agents.** Agents come and go; the durable things
+   are the identity (keypair + auth tag), the workspace, and the
+   conversation. Execution attaches to those.
+2. **Credentials land safely.** Ring 0 (nsec + NIP-OA tag) stays with
+   buzz-acp on the host. Ring 1 (LLM credentials — API keys and
+   subscription OAuth) stays in the harness/provider layer on the host.
+   The sandbox sees only the BUZZ_* vars the `buzz` CLI needs. Nothing
+   secret is ever written to a workspace, a mount, or a persisted session.
 
-1. **Security for shared agents** — per-agent default-deny egress + FS/
-   process/env permissions at ~22 MB/agent. Today's model is explicitly
-   host-as-trust-boundary: `BUZZ_ACP_PERMISSION_MODE=bypass-permissions`
-   default, no path containment in buzz-dev-mcp (`paths.rs` documents this),
-   per-Unix-user separation on the agent host. That is untenable once
-   shared compute hosts agents owned by different people.
-2. **A supervised, persistent runtime** — replaces the unsupervised stdio
-   process chain (buzz-acp → adapter → MCP server → shells) with a managed
-   process table, idempotent lifecycle API, resource caps, and replayable
-   sessions (today: sessions are in-RAM and die on restart).
+## Topologies
 
-What agentOS does **not** buy (covered elsewhere, keep out of scope here):
-model diversity (comes from the agent harness — pi/goose/buzz-agent already
-cover Grok via OpenAI-compatible endpoints), git hosting (relay-native, CAS
-on S3 — see `docs/git-on-object-storage.md`), media storage (Blossom), or
-the relay-side scaling fixes (§ Phase 5).
+**T1 — agent-in-VM** (agentOS registry agents: Claude Code, Codex,
+OpenCode, Pi). The frontier product runs inside the isolate; credentials
+must reach it (session env or egress-proxy header injection); native
+binaries don't run; MCP and git auth need translation.
 
-## Architecture
+**T2 — harness-on-host, sandbox-for-exec** (Flue; same shape as
+Cloudflare computer). The harness and model calls run in the trusted host
+process; only tool execution enters the sandbox. Credentials structurally
+cannot reach the sandbox; the native `buzz` CLI and git work; MCP
+translation is unnecessary.
+
+**Decision (Kevin, 2026-08-04): T2 with Flue is the default.** The frontier
+CLI wrappers are not load-bearing enough to anchor the architecture on T1;
+a programmable harness is. T1 remains available for any agent where a
+frontier wrapper is genuinely wanted.
+
+What T2 deleted from v1 of this plan (the simplification ledger):
+
+- ~~mcpServers translation / host-side HTTP MCP~~ — Flue serves the coding
+  toolset natively over its sandbox; the Buzz surface is the `buzz` CLI,
+  host-native. (Declared stdio servers: env forwarded, spawn skipped.)
+- ~~in-VM git auth (hardest Phase-0 gate)~~ — git runs host-side where
+  `git-credential-nostr` works.
+- ~~wasm32-wasi buzz-cli port~~ — native CLI in the sandbox.
+- ~~ACP-fidelity risk of a foreign shim~~ — `flue-acp` is ours, and a
+  golden-transcript test replays the exact buzz-acp dialect
+  (`flue-host/test/golden.test.ts`).
+
+## Architecture (default tier, shipped v1)
 
 ```
-buzz-agentos-host (new repo, one deployable service per host)
+systemd unit (per agent, unchanged model: /etc/buzz-agents/<name>.env)
 │
-├── host service (Node/TS, embeds @rivet-dev/agentos)
-│     • per-agent VM lifecycle (getOrCreate / openSession)
-│     • per-agent permission policy (egress allowlist: relay + LLM API only)
-│     • per-agent S3 FS mounts (workspace nest)
-│     • host-side HTTP MCP server exposing buzz ops (Phase 2)
-│     • provisioning glue: invite claim / auth-tag intake / env assembly
-│
-├── N × buzz-acp (released sprig binary, native, stateless, unmodified)
-│     │   one process per agent identity; BUZZ_ACP_AGENT_COMMAND=agentos-acp
+├── buzz-acp            (released binary, native, unmodified)
+│     │  ACP over stdio — BUZZ_ACP_AGENT_COMMAND=flue-acp
 │     ▼
-├── N × agentos-acp shim (small Node pkg: ACP-over-stdio ⇄ agentOS session)
+├── flue-acp            (flue-host/, Node/TS, embeds @flue/runtime in-process)
+│     • one Flue instance per ACP session (long-lived, per channel)
+│     • session/new.cwd → sandbox root; systemPrompt → agent instruction
+│     • conversation-stream chunks → session/update (text, thoughts,
+│       tool_call pending/in_progress/completed/failed); keepalives;
+│       cancel → durable abort → stopReason "cancelled"
 │     ▼
-└── N × agentOS VM session (claude-code | codex | opencode | pi)
-        • FS: in-VM overlay + S3-mounted workspace dirs
-        • net: allowlist only
-        • tools: registry software (git/rg/curl as WASM) + host MCP
+└── Flue agent
+      ├─ model: BUZZ_FLUE_MODEL via pi providers — credentials host-side
+      └─ sandbox: local(cwd) v1 → bash/read/write/edit/grep/glob
+         env allowlist: BUZZ_RELAY_URL / BUZZ_PRIVATE_KEY / BUZZ_AUTH_TAG /
+         BUZZ_ACP_DISPLAY_NAME — nothing else leaks in
 ```
 
-Native-binary agents (hermes) **cannot run in-VM**; they stay on classic
-hosting (systemd + Unix users) as a second tier until they ship WASM builds
-or get their own containment. Document the two-tier security posture
-wherever the fleet is described.
+Verified end-to-end by `flue-host/test/` (14 tests): the golden transcript
+runs the real Flue runtime with a scripted model and a **real** sandboxed
+`bash` execution, asserting env forwarding, cwd rooting, update ordering,
+and stopReason mapping; protocol tests pin the five known ways an agent
+breaks against buzz-acp (non-JSON stdout, dropped systemPrompt, unanswered
+cancel, success replies to unknown methods, env-as-map).
 
 ## Contracts consumed (why block/buzz stays untouched)
 
 | Seam | Contract | Where defined |
 |------|----------|---------------|
-| Agent process | ACP over stdio, any command | `crates/buzz-acp/src/config.rs` (`BUZZ_ACP_AGENT_COMMAND`/`_ARGS`, ~line 250) |
-| Provisioning | `BUZZ_RELAY_URL` + `BUZZ_PRIVATE_KEY` + `BUZZ_AUTH_TAG` env | `crates/buzz-acp/src/lib.rs` (`resolve_agent_owner`, ~line 117) |
-| Identity bootstrap | `buzz invites claim`, `buzz agents mint-tag` (deploy-branch CLI), `scripts/new-standalone-agent.sh`, `docs/standalone-agents.md` | deploy branch |
+| Agent process | ACP over stdio, any command | `crates/buzz-acp/src/config.rs` (`BUZZ_ACP_AGENT_COMMAND`/`_ARGS`) |
+| Provisioning | `BUZZ_RELAY_URL` + `BUZZ_PRIVATE_KEY` + `BUZZ_AUTH_TAG` env | `crates/buzz-acp/src/lib.rs` (`resolve_agent_owner`) |
+| Identity bootstrap | `buzz invites claim`, `buzz agents mint-tag`, `scripts/new-standalone-agent.sh`, `docs/standalone-agents.md` | deploy branch |
 | Relay | WS + NIP-42, REST `/query` `/events`, NIP-98 git, Blossom | public wire surface |
-| Desktop deploys (later) | `buzz-backend-<id>` executable, JSON stdin/stdout, ops `info`/`deploy` | `desktop/src-tauri/src/managed_agents/backend.rs`; precedent: sprout-backend-blox (separate repo) |
+| Desktop deploys (later) | `buzz-backend-<id>` executable, JSON stdin/stdout, ops `info`/`deploy` | `desktop/src-tauri/src/managed_agents/backend.rs` |
 
-MCP note: buzz-acp declares its MCP servers (with `BUZZ_*` env) inside ACP
-`session/new` (`lib.rs` `build_mcp_servers`, ~line 4142). The shim must
-translate that field; in-VM agents cannot exec the native `buzz` binary, so
-tooling arrives via the host-side HTTP MCP (Phase 2) instead.
+The ACP dialect itself (buzz's `protocolVersion: 2` squat) is transcribed
+in `flue-host/src/acp/protocol.ts`; `crates/buzz-agent` remains the Rust
+reference implementation.
 
 ## Design decisions (settled)
 
-1. **Separate repo**, not a folder here — keeps the Node toolchain out of
-   the Rust workspace and out of the `buzz-sync` merge loop. Blox provider
-   precedent.
+1. **In-repo `flue-host/`, not a separate repo** *(v2 reversal of v1's
+   decision 1)*. An upstream-absent top-level directory merges trivially in
+   `buzz-sync` (upstream never touches it), keeps one deploy flow, and
+   stays out of the Rust workspace. `flue-host/pnpm-workspace.yaml` marks
+   it a standalone pnpm root so installs can never reach the repo-level
+   lockfile — the original contamination worry, now enforced rather than
+   avoided.
 2. **buzz-acp stays the Nostr-side harness**, consumed as a release binary.
    No TS rewrite of gating/queueing/observer logic.
-3. **Shim, not fork**: `agentos-acp` bridges stdio ACP to agentOS sessions.
-   agentOS's internal agent interface is ACP-based, so this is close to a
-   proxy.
-4. **Workspace durability for in-VM agents = agentOS S3 mounts.** JuiceFS
-   is descoped to the native tier only, if/when needed (metadata engine =
-   the relay's existing Postgres; data = same MinIO/R2 class bucket).
-5. **Media stays event-mediated.** No writable Blossom mounts ever — blobs
-   are immutable + content-addressed; publishing = upload **plus** a
-   referencing event (`--attach`), otherwise the file is an invisible,
-   immortal orphan. Any file UI is an imeta-derived, channel-scoped index —
-   never a raw bucket listing (names + ACLs live in the event graph).
-6. **Pin the agentOS version.** It is a preview API; upgrade deliberately,
-   never transitively.
-7. **Secrets**: nsec + auth tag enter as session env via the host service;
-   never written into the VM filesystem or the S3 mount.
+3. **Flue is the agent tier; `flue-acp` is ours.** No foreign shim between
+   buzz-acp and the harness — the adapter is ~600 lines with a golden test,
+   and it is the seam where every protocol judgment lives.
+4. **Workspace durability comes from the substrate, not the harness.**
+   v1: the nest on host disk, exactly like today's units. Next: S3-backed
+   workspace (JuiceFS-class — metadata in Postgres/Redis, chunks in
+   MinIO/R2; the stack already runs all three) mounted per agent, cwd set
+   by provisioning; neither buzz-acp nor flue-acp changes.
+5. **Media stays event-mediated.** No writable Blossom mounts ever;
+   publishing = upload **plus** a referencing event.
+6. **Pin everything preview.** `@flue/runtime 2.0.1`, `@earendil-works/pi-ai
+   0.83.0` (exact, committed lockfile). `@rivet-dev/agentos` is
+   deliberately **not** a v1 dependency — it returns, pinned, with the
+   sandbox tier. pnpm's `minimumReleaseAge` policy stays on (it caught
+   day-old transitives on first resolve; keep it).
+7. **Credentials: three rings.**
+   - *Ring 0 — Buzz identity (nsec, NIP-OA tag):* buzz-acp process env
+     only. Conditioned tags (expiry/scoping/rotation) remain the Phase 5
+     upstream fix; a remote signer is the eventual answer.
+   - *Ring 1 — LLM credentials:* host process env, consumed by the pi
+     provider layer. API keys today. Subscription OAuth where sanctioned:
+     **xAI first-party OAuth** (SuperGrok/X Premium+; hermes-agent is the
+     reference client — already in this fleet) and **OpenAI's Codex OAuth**
+     (de-facto tolerated in third-party harnesses; personal-use terms;
+     revocable — architect to degrade to API keys per account).
+     **Anthropic is excluded**: consumer ToS bind subscription OAuth to
+     Claude Code itself; running Claude models here means API keys.
+   - *Ring 2 — sandbox env:* the BUZZ_* allowlist, nothing else.
+   **Owner-account broker (Phase 4):** accounts are linked per *owner* on
+   the desktop (browser lives there; device-code flows complete there),
+   token pairs travel via the deploy payload, the host service is the
+   single refresher per account, agents get short-lived access tokens (or
+   loopback-proxy header injection), budgets per agent enforced at the
+   broker and metered into kind-44200 turn metrics. One owner's plans power
+   that owner's agents — never one subscription fanned across tenants.
 
 ## Implementation path
 
-### Phase 0 — Spike (de-risk, ~days)
+### Phase 0 — Spike gates ✅ (closed 2026-08-04, in-repo)
 
-Scope: local machine or gradient, one throwaway agent identity, test
-community or `#agent-dev` channel. No new repo yet; scratch dir is fine.
+- [x] ACP fidelity: golden transcript drives flue-acp exactly as buzz-acp
+      does (initialize → session/new → prompt → updates → stopReason;
+      cancel; steering trap; -32601 discipline). `flue-host/test/`.
+- [x] Sandbox exec: real `bash` in Flue's `local()` sandbox, cwd-rooted,
+      env-allowlisted (golden test asserts both).
+- [x] Provider seam: pi provider registration + scripted faux model;
+      xai / openai-codex / anthropic factories confirmed present in
+      pi-ai 0.83.
+- [x] Built binary smoke over real stdio (initialize + session/new).
 
-Validation gates — all must pass before Phase 1:
+### Phase 1 — Single-agent shadow on gradient (next)
 
-- [ ] agentOS server up; claude-code session opens; prompt → streamed reply.
-- [ ] **ACP fidelity through the shim**: buzz-acp (unmodified) drives a full
-      turn — `session/new` → `session/prompt` → streamed `session/update` →
-      completion — with the shim as `BUZZ_ACP_AGENT_COMMAND`.
-- [ ] **mcpServers passthrough**: the `session/new` mcpServers field reaches
-      something usable in-VM (or the shim rewrites it to the host MCP URL).
-- [ ] **S3 mount semantics**: mount a bucket dir; write/rename/append from
-      in-VM processes; kill the host service mid-write; remount; verify
-      state. Then the git gauntlet in-VM: clone (relay repo), edit, commit.
-- [ ] **In-VM git ↔ relay auth**: determine how WASM git authenticates NIP-98
-      to relay git (native `git-credential-nostr` can't run in-VM). Candidate
-      answers: shim-side HTTP proxy injecting auth; JS credential helper;
-      host-side clone into the mount. Pick one, prove it.
-- [ ] **Egress policy**: verify default-deny; allowlist relay host + LLM API;
-      confirm a fetch to any other host fails.
-- [ ] Record: cold-start latency, RSS per idle agent, tokens/turn overhead.
+- Provision **one new agent identity** via the standalone path (additive to
+  prod; the five existing units untouched). Env: two changed lines
+  (`BUZZ_ACP_AGENT_COMMAND`, `BUZZ_ACP_AGENT_ARGS=`) + `BUZZ_FLUE_MODEL` +
+  provider key. Runbook: `flue-host/README.md`.
+- Exit criteria: mention → correct threaded reply via the sandboxed `buzz`
+  CLI; `!cancel` works end-to-end; git push from the sandbox against relay
+  git (needs `git-credential-nostr` on PATH + key in sandbox env — verify;
+  the harness-side credential wiring gap flagged 2026-08-04 applies);
+  48h soak beside the native fleet.
+- Fast-follow in this phase: emit `usage_update` (turn metrics parity).
 
-Kill criteria: if ACP fidelity or S3+git semantics fail in ways that need
-agentOS-core patches, stop and reassess (fall back to container-per-agent +
-JuiceFS for everything; keep this doc, revise).
+### Phase 2 — Sandbox hardening tier
 
-### Phase 1 — Single-agent E2E on gradient (shadow deploy)
-
-- Create `buzz-agentos-host` repo: host service + shim + systemd unit.
-- Provision **one new agent identity** via the standalone path
-  (`new-standalone-agent.sh` / `invites claim` + `mint-tag`) — additive to
-  prod, zero risk to existing units ([[deploy-in-place-no-dev-envs]] still
-  applies: don't touch the five existing units).
-- Exit criteria: mention → correct threaded reply from inside the VM;
-  `!cancel` / observer control frames work; host-service restart → agent
-  resumes with session context (agentOS persistence) and workspace intact
-  (S3 mount); 48h soak alongside the native fleet with no missed mentions
-  beyond the known restart-gap envelope.
-
-### Phase 2 — Buzz tooling in-VM
-
-- Host-side HTTP MCP server, per-agent-scoped (auth: per-agent bearer minted
-  by the host service), exposing: messages (get/send/thread/search), repos,
-  upload+attach, memory/engrams. The shim injects its URL via mcpServers.
-- Nest bootstrap: host service materializes `AGENTS.md` + skills into the
-  mount at provision time (today `ensure_nest_at` is desktop-only — remote
-  agents currently reference an AGENTS.md that doesn't exist).
-- Stretch (upstream candidate, separate feat branch): `wasm32-wasi` build
-  target for buzz-cli so agents get the real CLI in-VM.
+The `useSandbox` seam is the whole integration surface. Candidates, in
+order: **agentOS sandbox** (re-add `@rivet-dev/agentos` pinned; spike its
+rivetkit/actor requirements and the `agentOSSandbox` glue Flue shipped
+2026-07-23), or **container sandbox** per agent. Either way: default-deny
+egress (relay + nothing; model traffic no longer exists inside), per-agent
+FS scope, and the Ring-2 allowlist unchanged.
 
 ### Phase 3 — Fleet migration (gradient)
 
-- Migrate `buzz-acp-claude` and `buzz-acp-codex` units into the host
-  service (same identities: reuse nsec + auth tag from `/etc/buzz-agents`).
-  One at a time, tag rollback points, old unit disabled-not-deleted.
-- hermes/hermesgpt/threemes stay native — explicitly documented two-tier
-  posture.
-- Ops runbook in the new repo: deploy, rollback, logs, per-agent policy
-  edits, agentOS version-pin upgrades.
+- Migrate `buzz-acp-claude` / `buzz-acp-codex` unit *identities* onto
+  flue-acp with API-key (or broker) providers — same nsec + tag, two env
+  lines, tagged rollback. The frontier-wrapper path stays available but is
+  no longer the default for new agents.
+- hermes/hermesgpt/threemes: unchanged (own harness; note hermes already
+  speaks xAI OAuth — a candidate first consumer of the broker).
 
 ### Phase 4 — Provisioning & control plane
 
-- `buzz-backend-agentos` provider executable (desktop `info`/`deploy` →
-  host service API) for desktop-managed creation.
-- Standalone onboarding: host service claims agent-typed invites directly —
-  desktop stops being a SPOF for hosted agents.
-- Per-agent policy file (egress allowlist, mount layout, model/API keys).
+- Owner-account broker (decision 7): desktop link flows, deploy-payload
+  delivery, host-side refresh, per-agent budgets.
+- `buzz-backend-flue` provider executable (desktop `info`/`deploy` → host)
+  for desktop-managed creation; host claims agent-typed invites directly so
+  the desktop stops being a SPOF.
+- Per-agent policy file: model, provider/credential class, sandbox kind,
+  budgets, mount layout.
 
-### Phase 5 — Upstream scale prerequisites (block/buzz work, orthogonal)
+### Phase 5 — Upstream scale prerequisites (block/buzz, orthogonal)
 
-These are feat branches against main (upstream candidates), valuable with
-or without agentOS; the host works without them at today's reliability
-envelope:
-
-- **Durable resume cursors** — per-channel `last_seen` as a replaceable
-  relay event; today a harness restart replays from ~boot−5s and downtime
-  silently drops mentions (`relay.rs` since-filter logic, `startup_watermark`).
-- **Wake-on-mention** — reuse the NIP-PL push-lease matcher/delivery worker
-  (`push_runtime.rs`, kind 30350) to hit a host-service webhook for offline
-  agents → enables scale-to-zero.
-- **Nest bootstrap in the harness** (or provider), not the desktop.
-- **Conditioned NIP-OA tags** — expiry + kind scoping + rotation flow;
-  today's tags are non-expiring bearer capabilities shipped raw to hosts.
+Unchanged from v1, still independently justified: durable resume cursors;
+wake-on-mention via NIP-PL push leases (enables scale-to-zero);
+nest bootstrap already landed (buzz-nest self-seeding, 2026-08-01);
+conditioned NIP-OA tags.
 
 ### Phase 6 — Multi-tenant hardening (gate before hosting strangers)
 
-- Defense in depth: per-tenant container/VM around the agentOS host
-  process; agentOS isolation is one layer, not the only one (preview-grade,
-  isolate-based).
-- Per-agent quotas (S3 prefix size, token budgets via turn metrics kind
-  44200), abuse handling, owner-facing audit trail.
+Defense in depth around whatever Phase 2 picked; per-agent quotas (S3
+prefix size, token budgets via 44200), abuse handling, owner-facing audit.
+Tenancy economics come from the broker: every tenant brings their own
+model accounts.
+
+## Substrate variants (execution tier)
+
+- **A. Flue T2 on native host — DEFAULT, v1 shipped.** Self-hosted,
+  zero new infra, containment = env allowlist only (interim posture,
+  explicitly documented).
+- **B. Flue T2 + agentOS sandbox.** Adds V8-isolate FS/process/egress
+  isolation (~22 MB, 4.8 ms cold start) behind `useSandbox`. Preview
+  maturity is the standing risk; pin and wrap.
+- **C. Cloudflare Sandboxes + Agents SDK — managed variant.** Full Linux
+  containers, buzz-acp unmodified inside, sleep/wake economics; not
+  self-hostable — strategic fork of the posture. (v1 notes retained in git
+  history; gates: outbound-WS idle cost, FS persistence across sleep,
+  egress proxy.)
+- **D. Bare containers + JuiceFS — fallback.** Most ops-heavy, zero
+  new-vendor risk.
+
+Decision criteria unchanged: self-hosting required → A/B/D. Hostile
+multi-tenancy → B or D, gated by Phase 6.
 
 ## Risk register
 
 | Risk | Exposure | Mitigation |
 |------|----------|------------|
-| agentOS preview API churn | rework | pin version; wrap all agentOS calls in one adapter module |
-| Isolate escape (young sandbox) | cross-agent compromise | Phase 6 container wrap before hostile tenancy; keep secrets out of VM FS |
-| ACP dialect drift (shim vs buzz-acp expectations) | broken turns | Phase 0 gate; golden-transcript test replaying a recorded buzz-acp session |
-| In-VM git auth unsolved | agents can't push | Phase 0 gate with three candidate designs |
-| S3 mount crash semantics | lost/corrupt workspace | Phase 0 kill-mid-write test; nest docs are small/flat; repos re-cloneable |
-| claude-code under Node-emulation edge cases | subtle tool failures | soak in Phase 1; keep native units until Phase 3 sign-off |
-| Two-tier fleet confusion | ops mistakes | runbook labels every agent with its tier |
-
-## Non-goals
-
-- Modifying block/buzz for the add-on itself (Phase 5 items are separate,
-  independently-justified upstream work).
-- Model diversity via agentOS (harness-level: pi/goose/buzz-agent already
-  cover xAI/Grok etc.).
-- Writable media mounts or raw bucket file listings.
-- Replacing the relay event graph as the source of truth for anything.
-
-## Substrate variants (execution tier)
-
-The contracts in § Contracts consumed are substrate-agnostic; the execution
-tier is swappable. Assessed 2026-07-29:
-
-**A. Rivet agentOS — plan of record.** Self-hostable (gradient stays the
-host). ~22 MB/agent. JS/WASM only → two-tier fleet (hermes native). Needs
-the shim, host-side MCP, and an in-VM git-auth answer (the hard Phase 0
-gates). S3 POSIX-style mounts. Preview maturity is the standing risk.
-
-**B. Cloudflare Sandboxes + Agents SDK — managed variant.** Sandboxes
-(GA 2026-04) are full Linux containers: named/stateful, sleep when idle,
-persistent filesystem with backup/restore snapshot APIs, documented support
-for running Claude Code, process + PTY APIs. A Durable Object per agent
-(Agents SDK) is the supervisor: identity, per-agent SQLite (cursor
-storage), scheduling, wake handling.
-
-- *Simpler than A where A is hardest:* buzz-acp runs **unmodified inside
-  the sandbox**, spawning adapters over stdio exactly as on gradient — no
-  shim, no mcpServers translation, native git + `git-credential-nostr` and
-  native `buzz` CLI work as-is. Four of A's Phase 0 gates vanish. Native
-  binaries run → hermes joins → single-tier fleet.
-- *Changes shape:* the always-on outbound relay WS defeats sandbox sleep —
-  either accept always-on (active-CPU pricing may make an idle WS cheap;
-  measure) or pull Phase 5 forward (durable cursors + NIP-PL wake →
-  webhook → DO → sandbox wake → REST backlog catch-up) as the economics
-  unlock. Workspace durability = persistent sandbox FS + snapshots, not a
-  live S3 mount. The egress proxy holds secrets *outside* the sandbox (LLM
-  keys never enter it) — but the nsec must stay in-sandbox for signing, so
-  conditioned NIP-OA tags become urgent and a remote-signer is the
-  eventual fix.
-- *The regression:* not self-hostable — execution leaves owned infra.
-  Strategic fork vs the self-hosted relay posture.
-- *Not viable:* plain Workers/DOs without Sandboxes — no processes, no
-  native binaries; cannot run buzz-acp or any coding agent.
-- *B's spike gates:* outbound-WS behavior + idle cost; FS persistence
-  across sleep/migration + restore drill; egress allowlist; DO↔sandbox
-  lifecycle wiring via Agents SDK.
-
-**C. Bare containers + JuiceFS — fallback.** podman/systemd per agent +
-egress proxy + JuiceFS workspace volume. Most ops-heavy, zero new-vendor
-risk. This is the Phase 0 kill-criteria fallback.
-
-Decision criteria: self-hosting required → A or C. Fastest path to
-isolated remote execution with the least new code → B. Hostile
-multi-tenancy → whichever passes its spike gates first.
+| Flue preview API churn (2.0.x) | rework | exact pins + committed lockfile; all Flue calls behind `engine/` seam; golden test is the canary |
+| ACP dialect drift (buzz-acp evolves) | broken turns | protocol transcribed in one file with the contract test; buzz-agent parity checked on sync |
+| `local()` containment limits | host compromise ≙ today's posture | explicit env allowlist now; Phase 2 sandbox tier is the fix; never host strangers before Phase 6 |
+| OAuth policy revocation (OpenAI) | fleet auth outage | per-account degrade to API keys without redeploy; broker owns the swap |
+| xAI OAuth tier gating flux | broker plans wrong | verify against the actual subscription tier before Phase 4 commits |
+| better-sqlite3 native build on deploy hosts | install friction | allowlisted build script; `:memory:` default needs no file perms |
+| Two-harness fleet confusion | ops mistakes | runbook labels every agent's tier; unit env names the command explicitly |
 
 ## References
 
-- agentOS: repo `rivet-dev/agentos`, docs `agentos-sdk.dev` (v0.2, 2026-06)
-- pi + ACP: `svkozak/pi-acp`, Zed ACP agent registry
-- ArtifactFS (`cloudflare/artifact-fs`) — candidate for fast `REPOS/`
-  materialization on the **native** tier; not applicable in-VM
-- In-repo: `docs/standalone-agents.md`, `docs/first-class-member-agents.md`,
-  `docs/git-on-object-storage.md`, `CONNECTED_AGENT_PARITY.md` (doc-style
-  precedent)
+- In-repo: [`flue-host/`](flue-host/) (adapter, tests, runbook),
+  `docs/standalone-agents.md`, `docs/agent-orientation.md`,
+  `docs/first-class-member-agents.md`, `docs/git-on-object-storage.md`
+- Flue: flueframework.com (docs), `@flue/runtime` 2.0.1, providers via
+  `@earendil-works/pi-ai` 0.83 (incl. `openai-codex`, `xai`, `faux`)
+- agentOS: `rivet-dev/agentos` (Apache-2.0, preview; Flue support
+  2026-07-23) — Phase 2 candidate
 - Session memory: `rivet-agentos-compute-substrate`,
   `standalone-agent-join-via-invites`, `gradient-buzz-prod-deployment`
