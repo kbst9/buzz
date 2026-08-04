@@ -446,7 +446,7 @@ pub async fn claim_invite(
                     "status": "joined",
                     "community_id": tenant.community().to_string(),
                     "host": tenant.host(),
-                    "role": "member",
+                    "role": if agent_owner.is_some() { "bot" } else { "member" },
                     "agent_owner": agent_owner,
                 })))
             }
@@ -455,7 +455,7 @@ pub async fn claim_invite(
                     "status": "already_member",
                     "community_id": tenant.community().to_string(),
                     "host": tenant.host(),
-                    "role": "member",
+                    "role": if agent_owner.is_some() { "bot" } else { "member" },
                     "agent_owner": agent_owner,
                 })))
             }

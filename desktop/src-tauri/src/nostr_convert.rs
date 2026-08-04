@@ -501,13 +501,15 @@ pub fn agents_from_events(events: &[Event]) -> Value {
 
 /// Convert a kind:13534 relay membership list to the relay members format.
 ///
-/// The relay emits `["member", pubkey]` or `["member", pubkey, role]` tags.
+/// The relay emits `["member", pubkey]`, `["member", pubkey, role]`, or —
+/// for invite-flow agents — `["member", pubkey, "bot", owner_pubkey]` tags.
 /// For backward compatibility, also accepts `["p", pubkey, relay_url?, role?]`.
 pub fn relay_members_from_event(event: &Event) -> Value {
     let mut seen = BTreeSet::new();
     let mut members: Vec<Value> = Vec::new();
 
-    // Primary: parse ["member", pubkey, role?] tags (current relay format).
+    // Primary: parse ["member", pubkey, role?, agent_owner?] tags (current
+    // relay format).
     for slice in tags_named(event, "member") {
         let Some(pubkey) = slice.get(1).filter(|s| !s.is_empty()) else {
             continue;
@@ -520,7 +522,11 @@ pub fn relay_members_from_event(event: &Event) -> Value {
             .filter(|s| !s.is_empty())
             .cloned()
             .unwrap_or_else(|| "member".to_string());
-        members.push(json!({ "pubkey": pubkey, "role": role }));
+        let mut member = json!({ "pubkey": pubkey, "role": role });
+        if let Some(owner) = slice.get(3).filter(|s| !s.is_empty()) {
+            member["agentOwnerPubkey"] = json!(owner);
+        }
+        members.push(member);
     }
 
     // Fallback: parse ["p", pubkey, relay_url?, role?] tags (NIP-29 convention).

@@ -435,7 +435,7 @@ async fn cmd_remove_member(pubkey_arg: String, role_filter: Option<String>) -> R
     let tenant = resolve_admin_tenant(&db).await?;
     use buzz_db::relay_members::RemoveResult;
     let result = if let Some(ref role) = role_filter {
-        db.remove_relay_member_if_role(tenant.community(), &pubkey_hex, role)
+        db.remove_relay_member_if_role(tenant.community(), &pubkey_hex, &[role.as_str()])
             .await
     } else {
         db.remove_relay_member(tenant.community(), &pubkey_hex)

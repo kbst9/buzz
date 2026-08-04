@@ -261,6 +261,55 @@ fn build_user_search_filter(query: &str, limit: usize, page: u32) -> serde_json:
     })
 }
 
+/// Agent rows from the NIP-43 roster (kind:13534): pubkey → claim-time owner
+/// (empty string when the tag carries none). Invite-flow agents have no
+/// NIP-OA profile tag to verify, so the roster's relay-attributed `bot` role
+/// is the only classification signal that exists for them.
+async fn roster_agent_owners(state: &State<'_, AppState>) -> HashMap<String, String> {
+    let events = match query_relay(
+        state,
+        &[serde_json::json!({ "kinds": [13534], "limit": 1 })],
+    )
+    .await
+    {
+        Ok(events) => events,
+        Err(error) => {
+            tracing::debug!(%error, "roster fetch for agent classification failed");
+            return HashMap::new();
+        }
+    };
+    let mut owners = HashMap::new();
+    for event in &events {
+        for tag in event["tags"].as_array().into_iter().flatten() {
+            let Some(tag) = tag.as_array() else { continue };
+            let name = tag.first().and_then(Value::as_str);
+            let pubkey = tag.get(1).and_then(Value::as_str);
+            let role = tag.get(2).and_then(Value::as_str);
+            if name == Some("member") && role == Some("bot") {
+                if let Some(pubkey) = pubkey {
+                    let owner = tag.get(3).and_then(Value::as_str).unwrap_or_default();
+                    owners.insert(pubkey.to_lowercase(), owner.to_string());
+                }
+            }
+        }
+    }
+    owners
+}
+
+/// Overlay roster-derived agent classification onto profile-derived results:
+/// a `bot` roster row marks the user an agent even when its kind:0 profile
+/// carries no verifiable NIP-OA tag (the invite-flow case).
+fn apply_roster_agents(response: &mut SearchUsersResponse, roster: &HashMap<String, String>) {
+    for user in &mut response.users {
+        if let Some(owner) = roster.get(&user.pubkey.to_lowercase()) {
+            user.is_agent = true;
+            if user.owner_pubkey.is_none() && !owner.is_empty() {
+                user.owner_pubkey = Some(owner.clone());
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn search_users(
     query: String,
@@ -303,6 +352,7 @@ pub async fn search_users(
         if events.len() >= max {
             response.next_cursor = Some((page + 1).to_string());
         }
+        apply_roster_agents(&mut response, &roster_agent_owners(&state).await);
         return Ok(response);
     }
 
@@ -331,6 +381,7 @@ pub async fn search_users(
     if events.len() >= max {
         response.next_cursor = Some((page + 1).to_string());
     }
+    apply_roster_agents(&mut response, &roster_agent_owners(&state).await);
     Ok(response)
 }
 

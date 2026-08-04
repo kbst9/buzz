@@ -253,31 +253,32 @@ pub async fn remove_relay_member(
     }
 }
 
-/// Removes a relay member only if their current role matches `expected_role`.
+/// Removes a relay member only if their current role is one of
+/// `expected_roles`.
 ///
 /// The delete and the role check are collapsed into a single
-/// `DELETE … WHERE pubkey = $1 AND role = $2`, making the operation atomic —
-/// no TOCTOU race between a prior read and this delete.
+/// `DELETE … WHERE pubkey = $2 AND role = ANY($3)`, making the operation
+/// atomic — no TOCTOU race between a prior read and this delete.
 ///
 /// Returns:
 /// - `Removed` — row was deleted.
 /// - `NotFound` — no member with that pubkey exists.
 /// - `IsOwner` — member exists with role `"owner"` (cannot be removed).
-/// - `RoleMismatch` — member exists but their role no longer matches
-///   `expected_role` (e.g., they were promoted between the caller's read and
-///   this delete).
+/// - `RoleMismatch` — member exists but their role is not in
+///   `expected_roles` (e.g., they were promoted between the caller's read
+///   and this delete).
 pub async fn remove_relay_member_if_role(
     pool: &PgPool,
     community: CommunityId,
     pubkey: &str,
-    expected_role: &str,
+    expected_roles: &[&str],
 ) -> Result<RemoveResult> {
     let result = sqlx::query(
-        "DELETE FROM relay_members WHERE community_id = $1 AND pubkey = $2 AND role = $3",
+        "DELETE FROM relay_members WHERE community_id = $1 AND pubkey = $2 AND role = ANY($3)",
     )
     .bind(community.as_uuid())
     .bind(pubkey)
-    .bind(expected_role)
+    .bind(expected_roles)
     .execute(pool)
     .await?;
 

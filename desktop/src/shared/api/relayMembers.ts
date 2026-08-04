@@ -15,7 +15,12 @@ const KIND_RELAY_ADMIN_CHANGE_ROLE = 9032;
 function isRelayMemberRole(
   value: string | undefined,
 ): value is RelayMemberRole {
-  return value === "owner" || value === "admin" || value === "member";
+  return (
+    value === "owner" ||
+    value === "admin" ||
+    value === "member" ||
+    value === "bot"
+  );
 }
 
 function normalizePubkey(pubkey: string): string {
@@ -68,9 +73,20 @@ export function relayMembersFromEvent(event: RelayEvent): RelayMember[] {
     const rawRole = name === "member" ? maybeRoleOrRelay : maybePTagRole;
     const role = isRelayMemberRole(rawRole) ? rawRole : "member";
 
+    // `member` tags on bot rows carry the claim-time owner as a 4th element:
+    // ["member", pubkey, "bot", ownerPubkey].
+    const rawOwner = name === "member" ? tag[3] : undefined;
+    const agentOwnerPubkey =
+      role === "bot" &&
+      rawOwner &&
+      /^[0-9a-f]{64}$/.test(rawOwner.toLowerCase())
+        ? normalizePubkey(rawOwner)
+        : undefined;
+
     members.push({
       pubkey,
       role,
+      ...(agentOwnerPubkey ? { agentOwnerPubkey } : {}),
       addedBy: null,
       createdAt,
     });
