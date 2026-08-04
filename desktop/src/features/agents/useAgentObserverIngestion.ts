@@ -8,10 +8,44 @@ import {
 } from "@/features/agents/hooks";
 import { useManagedAgentObserverBridge } from "@/features/agents/observerRelayStore";
 import { useObserverIngestionSeed } from "@/features/agents/useObserverIngestionSeed";
+import { useRelayMembersQuery } from "@/features/community-members/hooks";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import type { ManagedAgent, UserProfileSummary } from "@/shared/api/types";
+import type {
+  ManagedAgent,
+  RelayMember,
+  UserProfileSummary,
+} from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
+
+/**
+ * Pure selection core, extracted for tests: `bot` roster rows whose
+ * claim-time owner is the current identity, as `pubkey → owner` (both
+ * normalized). The NIP-43 roster is the relay-authoritative agent source —
+ * invite-flow agents carry no NIP-OA profile tag, so the roster row is the
+ * ONLY ownership signal that exists for them, and observer registration
+ * must not depend on any profile-lane overlay having run first.
+ */
+export function selectRosterOwnedAgents(
+  members: readonly RelayMember[] | undefined,
+  currentPubkey: string | null | undefined,
+): ReadonlyMap<string, string> {
+  const owned = new Map<string, string>();
+  if (!members || !currentPubkey) {
+    return owned;
+  }
+  const me = normalizePubkey(currentPubkey);
+  for (const member of members) {
+    if (member.role !== "bot" || !member.agentOwnerPubkey) {
+      continue;
+    }
+    const owner = normalizePubkey(member.agentOwnerPubkey);
+    if (owner === me) {
+      owned.set(normalizePubkey(member.pubkey), owner);
+    }
+  }
+  return owned;
+}
 
 type IngestionAgent = Pick<ManagedAgent, "pubkey" | "status">;
 
@@ -185,6 +219,11 @@ export function useAgentObserverIngestion() {
   const managedAgents = managedAgentsQuery.data;
 
   const relayAgentsQuery = useRelayAgentsQuery();
+  const relayMembersQuery = useRelayMembersQuery(Boolean(currentPubkey));
+  const rosterOwnedAgents = React.useMemo(
+    () => selectRosterOwnedAgents(relayMembersQuery.data, currentPubkey),
+    [relayMembersQuery.data, currentPubkey],
+  );
   const seenOwnedPubkeys = useSeenOwnedAgentPubkeys(currentPubkey);
   const candidatePubkeys = React.useMemo(
     () => [
@@ -192,12 +231,15 @@ export function useAgentObserverIngestion() {
         ...(relayAgentsQuery.data ?? []).map((agent) =>
           normalizePubkey(agent.pubkey),
         ),
+        // Invite-flow agents from the NIP-43 roster (`bot` rows owned by
+        // the current identity) — the relay-authoritative source.
+        ...rosterOwnedAgents.keys(),
         // Verified-owned agents outside the 10100 directory (standalone
         // harness deployments) — see useSeenOwnedAgentPubkeys.
         ...seenOwnedPubkeys,
       ]),
     ],
-    [relayAgentsQuery.data, seenOwnedPubkeys],
+    [relayAgentsQuery.data, rosterOwnedAgents, seenOwnedPubkeys],
   );
 
   const profilesQuery = useUsersBatchQuery(candidatePubkeys, {
@@ -206,7 +248,9 @@ export function useAgentObserverIngestion() {
   const profiles = profilesQuery.data?.profiles;
 
   const ingestionAgents = React.useMemo(() => {
-    const ownerByPubkey = new Map<string, string>();
+    // Roster ownership first, so a verified NIP-OA profile summary (below)
+    // wins whenever both sources know the agent.
+    const ownerByPubkey = new Map<string, string>(rosterOwnedAgents);
     for (const [pubkey, summary] of Object.entries(profiles ?? {})) {
       if (summary.ownerPubkey) {
         // Store both key and value normalized so lookups and ownership
@@ -223,7 +267,7 @@ export function useAgentObserverIngestion() {
       ownerByPubkey,
       currentPubkey,
     );
-  }, [candidatePubkeys, currentPubkey, managedAgents, profiles]);
+  }, [candidatePubkeys, currentPubkey, managedAgents, profiles, rosterOwnedAgents]);
 
   useManagedAgentObserverBridge(ingestionAgents);
   useActiveAgentTurnsBridge(ingestionAgents);
