@@ -8,7 +8,7 @@ import { log } from "./log.js";
  * flue-acp — the ACP agent command for buzz-acp (`BUZZ_ACP_AGENT_COMMAND`).
  *
  * Env contract:
- *   BUZZ_FLUE_MODEL  (required)  Flue model specifier, e.g. `xai/grok-4`.
+ *   BUZZ_FLUE_MODEL  (required)  Flue model specifier, e.g. `xai/grok-4.5`.
  *                                Provider credentials resolve from the
  *                                environment host-side (API keys / tokens);
  *                                they never enter the sandbox.
@@ -29,7 +29,7 @@ async function main(): Promise<void> {
 
   const model = process.env["BUZZ_FLUE_MODEL"];
   if (!model) {
-    process.stderr.write("[flue-acp] error: BUZZ_FLUE_MODEL is not set (e.g. BUZZ_FLUE_MODEL=xai/grok-4)\n");
+    process.stderr.write("[flue-acp] error: BUZZ_FLUE_MODEL is not set (e.g. BUZZ_FLUE_MODEL=xai/grok-4.5)\n");
     process.exitCode = 2;
     return;
   }

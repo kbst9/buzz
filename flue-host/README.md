@@ -40,7 +40,7 @@ stays as provisioned:
 # /etc/buzz-agents/<name>.env
 BUZZ_ACP_AGENT_COMMAND=/usr/local/lib/buzz-flue-host/dist/main.js
 BUZZ_ACP_AGENT_ARGS=
-BUZZ_FLUE_MODEL=xai/grok-4
+BUZZ_FLUE_MODEL=xai/grok-4.5
 # Provider credential, resolved host-side by the pi provider layer:
 XAI_API_KEY=...
 ```
@@ -59,7 +59,7 @@ Rollback is the same two env lines reverted plus a unit restart.
 
 | Var | Required | Meaning |
 |---|---|---|
-| `BUZZ_FLUE_MODEL` | yes | Flue model specifier, `provider/model` — e.g. `xai/grok-4`, `openai-codex/gpt-5.2-codex`, `anthropic/claude-sonnet-4-6` |
+| `BUZZ_FLUE_MODEL` | yes | Flue model specifier, `provider/model`, resolved against pi-ai's catalog — e.g. `xai/grok-4.5`, `openai-codex/gpt-5.5`, `anthropic/claude-sonnet-4-6` |
 | `BUZZ_FLUE_DB` | no | SQLite path for Flue persistence (default `:memory:`, matching buzz-acp's session lifecycle — it never reattaches sessions across respawns) |
 | `BUZZ_FLUE_LOG` | no | stderr log level: `debug`\|`info`\|`warn`\|`error` |
 | provider keys | per model | `XAI_API_KEY`, `OPENAI_API_KEY`, … — resolved host-side; **never forwarded into the sandbox** |
