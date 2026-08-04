@@ -290,7 +290,8 @@ async fn attribute_agent_owner(
 ///    policy evidence (if configured), commit, return `AlreadyMember`
 ///    (no increment).
 /// 7. If `max_uses` is set and `use_count >= max_uses` → `Exhausted`.
-/// 8. Insert relay member with role `member`, `added_by = 'invite'`.
+/// 8. Insert relay member with role `member` (`bot` for agent-typed
+///    invites), `added_by = 'invite'`.
 /// 9. For agent-typed invites, attribute the claimant to the invite's owner
 ///    (`users.agent_owner_pubkey`, first-write-wins — see
 ///    [`attribute_agent_owner`]).
@@ -365,7 +366,19 @@ pub async fn claim_relay_invite(
 
     if existing.is_some() {
         // 6. Already a member — attribute (agent invites), insert policy
-        // evidence, but do NOT increment.
+        // evidence, but do NOT increment. Agent invites also self-heal the
+        // role: a row admitted as 'member' before role stamping existed (or
+        // by a concurrent plain invite) upgrades to 'bot' on re-claim.
+        if invite_agent_owner.is_some() {
+            sqlx::query(
+                "UPDATE relay_members SET role = 'bot', updated_at = now() \
+                 WHERE community_id = $1 AND pubkey = $2 AND role = 'member'",
+            )
+            .bind(community.as_uuid())
+            .bind(claimer_pubkey)
+            .execute(&mut *tx)
+            .await?;
+        }
         let agent_owner = match &invite_agent_owner {
             Some(owner) => {
                 Some(attribute_agent_owner(&mut tx, community, claimer_pubkey, owner).await?)
@@ -416,13 +429,19 @@ pub async fn claim_relay_invite(
     // 8. Insert relay member. The conflict branch covers a claimant admitted
     // concurrently through a different invite: only the transaction that
     // actually inserted membership may consume this invite.
+    let member_role = if invite_agent_owner.is_some() {
+        "bot"
+    } else {
+        "member"
+    };
     let inserted = sqlx::query(
         "INSERT INTO relay_members (community_id, pubkey, role, added_by) \
-         VALUES ($1, $2, 'member', 'invite') \
+         VALUES ($1, $2, $3, 'invite') \
          ON CONFLICT (community_id, pubkey) DO NOTHING",
     )
     .bind(community.as_uuid())
     .bind(claimer_pubkey)
+    .bind(member_role)
     .execute(&mut *tx)
     .await?
     .rows_affected()

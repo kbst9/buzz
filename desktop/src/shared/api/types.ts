@@ -262,11 +262,13 @@ export type {
 
 // ── Relay Members ────────────────────────────────────────────────────────────
 
-export type RelayMemberRole = "owner" | "admin" | "member";
+export type RelayMemberRole = "owner" | "admin" | "member" | "bot";
 
 export type RelayMember = {
   pubkey: string;
   role: RelayMemberRole;
+  /** Claim-time owner of an invite-flow agent (`bot` rows), from the roster tag. */
+  agentOwnerPubkey?: string;
   addedBy: string | null;
   createdAt: string;
 };

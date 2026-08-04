@@ -4126,7 +4126,8 @@ impl Db {
         relay_members::remove_relay_member(&self.pool, community, pubkey).await
     }
 
-    /// Removes a relay member from `community` only if their current role matches `expected_role`.
+    /// Removes a relay member from `community` only if their current role is
+    /// one of `expected_roles`.
     ///
     /// Atomic conditional delete — eliminates the TOCTOU race between a
     /// prior role read and the delete. See [`relay_members::remove_relay_member_if_role`].
@@ -4134,9 +4135,9 @@ impl Db {
         &self,
         community: CommunityId,
         pubkey: &str,
-        expected_role: &str,
+        expected_roles: &[&str],
     ) -> Result<relay_members::RemoveResult> {
-        relay_members::remove_relay_member_if_role(&self.pool, community, pubkey, expected_role)
+        relay_members::remove_relay_member_if_role(&self.pool, community, pubkey, expected_roles)
             .await
     }
 
@@ -4725,10 +4726,17 @@ impl Db {
             .execute(&mut *tx)
             .await?;
 
-        // Read current members inside the locked transaction.
+        // Read current members inside the locked transaction. Agent rows
+        // (role 'bot') carry their claim-time owner so clients can classify
+        // and group invite-flow agents from the roster alone — these agents
+        // have no NIP-OA profile tag to verify.
         let rows = sqlx::query(
-            "SELECT pubkey, role FROM relay_members \
-             WHERE community_id = $1 ORDER BY created_at ASC",
+            "SELECT rm.pubkey, rm.role, encode(u.agent_owner_pubkey, 'hex') AS agent_owner \
+             FROM relay_members rm \
+             LEFT JOIN users u \
+               ON u.community_id = rm.community_id \
+              AND u.pubkey = decode(rm.pubkey, 'hex') \
+             WHERE rm.community_id = $1 ORDER BY rm.created_at ASC",
         )
         .bind(community_id.as_uuid())
         .fetch_all(&mut *tx)
@@ -4745,7 +4753,12 @@ impl Db {
         for row in &rows {
             let pubkey: String = row.try_get("pubkey")?;
             let role: String = row.try_get("role")?;
-            tags.push(Tag::parse(["member", &pubkey, &role]).map_err(|e| {
+            let agent_owner: Option<String> = row.try_get("agent_owner")?;
+            let tag = match &agent_owner {
+                Some(owner) => Tag::parse(["member", &pubkey, &role, owner]),
+                None => Tag::parse(["member", &pubkey, &role]),
+            };
+            tags.push(tag.map_err(|e| {
                 crate::error::DbError::InvalidData(format!("failed to build member tag: {e}"))
             })?);
         }

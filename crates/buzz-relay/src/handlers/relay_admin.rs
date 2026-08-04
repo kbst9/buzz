@@ -372,14 +372,19 @@ async fn execute_relay_admin_command(
             }
 
             // Dispatch removal by sender role:
-            // - Admins: atomic conditional delete, only removes 'member' targets.
-            //   This eliminates the TOCTOU race where the target could be promoted
-            //   between a prior role read and the delete.
-            // - Owners: can remove admins and members, not other owners.
+            // - Admins: atomic conditional delete, only removes 'member' and
+            //   'bot' targets. This eliminates the TOCTOU race where the
+            //   target could be promoted between a prior role read and the
+            //   delete.
+            // - Owners: can remove admins, members, and bots — not other owners.
             let remove_result = if sender_role == "admin" {
                 state
                     .db
-                    .remove_relay_member_if_role(tenant.community(), &target_hex, "member")
+                    .remove_relay_member_if_role(
+                        tenant.community(),
+                        &target_hex,
+                        &["member", "bot"],
+                    )
                     .await
                     .map_err(|e| format!("database error: {e}"))?
             } else {
