@@ -280,15 +280,14 @@ async fn roster_agent_owners(state: &State<'_, AppState>) -> HashMap<String, Str
     };
     let mut owners = HashMap::new();
     for event in &events {
-        for tag in event["tags"].as_array().into_iter().flatten() {
-            let Some(tag) = tag.as_array() else { continue };
-            let name = tag.first().and_then(Value::as_str);
-            let pubkey = tag.get(1).and_then(Value::as_str);
-            let role = tag.get(2).and_then(Value::as_str);
+        for tag in event.tags.iter() {
+            let parts = tag.as_slice();
+            let name = parts.first().map(String::as_str);
+            let role = parts.get(2).map(String::as_str);
             if name == Some("member") && role == Some("bot") {
-                if let Some(pubkey) = pubkey {
-                    let owner = tag.get(3).and_then(Value::as_str).unwrap_or_default();
-                    owners.insert(pubkey.to_lowercase(), owner.to_string());
+                if let Some(pubkey) = parts.get(1) {
+                    let owner = parts.get(3).cloned().unwrap_or_default();
+                    owners.insert(pubkey.to_lowercase(), owner);
                 }
             }
         }
