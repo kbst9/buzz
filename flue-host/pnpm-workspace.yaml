@@ -1,0 +1,12 @@
+# Marks flue-host as its own pnpm root so installs never touch the
+# repository-level workspace or its lockfile (this dir is fork-carried;
+# the upstream pnpm-lock.yaml must stay conflict-free for buzz-sync).
+packages: []
+allowBuilds:
+  # vitest/vite JIT transform backend.
+  esbuild: true
+  # @flue/runtime/node sqlite() persistence (native module).
+  better-sqlite3: true
+  # pi-ai's Google provider transitives; unused here — scripts denied.
+  '@google/genai': false
+  protobufjs: false
