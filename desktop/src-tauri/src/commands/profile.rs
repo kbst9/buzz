@@ -224,7 +224,21 @@ pub async fn get_users_batch(
     )
     .await?;
 
-    Ok(nostr_convert::users_batch_from_events(&events, &pubkeys))
+    let mut response = nostr_convert::users_batch_from_events(&events, &pubkeys);
+    // Same roster overlay as search_users: invite-flow agents have no NIP-OA
+    // profile tag, and this batch cache is what registers owned agents for
+    // observer-frame decryption (useAgentObserverIngestion) — without the
+    // overlay their session transcripts (thinking, tool calls) never render.
+    let roster = roster_agent_owners(&state).await;
+    for (pubkey, profile) in &mut response.profiles {
+        if let Some(owner) = roster.get(&pubkey.to_lowercase()) {
+            profile.is_agent = true;
+            if profile.owner_pubkey.is_none() && !owner.is_empty() {
+                profile.owner_pubkey = Some(owner.clone());
+            }
+        }
+    }
+    Ok(response)
 }
 
 #[tauri::command]
