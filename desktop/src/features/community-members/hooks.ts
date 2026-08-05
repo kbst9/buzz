@@ -16,12 +16,20 @@ export const myRelayMembershipLookupQueryKey = [
   "myRelayMembershipLookup",
 ] as const;
 
-export function useRelayMembersQuery(enabled = true) {
+export function useRelayMembersQuery(enabled = true, refetchInterval?: number) {
   return useQuery({
     enabled,
     queryKey: relayMembersQueryKey,
     queryFn: listRelayMembers,
     staleTime: 30_000,
+    // The app-wide query defaults disable focus refetch and retry once, so
+    // without an interval a failed or empty startup fetch is cached until the
+    // consumer remounts — permanently, for app-lifetime consumers. Callers
+    // that must converge on the live roster (observer-frame registration)
+    // pass an interval; the interval keeps ticking while the window is
+    // unfocused because agents stream frames regardless of focus.
+    refetchInterval: refetchInterval ?? false,
+    refetchIntervalInBackground: refetchInterval !== undefined,
   });
 }
 

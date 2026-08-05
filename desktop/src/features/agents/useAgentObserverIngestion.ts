@@ -49,6 +49,9 @@ export function selectRosterOwnedAgents(
 
 type IngestionAgent = Pick<ManagedAgent, "pubkey" | "status">;
 
+/** How often observer ingestion re-reads the NIP-43 roster (kind 13534). */
+const ROSTER_REFRESH_INTERVAL_MS = 60_000;
+
 /**
  * Combine locally managed agents with relay agents the current identity
  * declared-owns (NIP-OA `ownerPubkey == me`) into one ingestion list.
@@ -219,7 +222,15 @@ export function useAgentObserverIngestion() {
   const managedAgents = managedAgentsQuery.data;
 
   const relayAgentsQuery = useRelayAgentsQuery();
-  const relayMembersQuery = useRelayMembersQuery(Boolean(currentPubkey));
+  // Poll the roster: invite-flow agents have no NIP-OA profile, so this query
+  // is their ONLY registration source — and this hook is mounted for the app's
+  // lifetime, so a one-shot fetch that races startup (or predates a roster
+  // change like a member→bot reclassification) would otherwise stay wrong
+  // forever and every observer frame from the agent would be dropped unseen.
+  const relayMembersQuery = useRelayMembersQuery(
+    Boolean(currentPubkey),
+    ROSTER_REFRESH_INTERVAL_MS,
+  );
   const rosterOwnedAgents = React.useMemo(
     () => selectRosterOwnedAgents(relayMembersQuery.data, currentPubkey),
     [relayMembersQuery.data, currentPubkey],
@@ -267,7 +278,13 @@ export function useAgentObserverIngestion() {
       ownerByPubkey,
       currentPubkey,
     );
-  }, [candidatePubkeys, currentPubkey, managedAgents, profiles, rosterOwnedAgents]);
+  }, [
+    candidatePubkeys,
+    currentPubkey,
+    managedAgents,
+    profiles,
+    rosterOwnedAgents,
+  ]);
 
   useManagedAgentObserverBridge(ingestionAgents);
   useActiveAgentTurnsBridge(ingestionAgents);
