@@ -357,6 +357,14 @@ async function handleRelayObserverEvent(
       if (pendingUnknownAgentFrames.length > MAX_PENDING_UNKNOWN_AGENT_FRAMES) {
         pendingUnknownAgentFrames.shift();
       }
+    } else {
+      // Frames only ever arrive `#p`-addressed to this identity, so a drop
+      // here means an agent we own is not (yet) registered — leave a trace,
+      // this exact silence once cost a full day of debugging.
+      console.debug(
+        "[observer] dropped frame from unregistered agent",
+        agentPubkey,
+      );
     }
     return;
   }
