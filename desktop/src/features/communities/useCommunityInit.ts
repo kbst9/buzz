@@ -13,6 +13,7 @@ import { getIdentity } from "@/shared/api/tauriIdentity";
 import { clearTrayAgentActivity } from "@/shared/api/trayMenu";
 import { getOverrides } from "@/shared/features";
 import { resetMediaCaches } from "@/shared/lib/mediaUrl";
+import { resetLinkPreviewTitleCache } from "@/shared/lib/useResolvedLinkPreviews";
 import { clearSearchHitEventCache } from "@/app/navigation/searchHitEventCache";
 import {
   clearAllDrafts,
@@ -71,6 +72,7 @@ function resetCommunityState({
   resetBackgroundMediaUploads();
   clearSearchHitEventCache();
   clearMarkdownNodeCache();
+  resetLinkPreviewTitleCache();
 }
 
 type CommunityInitResult =
@@ -95,6 +97,7 @@ export function useCommunityInit(
   activeCommunity: Community | null,
   communityKey: string,
   isSharedIdentity: boolean,
+  suppressAutoConnect = false,
 ): CommunityInitResult {
   const [result, setResult] = useState<CommunityInitResult>({
     isReady: false,
@@ -120,6 +123,15 @@ export function useCommunityInit(
 
     async function init() {
       if (!activeCommunity) {
+        if (hasInitializedRef.current) {
+          if (prevCommunityIdRef.current) {
+            saveActiveAgentTurnsForCommunity(prevCommunityIdRef.current);
+            prevCommunityIdRef.current = null;
+          }
+          resetCommunityState({ resetAvatarState: true });
+          appliedRelayUrlRef.current = null;
+          hasInitializedRef.current = false;
+        }
         try {
           const defaultRelayUrl = await getDefaultRelayUrl();
           const autoConnectDefaultRelay =
@@ -129,9 +141,10 @@ export function useCommunityInit(
           // relay as the first community. Public builds retain community
           // selection even when BUZZ_RELAY_URL is overridden at runtime.
           if (
-            isSharedIdentity ||
-            (autoConnectDefaultRelay &&
-              shouldAutoConnectDefaultRelay(defaultRelayUrl))
+            !suppressAutoConnect &&
+            (isSharedIdentity ||
+              (autoConnectDefaultRelay &&
+                shouldAutoConnectDefaultRelay(defaultRelayUrl)))
           ) {
             const identity = await getIdentity();
             if (cancelled) return;
@@ -288,6 +301,7 @@ export function useCommunityInit(
     activeCommunity?.token,
     activeCommunity?.reposDir,
     isSharedIdentity,
+    suppressAutoConnect,
     communityKey,
   ]);
 

@@ -108,6 +108,15 @@ pub const KIND_EVENT_REMINDER: u32 = 30300;
 /// dedicated push lease tables.
 pub const KIND_PUSH_LEASE: u32 = 30350;
 
+/// NIP-PMA: owner-encrypted private managed-agent aggregate.
+///
+/// Addressed by `(owner pubkey, kind, agent pubkey)`. The signed outer tags
+/// expose only the agent coordinate, CAS generation/predecessor, and active/deleted
+/// state required for relay enforcement. Content is NIP-44 v2 encrypted from
+/// the owner's key to itself and contains the runnable identity/configuration
+/// plus exact public projection bindings. See `docs/nips/NIP-PMA.md`.
+pub const KIND_PRIVATE_MANAGED_AGENT: u32 = 30179;
+
 /// Kinds whose stored events are readable only by their author.
 ///
 /// The relay must never reveal the existence, count, tags, content, schedule,
@@ -117,7 +126,11 @@ pub const KIND_PUSH_LEASE: u32 = 30350;
 ///
 /// Currently a tiny linear set. If this grows past ~4 kinds, convert to a
 /// compile-time bitset or sorted array with binary search for hot-path use.
-pub const AUTHOR_ONLY_KINDS: &[u32] = &[KIND_EVENT_REMINDER, KIND_PUSH_LEASE];
+pub const AUTHOR_ONLY_KINDS: &[u32] = &[
+    KIND_EVENT_REMINDER,
+    KIND_PUSH_LEASE,
+    KIND_PRIVATE_MANAGED_AGENT,
+];
 
 /// Kinds that require a result-level read gate beyond the filter-layer
 /// `#p` check: even a reader who knows an event id MUST match the event's
@@ -685,6 +698,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_TEAM,
     KIND_MANAGED_AGENT,
     KIND_TEAM_CATALOG,
+    KIND_PRIVATE_MANAGED_AGENT,
     KIND_SWARM,
     KIND_COMMUNITY_GUIDE,
     KIND_REPORT,
@@ -887,6 +901,7 @@ const _: () = assert!(is_parameterized_replaceable(KIND_PERSONA)); // 30175 ∈ 
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM)); // 30176 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_MANAGED_AGENT)); // 30177 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM_CATALOG)); // 30178 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_PRIVATE_MANAGED_AGENT)); // 30179 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_SWARM)); // 30978 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_COMMUNITY_GUIDE)); // 30979 ∈ 30000–39999
 const _: () = assert!(KIND_COMMUNITY_GUIDE <= u16::MAX as u32);

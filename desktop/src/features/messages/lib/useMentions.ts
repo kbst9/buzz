@@ -12,8 +12,11 @@ import {
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
 import {
+  filterCachedAgentSuggestions,
   getMentionableAgentPubkeys,
   getSharedChannelIds,
+  isAgentMentionChannelType,
+  uniqueAutocompleteLabels,
 } from "@/features/agents/lib/agentAutocompleteEligibility";
 import {
   useInfiniteUserSearchQuery,
@@ -170,10 +173,16 @@ export function useMentions(
     () => getSharedChannelIds(channelsQuery.data),
     [channelsQuery.data],
   );
+  const mentionChannelId = isAgentMentionChannelType(options?.channelType)
+    ? channelId
+    : null;
   const mentionableAgentPubkeys = React.useMemo(
     () =>
       getMentionableAgentPubkeys({
         currentPubkey,
+        eligibilityScope: mentionChannelId
+          ? { type: "channel", channelId: mentionChannelId }
+          : { type: "managed-only" },
         managedAgentPubkeys,
         relayAgents: relayAgentsQuery.data,
         sharedChannelIds,
@@ -181,6 +190,7 @@ export function useMentions(
     [
       currentPubkey,
       managedAgentPubkeys,
+      mentionChannelId,
       relayAgentsQuery.data,
       sharedChannelIds,
     ],
@@ -227,7 +237,6 @@ export function useMentions(
         managedAgentNamesByPubkey,
         managedAgentPersonaIds,
         managedAgentPersonaIdsByPubkey,
-        managedAgentPubkeys,
         managedAgents: managedAgentsQuery.data,
         memberPubkeys,
         members,
@@ -249,7 +258,6 @@ export function useMentions(
       managedAgentNamesByPubkey,
       managedAgentPersonaIds,
       managedAgentPersonaIdsByPubkey,
-      managedAgentPubkeys,
       managedAgentsQuery.data,
       memberPubkeys,
       members,
@@ -333,26 +341,10 @@ export function useMentions(
     enabled: ownerPubkeys.length > 0,
   });
 
-  const searchableNames = React.useMemo<string[]>(() => {
-    const names: string[] = [];
-    const seen = new Set<string>();
-
-    for (const candidate of mentionCandidatesWithGroups) {
-      for (const name of [
-        candidate.displayName,
-        candidate.personaName,
-        candidate.secondaryLabel,
-      ]) {
-        const trimmed = name?.trim();
-        if (trimmed && !seen.has(trimmed.toLowerCase())) {
-          names.push(trimmed);
-          seen.add(trimmed.toLowerCase());
-        }
-      }
-    }
-
-    return names;
-  }, [mentionCandidatesWithGroups]);
+  const searchableNames = React.useMemo(
+    () => uniqueAutocompleteLabels(mentionCandidatesWithGroups),
+    [mentionCandidatesWithGroups],
+  );
 
   const highlightNames = React.useMemo<string[]>(() => {
     const names: string[] = [];
@@ -456,11 +448,19 @@ export function useMentions(
     }
 
     if (userSearchQuery.isFetching) {
-      return previousSuggestionsRef.current;
+      return filterCachedAgentSuggestions(
+        previousSuggestionsRef.current,
+        mentionCandidatesWithGroups,
+      );
     }
 
     return [];
-  }, [matchingSuggestions, mentionQuery, userSearchQuery.isFetching]);
+  }, [
+    matchingSuggestions,
+    mentionCandidatesWithGroups,
+    mentionQuery,
+    userSearchQuery.isFetching,
+  ]);
 
   React.useEffect(() => {
     if (mentionQuery === null) {

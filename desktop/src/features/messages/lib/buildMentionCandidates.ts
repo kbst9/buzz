@@ -2,7 +2,7 @@ import {
   coalesceAgentAutocompleteCandidates,
   coalesceAutocompleteCandidatesByKey,
   type DirectoryAgentRespondPolicy,
-  isAgentIdentityInManagedList,
+  isAgentIdentityInAllowedList,
   shouldHideAgentFromMentions,
 } from "@/features/agents/lib/agentAutocompleteEligibility";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
@@ -41,7 +41,6 @@ export function buildMentionCandidates({
   managedAgentNamesByPubkey,
   managedAgentPersonaIds,
   managedAgentPersonaIdsByPubkey,
-  managedAgentPubkeys,
   managedAgents,
   memberPubkeys,
   members,
@@ -61,7 +60,6 @@ export function buildMentionCandidates({
   managedAgentNamesByPubkey: ReadonlyMap<string, string>;
   managedAgentPersonaIds: ReadonlySet<string>;
   managedAgentPersonaIdsByPubkey: ReadonlyMap<string, string>;
-  managedAgentPubkeys: ReadonlySet<string>;
   managedAgents: readonly ManagedAgent[] | undefined;
   memberPubkeys: ReadonlySet<string>;
   members: readonly ChannelMember[] | undefined;
@@ -79,16 +77,16 @@ export function buildMentionCandidates({
     if (isArchivedDiscovery(pubkey)) {
       return;
     }
-    // The local-ownership gate applies to NON-members only. A member agent
-    // was deliberately added to the channel — the relay already vetted that
-    // add (kind:9000 + per-user channel_add_policy, see MembersSidebar) —
-    // so hiding it here would leave a member that can never be mentioned.
-    // Non-member agents keep requiring local ownership (#2149): the managed
-    // list is the only liveness signal for agents surfaced from search or
-    // the relay directory.
+    // The eligibility gate applies to NON-members only. A member agent was
+    // deliberately added to the channel — the relay already vetted that add
+    // (kind:9000 + per-user channel_add_policy, see MembersSidebar) — so
+    // hiding it here would leave a member that can never be mentioned.
+    // Non-member agents must be in the scope-aware allowed set (#4913):
+    // locally managed agents plus relay-directory agents that can respond
+    // in the current scope.
     if (
       candidate.isMember !== true &&
-      !isAgentIdentityInManagedList(candidate, managedAgentPubkeys)
+      !isAgentIdentityInAllowedList(candidate, mentionableAgentPubkeys)
     ) {
       return;
     }

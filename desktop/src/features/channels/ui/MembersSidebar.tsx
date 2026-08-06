@@ -5,12 +5,23 @@ import {
   invalidateChannelState,
   useAddChannelMembersMutation,
   useChannelMembersQuery,
+  useChannelsQuery,
 } from "@/features/channels/hooks";
 import { attachManagedAgentToChannel } from "@/features/agents/channelAgents";
-import { coalesceAgentAutocompleteCandidates } from "@/features/agents/lib/agentAutocompleteEligibility";
+import {
+  coalesceAgentAutocompleteCandidates,
+  collectVerifiedAgentPubkeys,
+  getMentionableAgentPubkeys,
+  getSharedChannelIds,
+  isAgentIdentityInAllowedList,
+} from "@/features/agents/lib/agentAutocompleteEligibility";
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembers";
 import { formatMemberName } from "@/features/channels/lib/memberUtils";
+import {
+  canAddChannelMembers,
+  PRIVATE_CHANNEL_ADD_DENIED_MESSAGE,
+} from "@/features/channels/lib/channelMemberAdmission";
 import {
   useFlattenedUserSearchResults,
   useInfiniteUserSearchQuery,
@@ -20,6 +31,7 @@ import {
 import { formatOwnerLabel } from "@/features/profile/lib/identity";
 import { rankUserCandidatesBySearch } from "@/features/profile/lib/userCandidateSearch";
 import { usePresenceQuery } from "@/features/presence/hooks";
+import { VirtualizedList } from "@/shared/ui/VirtualizedList";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { changeChannelMemberRole } from "@/shared/api/tauri";
 import type {
@@ -153,6 +165,7 @@ export function MembersSidebar({
   >(() => new Set());
   const identityQuery = useIdentityQuery();
   const membersQuery = useChannelMembersQuery(channelId, open);
+  const channelsQuery = useChannelsQuery({ enabled: open });
   const addMembersMutation = useAddChannelMembersMutation(channelId);
   const changeRoleMutation = useMutation({
     mutationFn: async ({ pubkey, role }: { pubkey: string; role: string }) => {
@@ -216,9 +229,7 @@ export function MembersSidebar({
     if (!normalizedSearchQuery) {
       return activeMembers;
     }
-
     const profiles = memberProfilesQuery.data?.profiles ?? {};
-
     return activeMembers.filter((member) => {
       const normalizedPubkey = normalizePubkey(member.pubkey);
       const profile = profiles[normalizedPubkey] ?? null;
@@ -247,9 +258,18 @@ export function MembersSidebar({
     () => new Set(rawMembers.map((member) => normalizePubkey(member.pubkey))),
     [rawMembers],
   );
-  const canAddMembers =
-    (selfMember !== null || channel?.visibility === "open") &&
-    channel?.channelType !== "dm";
+  const canAddMembers = canAddChannelMembers({
+    channelType: channel?.channelType,
+    visibility: channel?.visibility,
+    selfRole: selfMember?.role,
+  });
+  // Distinguish "you can't add here" from "nothing to add" so a plain member of
+  // a private channel gets the reason instead of a silently missing affordance.
+  const showPrivateAddDeniedNotice =
+    !canAddMembers &&
+    selfMember !== null &&
+    channel?.channelType !== "dm" &&
+    channel?.visibility !== "open";
   const userSearchQuery = useInfiniteUserSearchQuery(deferredSearchQuery, {
     allowEmpty: false,
     enabled:
@@ -278,6 +298,19 @@ export function MembersSidebar({
         .map((member) => member.displayName?.trim().toLowerCase())
         .filter((label): label is string => Boolean(label)),
     );
+    const sharedChannelIds = getSharedChannelIds(channelsQuery.data);
+    const allowedAgentPubkeys = getMentionableAgentPubkeys({
+      currentPubkey,
+      eligibilityScope: { type: "community" },
+      managedAgentPubkeys: managedAgentsByPubkey.keys(),
+      relayAgents: relayAgentsQuery.data,
+      sharedChannelIds,
+      // Invite-flow standalone agents live in neither the managed list nor
+      // the kind:10100 directory; their search rows carry the Rust-derived
+      // verified `isAgent`, which keeps them addable here.
+      verifiedAgentPubkeys: collectVerifiedAgentPubkeys(userSearchResults),
+    });
+
     const addCandidate = (candidate: AddMemberSearchCandidate) => {
       const pubkey = normalizePubkey(candidate.pubkey);
       // Agents are NOT filtered by local ownership here. Who may add an agent
@@ -295,7 +328,8 @@ export function MembersSidebar({
             formatAddCandidateName(candidate).toLowerCase(),
           )) ||
         memberPubkeys.has(pubkey) ||
-        isArchivedDiscovery(pubkey)
+        isArchivedDiscovery(pubkey) ||
+        !isAgentIdentityInAllowedList(candidate, allowedAgentPubkeys)
       ) {
         return;
       }
@@ -374,6 +408,7 @@ export function MembersSidebar({
     });
   }, [
     canAddMembers,
+    channelsQuery.data,
     isArchivedDiscovery,
     currentPubkey,
     managedAgentsQuery.data,
@@ -386,7 +421,8 @@ export function MembersSidebar({
   const isAddSearchLoading =
     userSearchQuery.isLoading ||
     managedAgentsQuery.isLoading ||
-    relayAgentsQuery.isLoading;
+    relayAgentsQuery.isLoading ||
+    channelsQuery.isLoading;
   const handlePeopleSearchScroll = useUserSearchFetchMoreOnScroll(
     userSearchQuery,
     canAddMembers && normalizedDeferredSearchQuery.length > 0,
@@ -747,6 +783,14 @@ export function MembersSidebar({
                 value={searchQuery}
               />
             </label>
+            {showPrivateAddDeniedNotice ? (
+              <p
+                className="pt-2 text-sm text-muted-foreground"
+                data-testid="members-sidebar-add-denied"
+              >
+                {PRIVATE_CHANNEL_ADD_DENIED_MESSAGE}
+              </p>
+            ) : null}
           </DialogHeader>
 
           <div className="max-h-[calc(100vh-12rem)] overflow-y-auto pb-6">
@@ -806,11 +850,14 @@ export function MembersSidebar({
                     ) : null}
                   </div>
                 ) : filteredActiveMembers.length > 0 ? (
-                  <div>
-                    {filteredActiveMembers.map((member) =>
-                      renderMemberCard(member, isBot(member)),
-                    )}
-                  </div>
+                  <VirtualizedList
+                    className="h-[calc(100%_-_2.25rem)]"
+                    getItemKey={(member) => member.pubkey}
+                    items={filteredActiveMembers}
+                    renderItem={(member) =>
+                      renderMemberCard(member, isBot(member))
+                    }
+                  />
                 ) : (
                   <p className="px-4 py-3 text-sm text-muted-foreground">
                     {membersQuery.isLoading

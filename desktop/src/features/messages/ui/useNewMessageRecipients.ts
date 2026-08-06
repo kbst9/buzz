@@ -112,6 +112,7 @@ export function useNewMessageRecipients({
       : null;
     const eligibleAgentPubkeys = getMentionableAgentPubkeys({
       currentPubkey,
+      eligibilityScope: { type: "community" },
       managedAgentPubkeys: (managedAgentsQuery.data ?? []).map(
         (agent) => agent.pubkey,
       ),
