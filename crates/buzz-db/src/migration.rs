@@ -935,9 +935,10 @@ mod tests {
         // Claiming binds the claimant to agent_owner inside the claim txn;
         // NULL preserves plain member invites bit-for-bit. Single-use pin is
         // a schema-level CHECK so no future caller can mint a multi-use one.
-        // Renumbered 0026 -> 0027 -> 0028: upstream took 0026 for
-        // replica_heartbeat, then 0027 for the channel-id lookup index.
-        assert_eq!(migrations[27].version, 28);
+        // Renumbered 0026 -> 0027 -> 0028 -> 0029: upstream took 0026 for
+        // replica_heartbeat, 0027 for the channel-id lookup index, then 0028
+        // for long reaction payloads.
+        assert_eq!(migrations[27].version, 29);
         let agent_invites = migrations[27].sql.as_str();
         assert!(agent_invites.contains("ADD COLUMN agent_owner TEXT"));
         assert!(
@@ -947,9 +948,9 @@ mod tests {
         assert!(agent_invites.contains("CHECK (agent_owner IS NULL OR max_uses = 1)"));
 
         // Agent member-role classification: invite-claimed agents surface as
-        // role 'bot' in the NIP-43 roster. Renumbered 0028 -> 0029 alongside
-        // agent_invites when upstream took 0027.
-        assert_eq!(migrations[28].version, 29);
+        // role 'bot' in the NIP-43 roster. Renumbered 0028 -> 0029 -> 0030
+        // alongside agent_invites as upstream's sequence advanced.
+        assert_eq!(migrations[28].version, 30);
         let member_role = migrations[28].sql.as_str();
         assert!(member_role.contains("CHECK (role IN ('owner', 'admin', 'member', 'bot'))"));
         assert!(member_role.contains("SET role = 'bot'"));
