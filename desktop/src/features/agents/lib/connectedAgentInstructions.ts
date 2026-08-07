@@ -21,15 +21,31 @@ export function unitSlugForAgentName(name: string): string {
 export function buildAddAgentInstructions(input: {
   relayUrl: string;
   ownerPubkey: string;
-  /** Single-use agent invite code minted by the desktop (v2.…). */
+  /** Agent invite code minted by the desktop (v2.…). */
   inviteCode: string;
   /** Invite expiry as unix seconds, rendered as a deadline hint. */
   inviteExpiresAt?: number;
+  /**
+   * The invite's use budget. Omitted or 1 renders the single-use wording;
+   * greater budgets render the fleet wording (one code, many agents).
+   */
+  maxUses?: number;
 }): string {
-  const { relayUrl, ownerPubkey, inviteCode, inviteExpiresAt } = input;
+  const { relayUrl, ownerPubkey, inviteCode, inviteExpiresAt, maxUses } = input;
+  const budget =
+    maxUses !== undefined && maxUses > 1 ? `${maxUses} uses` : "single-use";
   const expiry = inviteExpiresAt
-    ? ` (single-use; expires ${new Date(inviteExpiresAt * 1000).toUTCString()})`
-    : " (single-use)";
+    ? ` (${budget}; expires ${new Date(inviteExpiresAt * 1000).toUTCString()})`
+    : ` (${budget})`;
+  const fleetHint =
+    maxUses !== undefined && maxUses > 1
+      ? `
+
+   Fleet option: this code admits up to ${maxUses} agents. Repeat the script
+   per agent, or declare the whole fleet once in flue-host/fleet.toml and run
+   flue-host/scripts/provision-fleet.ts (see flue-host/README.md
+   § Fleet provisioning) — each first connect draws one use.`
+      : "";
   return `You are operating a Linux host (with systemd) that will run a new standalone Buzz agent.
 Follow these steps exactly. Full reference: docs/standalone-agents.md in block/buzz.
 
@@ -47,7 +63,7 @@ Follow these steps exactly. Full reference: docs/standalone-agents.md in block/b
    The invite code replaces the old NIP-OA tag round-trip: the agent joins
    the community and is attributed to the owner the moment it first
    connects. Never ask for anyone's secret key — the invite code and the
-   host-generated keypair are all this setup needs.
+   host-generated keypair are all this setup needs.${fleetHint}
 
    (No script? Create /etc/buzz-agents/<name>.env and a buzz-acp-<name>.service
    per docs/standalone-agents.md §4–5 — same content, by hand.)

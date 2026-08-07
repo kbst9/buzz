@@ -198,9 +198,11 @@ export async function acceptJoinPolicy(
 /**
  * Mint an invite code on the active community's relay (owner/admin only).
  *
- * `agent: true` mints an agent-typed invite: single-use, and the claiming
- * keypair is attributed to the minter via `users.agent_owner_pubkey` at
- * claim time — the invite-based standalone-agent provisioning path.
+ * `agent: true` mints an agent-typed invite: every claiming keypair is
+ * attributed to the minter via `users.agent_owner_pubkey` at claim time —
+ * the invite-based standalone-agent provisioning path. Defaults to
+ * single-use; pass `maxUses` (bounded, 1..10000) to provision a fleet of N
+ * agents from one code.
  */
 export async function mintInvite(options?: {
   ttlSecs?: number;

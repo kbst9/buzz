@@ -58,11 +58,13 @@ pub struct MintInviteRequest {
     /// must be an integer from 1 through [`MAX_INVITE_USES`].
     #[serde(default)]
     pub max_uses: Option<i32>,
-    /// Mint an agent-typed invite: the claiming keypair joins as a member AND
-    /// is attributed to the minter via `users.agent_owner_pubkey` — the same
-    /// mapping a verified NIP-OA tag materializes at AUTH time. You own what
-    /// you mint: the recorded owner is always the authenticated minter. Agent
-    /// invites are single-use; `max_uses` must be omitted or `1`.
+    /// Mint an agent-typed invite: every claiming keypair joins as a `bot`
+    /// member AND is attributed to the minter via `users.agent_owner_pubkey` —
+    /// the same mapping a verified NIP-OA tag materializes at AUTH time. You
+    /// own what you mint: the recorded owner is always the authenticated
+    /// minter. Agent invites must be bounded: `max_uses` defaults to `1` when
+    /// omitted and may be raised up to [`MAX_INVITE_USES`] to provision a
+    /// fleet from one code; unlimited is rejected.
     #[serde(default)]
     pub agent: bool,
 }
@@ -91,15 +93,11 @@ fn validate_mint_request(
     }
 
     if request.agent {
-        // One invite, one agent identity — a leaked code must not be able to
-        // mint a fleet attributed to the owner.
-        if request.max_uses.unwrap_or(1) != 1 {
-            return Err(api_error(
-                StatusCode::BAD_REQUEST,
-                "agent invites are single-use: omit max_uses or set it to 1",
-            ));
-        }
-        return Ok((ttl, Some(1)));
+        // Agent invites must be bounded — every claimant is attributed to the
+        // owner, so the use budget is the blast-radius bound for a leaked
+        // code. Omitted max_uses keeps the single-use default; an explicit
+        // value (already range-checked above) provisions a fleet.
+        return Ok((ttl, Some(request.max_uses.unwrap_or(1))));
     }
 
     Ok((ttl, request.max_uses))
@@ -874,22 +872,29 @@ mod tests {
     }
 
     #[test]
-    fn mint_request_validation_pins_agent_invites_to_single_use() {
+    fn mint_request_validation_bounds_agent_invites() {
         use super::validate_mint_request;
 
-        // Omitted max_uses defaults to 1; explicit 1 is accepted.
-        for max_uses in [None, Some(1)] {
+        // Omitted max_uses keeps the single-use default; an explicit bounded
+        // budget passes through verbatim — that is fleet provisioning.
+        for (max_uses, expected) in [
+            (None, Some(1)),
+            (Some(1), Some(1)),
+            (Some(2), Some(2)),
+            (Some(MAX_INVITE_USES), Some(MAX_INVITE_USES)),
+        ] {
             let request = super::MintInviteRequest {
                 ttl_secs: None,
                 max_uses,
                 agent: true,
             };
-            let (_, pinned) = validate_mint_request(&request).expect("agent request");
-            assert_eq!(pinned, Some(1));
+            let (_, bounded) = validate_mint_request(&request).expect("agent request");
+            assert_eq!(bounded, expected);
         }
 
-        // Anything else is a 400 — one invite, one agent identity.
-        for max_uses in [Some(2), Some(MAX_INVITE_USES)] {
+        // Out-of-range budgets stay a 400 for agent invites, same as member
+        // invites — the shared range check runs before the agent branch.
+        for max_uses in [Some(0), Some(MAX_INVITE_USES + 1)] {
             let request = super::MintInviteRequest {
                 ttl_secs: None,
                 max_uses,
@@ -897,7 +902,7 @@ mod tests {
             };
             assert_eq!(
                 validate_mint_request(&request)
-                    .expect_err("multi-use agent invite")
+                    .expect_err("out-of-range agent invite budget")
                     .0,
                 StatusCode::BAD_REQUEST
             );
@@ -1237,8 +1242,8 @@ mod tests {
             .await
             .expect("seed owner");
 
-        // Mint with the agent flag: max_uses pins to 1, the minter is the
-        // recorded owner.
+        // Mint with the agent flag: omitted max_uses defaults to 1, the
+        // minter is the recorded owner.
         let response = post_json(
             state.clone(),
             &host,
@@ -1256,7 +1261,8 @@ mod tests {
             Some(owner_hex.as_str())
         );
 
-        // An explicit multi-use agent mint is rejected.
+        // An explicit bounded budget mints a fleet invite — same owner
+        // attribution, larger draw-down budget.
         let response = post_json(
             state.clone(),
             &host,
@@ -1265,7 +1271,13 @@ mod tests {
             serde_json::json!({ "agent": true, "max_uses": 5 }).to_string(),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = read_json(response).await;
+        assert_eq!(json.get("max_uses").and_then(Value::as_i64), Some(5));
+        assert_eq!(
+            json.get("agent_owner").and_then(Value::as_str),
+            Some(owner_hex.as_str())
+        );
 
         // Claim as a fresh agent keypair: membership + owner attribution
         // commit together.
