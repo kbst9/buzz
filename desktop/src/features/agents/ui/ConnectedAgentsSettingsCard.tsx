@@ -337,7 +337,11 @@ function AddAgentDialog({
               Minting needs community owner or admin rights and a reachable
               relay.
             </p>
-            <Button onClick={() => mintNow()} size="sm" variant="outline">
+            <Button
+              onClick={() => mintNow(undefined)}
+              size="sm"
+              variant="outline"
+            >
               Try again
             </Button>
           </div>
