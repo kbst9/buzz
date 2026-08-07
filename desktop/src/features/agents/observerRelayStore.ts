@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { diag } from "@/shared/api/diag";
 import { subscribeToAgentObserverFrames } from "@/shared/api/observerRelay";
 import type { RelayEvent, ManagedAgent } from "@/shared/api/types";
 import type { ControlResultFrame } from "@/shared/api/types";
@@ -146,6 +147,9 @@ function registerKnownAgents(
     new Set(pubkeys.map((pubkey) => normalizePubkey(pubkey))),
   );
   recomputeKnownAgentPubkeys();
+  diag(
+    `registered sub=${subscriptionId} agents=[${[...knownAgentPubkeys].map((k) => k.slice(0, 8)).join(",")}]`,
+  );
   if (knownAgentPubkeys.size > 0 && pendingUnknownAgentFrames.length > 0) {
     const pending = pendingUnknownAgentFrames.splice(0);
     for (const event of pending) {
@@ -168,6 +172,19 @@ let unsubscribeRelay: (() => Promise<void>) | null = null;
 let startPromise: Promise<void> | null = null;
 let eventProcessingQueue: Promise<void> = Promise.resolve();
 let generation = 0;
+
+// Temporary diagnostics tap (feat/observer-diag): report derived per-agent
+// transcript sizes every 30s so a terminal launch can verify render-ready
+// items exist without driving the UI. Remove with the branch.
+setInterval(() => {
+  const sizes = [...transcriptByAgent.entries()]
+    .map(([key, state]) => `${key.slice(0, 8)}:${state.items.length}`)
+    .join(",");
+  const raw = [...eventsByAgent.entries()]
+    .map(([key, events]) => `${key.slice(0, 8)}:${events.length}`)
+    .join(",");
+  diag(`store sizes events=[${raw}] transcript=[${sizes}]`);
+}, 30_000);
 
 function notifyListeners() {
   for (const listener of listeners) {
@@ -410,6 +427,9 @@ async function handleRelayObserverEvent(
   const agentPubkey = observerTag(event, "agent");
   const frame = observerTag(event, "frame");
   if (!agentPubkey || frame !== "telemetry") {
+    diag(
+      `drop non-telemetry agent=${agentPubkey?.slice(0, 8) ?? "none"} frame=${frame ?? "none"}`,
+    );
     return;
   }
 
@@ -417,6 +437,9 @@ async function handleRelayObserverEvent(
   // frames until the first trusted-agent set is registered, then re-run this
   // same gate. Once initialized, unknown agents are rejected immediately.
   if (!knownAgentPubkeys.has(normalizePubkey(agentPubkey))) {
+    diag(
+      `drop unknown-agent agent=${agentPubkey.slice(0, 8)} known=[${[...knownAgentPubkeys].map((k) => k.slice(0, 8)).join(",")}]`,
+    );
     if (knownAgentsBySubscription.size === 0 || knownAgentPubkeys.size === 0) {
       pendingUnknownAgentFrames.push(event);
       if (pendingUnknownAgentFrames.length > MAX_PENDING_UNKNOWN_AGENT_FRAMES) {
@@ -437,6 +460,9 @@ async function handleRelayObserverEvent(
   // Defense-in-depth: verify the event sender matches the claimed agent pubkey.
   // The relay gates on is_agent_owner, but a compromised relay could misroute.
   if (normalizePubkey(event.pubkey) !== normalizePubkey(agentPubkey)) {
+    diag(
+      `drop sender-mismatch sender=${event.pubkey.slice(0, 8)} agent=${agentPubkey.slice(0, 8)}`,
+    );
     return;
   }
 
@@ -449,6 +475,9 @@ async function handleRelayObserverEvent(
       processLiveObserverEvent(agentPubkey, inner);
     }
   } catch (error) {
+    diag(
+      `decrypt failed agent=${agentPubkey.slice(0, 8)} error=${error instanceof Error ? error.message : String(error)}`,
+    );
     if (activeGeneration !== generation) {
       return;
     }

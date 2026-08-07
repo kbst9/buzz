@@ -631,6 +631,7 @@ pub fn run() {
             unarchive_builderlab_community,
             transfer_builderlab_community,
             title_bar_double_click,
+            diag_log,
             get_identity,
             get_nsec,
             generate_backup_passphrase,

@@ -1,3 +1,4 @@
+import { diag } from "@/shared/api/diag";
 import { buildObserverControlEvent } from "@/shared/api/tauriObserver";
 import type { RelayEvent } from "@/shared/api/types";
 import { KIND_AGENT_OBSERVER_FRAME } from "@/shared/constants/kinds";
@@ -15,6 +16,7 @@ export function subscribeToAgentObserverFrames(
   ownerPubkey: string,
   onEvent: (event: RelayEvent) => void,
 ) {
+  diag(`observer sub starting #p=${ownerPubkey.slice(0, 8)}`);
   return relayClient.subscribeLive(
     {
       kinds: [KIND_AGENT_OBSERVER_FRAME],
@@ -28,7 +30,12 @@ export function subscribeToAgentObserverFrames(
       limit: 1000,
       since: Math.floor(Date.now() / 1_000) - OBSERVER_LIVE_LOOKBACK_SECS,
     },
-    onEvent,
+    (event) => {
+      const agent =
+        event.tags.find((tag) => tag[0] === "agent")?.[1] ?? "no-agent-tag";
+      diag(`frame arrived agent=${agent.slice(0, 8)} id=${event.id.slice(0, 8)}`);
+      onEvent(event);
+    },
   );
 }
 

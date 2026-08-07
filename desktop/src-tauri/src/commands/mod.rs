@@ -1,4 +1,5 @@
 mod agent_access;
+mod diag;
 mod agent_auth;
 mod agent_config;
 mod agent_discovery;
@@ -66,6 +67,7 @@ mod workflows;
 mod workspace;
 
 pub use agent_access::*;
+pub use diag::*;
 pub use agent_auth::*;
 pub use agent_config::*;
 pub use agent_discovery::*;
