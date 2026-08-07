@@ -71,6 +71,34 @@ the `buzz` CLI needs to authenticate, and nothing else. This is a tighter
 posture than the previous adapters, which inherited the full unit
 environment into every shell.
 
+## Fleet provisioning (`fleet.toml`)
+
+One multi-use agent invite plus one declarative file provisions N agents
+with zero per-agent ceremony:
+
+1. Mint the invite in the desktop: Settings → Connected agents → Add agent →
+   fleet mint with a uses budget ≥ the fleet size. Every claimant is
+   attributed to the minting owner; the budget and expiry bound a leaked
+   code's blast radius.
+2. Copy [`fleet.toml.example`](fleet.toml.example) to `fleet.toml` and add
+   one `[[agents]]` entry per agent (name, model, optional respond_to /
+   display_name).
+3. On the host:
+
+```bash
+sudo -v && pnpm exec tsx scripts/provision-fleet.ts            # or --dry-run first
+```
+
+Each entry becomes `/etc/buzz-agents/<name>.env` + a
+`buzz-acp-<name>.service` unit (same shape as
+`scripts/new-standalone-agent.sh` in the repo root — fleet and
+hand-provisioned units stay interchangeable), with the keypair generated
+host-side. A shared `provider_env` file joins every unit via a systemd
+drop-in, so provider keys stay out of per-agent env files. Re-runs skip
+entries whose env file exists: growing the fleet is "add an entry, run
+again". Config parsing and file rendering live in `src/fleet/` with golden
+tests in `test/fleet.test.ts`.
+
 ## What v1 deliberately does not do
 
 - **Spawn stdio MCP servers.** Flue's transports are HTTP-only, and its

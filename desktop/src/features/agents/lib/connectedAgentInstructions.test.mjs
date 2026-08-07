@@ -43,6 +43,31 @@ test("add instructions omit the expiry hint when no expiry is known", () => {
   });
   assert.ok(text.includes("v2.test-invite-code (single-use)"));
   assert.ok(!text.includes("expires "));
+  assert.ok(!text.includes("Fleet option"));
+});
+
+test("add instructions switch to fleet wording for a multi-use budget", () => {
+  const text = buildAddAgentInstructions({
+    relayUrl: "wss://buzz.example.org",
+    ownerPubkey: "a".repeat(64),
+    inviteCode: "v2.fleet-code",
+    inviteExpiresAt: 1_754_000_000,
+    maxUses: 12,
+  });
+  assert.ok(text.includes("v2.fleet-code (12 uses; expires"));
+  assert.ok(!text.includes("single-use"));
+  assert.ok(text.includes("Fleet option: this code admits up to 12 agents."));
+  assert.ok(text.includes("fleet.toml"));
+  assert.ok(text.includes("provision-fleet.ts"));
+  // A budget of one keeps the single-use wording untouched.
+  const single = buildAddAgentInstructions({
+    relayUrl: "wss://buzz.example.org",
+    ownerPubkey: "a".repeat(64),
+    inviteCode: "v2.solo-code",
+    maxUses: 1,
+  });
+  assert.ok(single.includes("v2.solo-code (single-use)"));
+  assert.ok(!single.includes("Fleet option"));
 });
 
 test("edit instructions include only the fields that were set", () => {

@@ -14,6 +14,7 @@ import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { UserSearchResult } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
+import { Input } from "@/shared/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -242,12 +243,22 @@ function AddAgentDialog({
 }) {
   // Each dialog open mints a fresh single-use agent invite: the claiming
   // keypair joins the community and is attributed to this user relay-side,
-  // so no secret (owner's or agent's) ever crosses machines.
-  const mint = useMutation({ mutationFn: () => mintInvite({ agent: true }) });
+  // so no secret (owner's or agent's) ever crosses machines. Re-minting
+  // with a uses budget turns the same dialog into fleet provisioning — one
+  // code, N agents (see flue-host/README.md § Fleet provisioning).
+  const mint = useMutation({
+    mutationFn: (uses: number | undefined) =>
+      mintInvite(
+        uses !== undefined && uses > 1
+          ? { agent: true, maxUses: uses }
+          : { agent: true },
+      ),
+  });
   const { mutate: mintNow, reset: resetMint } = mint;
+  const [fleetUses, setFleetUses] = React.useState(5);
   React.useEffect(() => {
     if (open) {
-      mintNow();
+      mintNow(undefined);
     } else {
       resetMint();
     }
@@ -259,6 +270,7 @@ function AddAgentDialog({
         ? buildAddAgentInstructions({
             inviteCode: mint.data.code,
             inviteExpiresAt: mint.data.expiresAt,
+            maxUses: mint.data.maxUses ?? undefined,
             ownerPubkey,
             relayUrl,
           })
@@ -273,16 +285,43 @@ function AddAgentDialog({
           <DialogTitle>Add a connected agent</DialogTitle>
           <DialogDescription>
             Paste this to an AI (or a person) with shell access on the machine
-            that will run the agent. It carries a fresh single-use agent invite
-            — the agent joins this community as yours on first connect. No
-            secret key ever moves between machines.
+            that will run the agent. It carries a fresh agent invite — the agent
+            joins this community as yours on first connect. No secret key ever
+            moves between machines.
           </DialogDescription>
         </DialogHeader>
         {instructions ? (
-          <CopyableInstructions
-            testId="connected-agents-add-instructions"
-            text={instructions}
-          />
+          <>
+            <CopyableInstructions
+              testId="connected-agents-add-instructions"
+              text={instructions}
+            />
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span>Provisioning a fleet? Re-mint with a uses budget:</span>
+              <Input
+                aria-label="Fleet invite uses"
+                className="h-8 w-20"
+                data-testid="connected-agents-fleet-uses"
+                max={10000}
+                min={2}
+                onChange={(event) => {
+                  const parsed = Number.parseInt(event.target.value, 10);
+                  if (Number.isFinite(parsed)) setFleetUses(parsed);
+                }}
+                type="number"
+                value={fleetUses}
+              />
+              <Button
+                data-testid="connected-agents-fleet-mint"
+                disabled={mint.isPending || fleetUses < 2 || fleetUses > 10000}
+                onClick={() => mintNow(fleetUses)}
+                size="sm"
+                variant="outline"
+              >
+                Mint fleet invite
+              </Button>
+            </div>
+          </>
         ) : mint.isError ? (
           <div
             className="space-y-3 rounded-2xl border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm"
@@ -307,7 +346,7 @@ function AddAgentDialog({
             className="rounded-2xl border border-border/60 px-4 py-6 text-sm text-muted-foreground"
             data-testid="connected-agents-add-minting"
           >
-            Minting a single-use agent invite…
+            Minting the agent invite…
           </p>
         )}
       </DialogContent>

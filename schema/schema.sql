@@ -602,7 +602,8 @@ CREATE TABLE join_policy_acceptances (
 -- PK and UNIQUE both lead with community_id. max_uses NULL = unlimited.
 -- agent_owner (hex pubkey) marks an agent-typed invite: every claimant is
 -- attributed to that owner via users.agent_owner_pubkey inside the claim
--- transaction. Agent invites are pinned to max_uses = 1.
+-- transaction. Agent invites must be bounded (max_uses NOT NULL) — the use
+-- budget is the blast-radius bound for a leaked code; >1 provisions a fleet.
 
 CREATE TABLE relay_invites (
     community_id  UUID        NOT NULL REFERENCES communities(id),
@@ -620,8 +621,8 @@ CREATE TABLE relay_invites (
     PRIMARY KEY (community_id, id),
     UNIQUE (community_id, token_hash),
     CHECK (max_uses IS NULL OR use_count <= max_uses),
-    CONSTRAINT relay_invites_agent_owner_single_use
-        CHECK (agent_owner IS NULL OR max_uses = 1)
+    CONSTRAINT relay_invites_agent_owner_bounded
+        CHECK (agent_owner IS NULL OR max_uses IS NOT NULL)
 );
 
 CREATE INDEX relay_invites_expires_at_idx ON relay_invites (expires_at);

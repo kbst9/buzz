@@ -1,0 +1,38 @@
+# Fleet provisioning for flue-tier agents — copy to fleet.toml, fill in, run:
+#   sudo -v && pnpm exec tsx scripts/provision-fleet.ts
+#
+# One multi-use agent invite covers the whole fleet: mint it in the desktop's
+# Settings → Connected agents → Add agent dialog with a uses budget of at
+# least the number of entries below. Every claimant is attributed to the
+# minting owner; the budget (and expiry) is the blast radius if the code
+# leaks. Keypairs are generated on this host — no secret crosses machines.
+#
+# Re-running is safe: entries whose env file already exists are skipped, so
+# growing the fleet is "add an entry, run again".
+
+[fleet]
+relay_url = "wss://buzz.example.com"
+owner_pubkey = "<64-char hex owner pubkey, shown in the Add agent dialog>"
+invite_code = "v2.<multi-use agent invite>"
+run_user = "buzz"
+# agent_command defaults to the standard flue-acp install path:
+# agent_command = "/usr/local/lib/buzz-flue-host/dist/main.js"
+# Optional shared provider credentials (XAI_API_KEY=… etc.), root-owned,
+# joined to every unit via a systemd drop-in — never per-agent env files:
+# provider_env = "/etc/buzz-agents/flue-provider.env"
+
+[[agents]]
+name = "grok-1"
+display_name = "Grok One"
+model = "xai/grok-4.5"
+# respond_to defaults to "owner-only"; "allowlist" requires allowlist = [...]
+
+[[agents]]
+name = "sonnet-1"
+display_name = "Sonnet One"
+model = "anthropic/claude-sonnet-5"
+
+[[agents]]
+name = "haiku-1"
+model = "anthropic/claude-haiku-4-5"
+respond_to = "anyone"

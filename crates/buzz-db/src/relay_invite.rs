@@ -112,13 +112,15 @@ fn validate_mint_inputs(
                 "agent_owner must be a 64-char lowercase hex pubkey".into(),
             ));
         }
-        // One invite, one agent identity: the schema pins agent invites to a
-        // single use so a leaked code cannot mint a fleet attributed to the
-        // owner. Enforced here too so callers get a typed error, not a CHECK
-        // violation.
-        if max_uses != Some(1) {
+        // Agent invites must be BOUNDED: every claimant is attributed to the
+        // owner, so an unlimited invite would let a leaked code mint an
+        // unbounded set of identities in the owner's name. A bounded budget
+        // (1..=MAX_INVITE_USES, owner-chosen — >1 is deliberate fleet
+        // provisioning) keeps the blast radius explicit. Enforced here too so
+        // callers get a typed error, not a CHECK violation.
+        if max_uses.is_none() {
             return Err(crate::error::DbError::InvalidData(
-                "agent invites must have max_uses = 1".into(),
+                "agent invites must have a bounded max_uses".into(),
             ));
         }
     }
@@ -131,9 +133,10 @@ fn validate_mint_inputs(
 ///
 /// `ttl_secs` must be in the shared invite lifetime range.
 /// `max_uses` must be `None` (unlimited) or `Some(1..=10000)`.
-/// `agent_owner` (64-char lowercase hex) marks an agent-typed invite: the
+/// `agent_owner` (64-char lowercase hex) marks an agent-typed invite: every
 /// claimant is attributed to that owner at claim time. Agent invites require
-/// `max_uses = Some(1)`.
+/// a bounded `max_uses` (`Some(1..=10000)`) — a multi-use budget provisions a
+/// fleet from one code; unlimited agent invites are rejected.
 pub async fn mint_relay_invite(
     pool: &PgPool,
     community: CommunityId,
@@ -609,15 +612,17 @@ mod tests {
     #[test]
     fn mint_validation_enforces_agent_invite_contract() {
         let owner = "a".repeat(64);
-        assert!(validate_mint_inputs(3600, Some(1), Some(&owner)).is_ok());
-
-        // Agent invites are single-use by contract — unlimited and multi-use
-        // are rejected before any database access.
-        for max_uses in [None, Some(2), Some(MAX_INVITE_USES)] {
-            let error = validate_mint_inputs(3600, max_uses, Some(&owner))
-                .expect_err("agent invites must be single-use");
-            assert!(matches!(error, crate::DbError::InvalidData(_)), "{error:?}");
+        // Bounded budgets are accepted — single-use and fleet-sized alike.
+        for max_uses in [Some(1), Some(2), Some(MAX_INVITE_USES)] {
+            assert!(validate_mint_inputs(3600, max_uses, Some(&owner)).is_ok());
         }
+
+        // Unlimited agent invites are rejected before any database access:
+        // every claimant is attributed to the owner, so the use budget is the
+        // blast-radius bound for a leaked code.
+        let error = validate_mint_inputs(3600, None, Some(&owner))
+            .expect_err("agent invites must be bounded");
+        assert!(matches!(error, crate::DbError::InvalidData(_)), "{error:?}");
 
         // Owner must be a 64-char lowercase hex pubkey.
         let uppercase = "A".repeat(64);
@@ -902,6 +907,59 @@ mod tests {
             }
         );
         assert_eq!(use_count(&pool, community, invite.invite_id).await, 1);
+        delete_test_community(&pool, community).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn multi_use_agent_invite_provisions_a_bounded_fleet() {
+        let pool = setup_pool().await;
+        let community = make_test_community(&pool).await;
+        let owner = test_pubkey();
+        let invite = mint_relay_invite(&pool, community, &owner, 3600, Some(3), Some(&owner))
+            .await
+            .expect("mint fleet invite");
+        let hash = hash_v2_code(&invite.code);
+
+        // Three distinct claimants join off the one code, each admitted as a
+        // bot and attributed to the owner, drawing down the shared budget.
+        for expected_count in 1..=3 {
+            let agent = test_pubkey();
+            assert_eq!(
+                claim_relay_invite(&pool, community, &hash, &agent, None)
+                    .await
+                    .expect("fleet claim"),
+                ClaimOutcome::Joined {
+                    use_count: expected_count,
+                    uses_remaining: Some(3 - expected_count),
+                    agent_owner: Some(owner.clone()),
+                }
+            );
+            let agent_bytes = hex::decode(&agent).expect("agent hex");
+            let mapped = crate::user::get_agent_owner(&pool, community, &agent_bytes)
+                .await
+                .expect("read mapping")
+                .expect("mapping exists");
+            assert_eq!(hex::encode(mapped), owner);
+            let role: String = sqlx::query_scalar(
+                "SELECT role FROM relay_members WHERE community_id = $1 AND pubkey = $2",
+            )
+            .bind(community.as_uuid())
+            .bind(&agent)
+            .fetch_one(&pool)
+            .await
+            .expect("read member role");
+            assert_eq!(role, "bot");
+        }
+
+        // The budget is a hard bound: claimant four is refused.
+        assert_eq!(
+            claim_relay_invite(&pool, community, &hash, &test_pubkey(), None)
+                .await
+                .expect("exhausted claim"),
+            ClaimOutcome::Exhausted
+        );
+        assert_eq!(use_count(&pool, community, invite.invite_id).await, 3);
         delete_test_community(&pool, community).await;
     }
 

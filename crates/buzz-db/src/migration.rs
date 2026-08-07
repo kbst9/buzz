@@ -561,7 +561,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 30);
+        assert_eq!(migrations.len(), 31);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -959,6 +959,18 @@ mod tests {
         let member_role = migrations[29].sql.as_str();
         assert!(member_role.contains("CHECK (role IN ('owner', 'admin', 'member', 'bot'))"));
         assert!(member_role.contains("SET role = 'bot'"));
+
+        // Multi-use agent invites: the single-use pin relaxes to a
+        // bounded-budget CHECK so one invite can provision a fleet. The
+        // security property carried forward is boundedness, not uniqueness —
+        // unlimited agent invites stay impossible at the schema level.
+        // Renumbered 0029 -> 0031 on deploy: the fork sequence had already
+        // advanced to 0030 by the time this landed.
+        assert_eq!(migrations[30].version, 31);
+        let fleet_invites = migrations[30].sql.as_str();
+        assert!(fleet_invites.contains("DROP CONSTRAINT relay_invites_agent_owner_single_use"));
+        assert!(fleet_invites.contains("ADD CONSTRAINT relay_invites_agent_owner_bounded"));
+        assert!(fleet_invites.contains("CHECK (agent_owner IS NULL OR max_uses IS NOT NULL)"));
 
         let desired_schema = include_str!("../../../schema/schema.sql");
         assert!(
