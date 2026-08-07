@@ -854,6 +854,7 @@ export function HomeView({
                     undefined,
                     emojiTags,
                     mentionTags,
+                    undefined,
                     swarmTags,
                   );
                   const authorPubkey = currentPubkey ?? itemToReply.item.pubkey;

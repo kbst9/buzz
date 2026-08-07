@@ -361,11 +361,13 @@ export function splitOutgoingTags(tags: string[][] | undefined): {
   emojiTags: string[][];
   mentionTags: string[][];
   swarmTags: string[][];
+  linkPreviewTags: string[][];
 } {
   const mediaTags: string[][] = [];
   const emojiTags: string[][] = [];
   const mentionTags: string[][] = [];
   const swarmTags: string[][] = [];
+  const linkPreviewTags: string[][] = [];
   for (const tag of tags ?? []) {
     if (tag[0] === "emoji") {
       emojiTags.push(tag);
@@ -373,9 +375,11 @@ export function splitOutgoingTags(tags: string[][] | undefined): {
       mentionTags.push(tag);
     } else if (tag[0] === "swarm") {
       swarmTags.push(tag);
+    } else if (tag[0] === "link-preview") {
+      linkPreviewTags.push(tag);
     } else {
       mediaTags.push(tag);
     }
   }
-  return { mediaTags, emojiTags, mentionTags, swarmTags };
+  return { mediaTags, emojiTags, mentionTags, swarmTags, linkPreviewTags };
 }

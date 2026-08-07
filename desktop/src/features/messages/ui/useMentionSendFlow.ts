@@ -187,7 +187,6 @@ export function useMentionSendFlow({
           pubkeys: [] as string[],
         };
       }
-
       const managedAgentsByPubkey = await getManagedAgentsByPubkey();
       for (const agent of preparedManagedAgents) {
         managedAgentsByPubkey.set(normalizePubkey(agent.pubkey), agent);
@@ -198,13 +197,11 @@ export function useMentionSendFlow({
       ]);
       const errors: string[] = [];
       const pubkeys: string[] = [];
-
       for (const pubkey of uniqueNormalizedPubkeys(mentionPubkeys)) {
         const agent = managedAgentsByPubkey.get(pubkey);
         if (!agent) {
           continue;
         }
-
         try {
           if (participantPubkeys.has(pubkey)) {
             if (isProviderBackedAgent(agent)) {
@@ -231,7 +228,6 @@ export function useMentionSendFlow({
           );
         }
       }
-
       return {
         errors,
         pubkeys: uniqueNormalizedPubkeys(pubkeys),
@@ -713,6 +709,7 @@ export function useMentionSendFlow({
       capturedThreadContext = null,
       pendingImeta,
       queuedAttachments = [],
+      linkPreviewTags = [],
       sentDraftKey,
       recoveryDraftKey,
       spoileredAttachmentUrls = new Set(),
@@ -775,16 +772,16 @@ export function useMentionSendFlow({
             createdPersonaAgentPubkeySet.has(pubkey),
         );
         const pubkeys = explicitMentionPubkeys;
-        const baseOutgoingTags = buildCustomEmojiTags(trimmed, customEmoji);
         // Swarm aliasing (§2.1): ["swarm", <id>] tags for swarm mentions in
         // the text ride the outgoing tag set like emoji tags — media tags are
         // merged later in finishSend once background uploads complete;
         // splitOutgoingTags routes them to their validated send channel.
         const swarmTags = mentions.extractSwarmMentionTags(trimmed);
-        const outgoingTags =
-          swarmTags.length > 0
-            ? [...(baseOutgoingTags ?? []), ...swarmTags]
-            : baseOutgoingTags;
+        const outgoingTags = [
+          ...(buildCustomEmojiTags(trimmed, customEmoji) ?? []),
+          ...swarmTags,
+          ...linkPreviewTags,
+        ];
         const nonMemberPubkeys = getNonMemberMentionPubkeys(pubkeys);
         let promptNonMemberPubkeys = nonMemberPubkeys.filter(
           (pubkey) =>

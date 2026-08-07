@@ -42,11 +42,10 @@ type VerifiedAgentLike = {
 /**
  * Merge managed and verified (connected) agents into one dropdown option
  * list — any agent is eligible as leader or member. Deduped by normalized
- * pubkey (the managed record wins for identities present in both), then
- * identity-coalesced: same-owner duplicates sharing a display name collapse
- * to one option, preferring the managed instance — the same rule the DM and
- * member pickers apply (same-owner same-name agent fleets are proven live).
- * Cross-owner agents that merely share a name stay separate options.
+ * pubkey (the managed record wins for identities present in both). Distinct
+ * pubkeys sharing a display name stay separate options (#5202): agent
+ * identity is the pubkey, and same-owner same-name agent fleets are proven
+ * live — collapsing them made one unpickable as a swarm member.
  * Sorted by label for a stable dropdown order.
  */
 export function combineSwarmAgentOptions(

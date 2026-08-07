@@ -253,7 +253,10 @@ test("swarmDisplayName prefers the stored name, falls back to {Leader}'s swarm",
   assert.equal(swarmDisplayName("   ", "Beeatrice"), "Beeatrice's swarm");
 });
 
-test("combineSwarmAgentOptions: same-owner duplicate names collapse, managed preferred", () => {
+test("combineSwarmAgentOptions: distinct same-name agents stay separate options", () => {
+  // Upstream #5202: agent identity is the pubkey, not the display name — an
+  // owner may intentionally run multiple same-named agents, and collapsing
+  // them made one unpickable as a swarm member.
   const OWNER = "f".repeat(64);
   const options = combineSwarmAgentOptions(
     [{ pubkey: "1".repeat(64), name: "Fizz", avatarUrl: "managed.png" }],
@@ -277,10 +280,12 @@ test("combineSwarmAgentOptions: same-owner duplicate names collapse, managed pre
   );
 
   const labels = options.map((option) => option.label);
-  assert.deepEqual(labels, ["Bumble", "Fizz"]);
-  const fizz = options.find((option) => option.label === "Fizz");
-  assert.equal(fizz.pubkey, "1".repeat(64), "managed instance wins");
-  assert.equal(fizz.avatarUrl, "managed.png");
+  assert.deepEqual(labels, ["Bumble", "Fizz", "Fizz"]);
+  const fizzPubkeys = options
+    .filter((option) => option.label === "Fizz")
+    .map((option) => option.pubkey)
+    .sort();
+  assert.deepEqual(fizzPubkeys, ["1".repeat(64), "2".repeat(64)]);
 });
 
 test("combineSwarmAgentOptions: cross-owner same names stay separate", () => {

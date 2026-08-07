@@ -17,7 +17,6 @@ import { AgentSnapshotImportDialog } from "./AgentSnapshotImportDialog";
 import { TeamSnapshotExportDialog } from "./TeamSnapshotExportDialog";
 import { TeamSnapshotImportDialog } from "./TeamSnapshotImportDialog";
 import { TeamShareDialog } from "./TeamShareDialog";
-import { SecretRevealDialog } from "./SecretRevealDialog";
 import { TeamDeleteDialog } from "./TeamDeleteDialog";
 import { SwarmsSection } from "./SwarmsSection";
 import { TeamDialog } from "./TeamDialog";
@@ -348,24 +347,6 @@ export function AgentsView() {
             }
           }}
           open={agents.agentToAddToChannel !== null}
-        />
-      ) : null}
-      {agents.createdAgent ? (
-        <SecretRevealDialog
-          created={agents.createdAgent}
-          onOpenChange={(open) => {
-            if (!open) {
-              agents.setCreatedAgent(null);
-            }
-          }}
-        />
-      ) : null}
-      {personas.createdAgent ? (
-        <SecretRevealDialog
-          created={personas.createdAgent}
-          onOpenChange={(open) => {
-            if (!open) personas.dismissCreatedAgent();
-          }}
         />
       ) : null}
       {personas.personaDialogState ? (
