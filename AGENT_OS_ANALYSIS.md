@@ -180,18 +180,86 @@ Two clarifications the article sharpens:
 Side-note: the survey confirms Flue is Cloudflare's harness (modified Pi) —
 the plan's "T2, Cloudflare-computer shape" was literal.
 
-## Open spikes before committing
+## Resolved after first cut (same day, from bindings/persistence docs)
 
-- Bridge design: transport (UDS vs virtual-network loopback), and whether
-  bindings can present as a plain `buzz` command in `PATH`.
-- S3-mount git behavior under our MinIO (their block store should be
-  git-safe; verify clone/commit/push + crash-consistency empirically).
-- agentos-core persistence semantics standalone (actor storage is the
-  default story; core-standalone durability needs verification — the S3
-  mount may make it moot for the workspace).
-- WASI buzz-cli feasibility (only if the bridge disappoints).
-- Version pins: agentOS exact-pin at current stable; Flue 2.0.1 → 2.0.3 bump
-  check alongside.
+- **Bridge mechanism is fully specified by custom bindings**: host JS
+  functions (Zod schemas) auto-become CLI shims at
+  `/usr/local/bin/agentos-{name}` in the VM, are auto-injected into the
+  system prompt, return a JSON envelope, support per-binding timeouts. The
+  `buzz` bridge = a bindings group shelling out to the native CLI in the
+  flue-acp process (auth env lives there; **nsec never enters the VM**).
+  Cosmetic wrinkle only: shims are named `agentos-…`; a two-line guest
+  wrapper script presents plain `buzz` in `PATH`. WASI buzz-cli becomes the
+  fallback, not the plan.
+- **Core-standalone persistence**: VM creation supplies one SQLite
+  descriptor (sidecar writes FS chunks/session state through it, not through
+  JS). In core mode that's a SQLite file we manage; mostly moot for the
+  workspace, which rides the S3 mount. Verify root-FS semantics in the spike.
+
+## Remaining unknowns (sharpened 2026-08-08)
+
+### Escalation mechanics
+- **The egress hole — most important open item.** The VM is default-deny,
+  but the escalated Docker container gets whatever network Docker gives it:
+  unless the `docker()` provider exposes network config
+  (`--network none`/internal + allowlist), escalation is a one-command
+  escape from the egress policy. Pin down before enabling the tier at all.
+- **Filesystem disjointness.** Sandbox FS mounts into the VM at
+  `/mnt/sandbox`; nothing projects the VM's S3 workspace into the sandbox.
+  Workable pattern: copy through the mount, build, copy artifacts back —
+  agent-visible ceremony, slow for big trees, sandbox is ephemeral (disposed
+  with the VM). Needs a convention + prompt guidance + perf check.
+- **Failure UX.** What a native binary invocation actually errors with
+  in-VM determines whether the model self-corrects to the sandbox binding.
+  Mitigate via the binding description (auto-injected into the prompt).
+- **Escalation is a capability**: any prompt-injected turn can call a
+  registered binding — register the sandbox binding per-agent (fleet.toml
+  flag), never fleet-wide default.
+- Lifecycle hygiene: container leaks on flue-acp crash; churn per session at
+  fleet scale. Observe empirically.
+
+### Which sandbox
+- **Decided by posture: local `docker()` on gradient** (cloud providers are
+  per-second billed and not self-hostable — out). Unverified specifics in
+  `sandbox-agent` (separate product, v0.4.2, preview — pin exact): base
+  image selection (we want a custom pinned image: cargo/rustc, node/pnpm,
+  just, git), CPU/mem limits, rootless support, container naming/cleanup,
+  cold-start latency, and the network knobs above. One afternoon on gradient.
+- Phase-6 note: plain Docker is fine for our own agents; hosting strangers
+  wants gVisor/Kata underneath. Not now.
+
+### Tooling to add
+- `buzz` bridge: build it (mechanism resolved above).
+- `git-credential-nostr`: small open seam — git's credential-helper protocol
+  is a stdin/stdout exchange, bindings are flag/JSON-shaped. Guest wrapper
+  speaking the helper protocol → binding call, or bridge-side token
+  pre-fetch. Small spike.
+- **Web fetch — product decision (Kevin).** Fluelo fetches the web today
+  (local sandbox had host network); default-deny VM egress breaks that.
+  Options: per-agent VM egress allowlist, or (recommended) a host-side
+  `agentos-fetch` binding — keeps default-deny, centralizes per-agent
+  policy + audit.
+- Registry adds: unzip/xz as custom WASM (cheap). Skip curl (fetch binding
+  covers it), gh, ffmpeg for now.
+
+### Cross-cutting
+- **macOS sidecar support unknown** — docs name only server platforms
+  (Node/Bun/Deno on Railway/K8s/Vercel). If Linux-only, dev + golden tests
+  run on gradient/CI, which changes DX. Check in the first spike hour.
+- S3-mount git behavior under our MinIO (block store should be git-safe;
+  verify clone/commit/push + crash-consistency empirically).
+- VM-per-ACP-session vs per-agent: start per-session (matches
+  Flue-instance-per-session), revisit for memory at scale.
+- Version pins: agentOS exact-pin at current stable + `sandbox-agent`
+  exact-pin; Flue 2.0.1 → 2.0.3 bump check alongside.
+
+## Spike order
+
+1. `docker()` egress/network config (the gating unknown)
+2. macOS sidecar support (shapes where dev happens)
+3. `buzz` binding + guest wrapper (+ credential-helper seam)
+4. S3-mount git behavior on MinIO
+5. Failure-UX + copy-through-mount ergonomics
 
 ## References
 
