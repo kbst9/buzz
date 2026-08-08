@@ -140,6 +140,46 @@ Consistent with plan decision 3: the adapter seam is ours.
    as the standard binding; harness policy (not autodetection) decides what
    runs there (cargo builds; browsers if ever).
 
+## Industry validation & the actor question (added 2026-08-08)
+
+Nathan Flurry (agentOS creator) published "Run Your Harness Outside of the
+Sandbox (Why and How)" (x.com/NathanFlurry/status/2081768022025658672,
+2026-08): the industry — OpenAI Agents SDK, Anthropic Managed Agents,
+Vercel Eve, Cloudflare Flue, Amp Orbs — has converged on **harness outside
+the sandbox, sandbox exposed as tools**. That is topology T2 verbatim; his
+three "why" reasons map point-for-point onto what Buzz already does:
+
+| Article's reason | Where Buzz already does it |
+|---|---|
+| Blast radius: loop/retries/history must survive sandbox death | buzz-acp + systemd own the loop; the conversation IS relay events; observer transcript archives owner-side |
+| Trust boundary: LLM creds, permissions, audit, agent-to-agent outside | Ring 1 host-side; `respond_to` gating in buzz-acp; relay events + hash-chain audit; agent↔agent routes through the relay |
+| Sleeping sandbox: something outside must schedule/wake/index | buzz-acp holds the WS; scale-to-zero = Phase-5 push leases; sessions indexable relay-side |
+
+Two clarifications the article sharpens:
+
+1. **agentOS wears two hats.** For mainstream harnesses (Claude Code, Codex,
+   OpenCode) that cannot run split natively, agentOS's VM *hosts the harness*
+   with the external sandbox mounted under it — their compatibility story.
+   That is NOT our path: Flue is a programmable harness with a native sandbox
+   seam (his own FAQ: Pi — which Flue forks — "supports it directly"), and
+   putting Flue inside a VM would force model credentials into a trust
+   boundary, breaking T2's core property. Flue stays on the host, outside
+   both sandbox tiers; agentOS is the light exec tier only.
+2. **Rivet Actors are not an alternative to agentOS — they're an alternative
+   to buzz-acp, and we keep buzz-acp** (plan decision 2). The actor pitch —
+   durable loop, state-next-to-loop, sleep/wake, wake-on-request,
+   multiplayer — is exactly the job buzz-acp + systemd + the relay already
+   do (one "actor" per agent = one unit; the relay is the state and
+   multiplayer layer). Adopting rivetkit would mean porting NIP-42 auth,
+   gating, queueing, and the observer lane to TS actors for sleep/wake
+   economics we don't need at current scale (idle unit ≈ one small Rust
+   process + one WS), and wake-on-mention requires relay push leases
+   (Phase 5) with or without actors. Revisit only at hundreds-of-agents
+   scale; `agentos-core` without actors is an officially supported mode.
+
+Side-note: the survey confirms Flue is Cloudflare's harness (modified Pi) —
+the plan's "T2, Cloudflare-computer shape" was literal.
+
 ## Open spikes before committing
 
 - Bridge design: transport (UDS vs virtual-network loopback), and whether
