@@ -264,6 +264,37 @@ the plan's "T2, Cloudflare-computer shape" was literal.
 - Version pins: agentOS exact-pin at current stable + `sandbox-agent`
   exact-pin; Flue 2.0.1 → 2.0.3 bump check alongside.
 
+## Variant E candidate: computer-on-celld (added 2026-08-08)
+
+`denoland/celld` (Apache-2.0, alpha; single Rust binary, signed releases) is
+**self-hosted distributed Durable Objects**: one SQLite per cell, replicated
+to an S3-compatible bucket (MinIO works), nodes coordinate through the
+bucket alone (object-storage CAS, no control plane), idle cells hibernate.
+Its Cloudflare-compat table covers cloudflare/computer's load-bearing
+joints: DO SQLite storage, alarms, **inbound hibernatable WebSockets**
+(computerd's capnweb channel), JS RPC/service bindings, and even Worker
+Loader (experimental, `CELLD_WORKER_LOADER`) for the isolate backends.
+
+So **computer-on-celld = the fully self-hosted form of variant C**: the
+Workspace DO on celld on gradient, computerd FUSE-projecting it into a
+local Docker container, state authoritative in MinIO. It would deliver
+pre-built what Phase 2 otherwise constructs: S3-authoritative workspace,
+projection-into-sandbox, hibernating per-agent state. It also dissolves the
+actor question — celld IS the self-hosted actor substrate (no rivetkit).
+
+Why it is not the Phase-2 default: maturity stacking — celld self-describes
+as alpha, computer as "NOT suitable for production," the isolate tier is
+experimental², and their mutual conformance is unproven (mitigation: celld
+fails loudly on unsupported APIs, never silently). agentOS is one preview
+dep with a stable line and a shipping light-VM tier. Hibernation economics
+also stay theoretical until Phase-5 push leases exist — an agent cell
+holding an outbound Nostr WebSocket never hibernates (celld documents
+outbound sockets pinning residency).
+
+**Watch-triggers for the compat spike**: computer exits preview, celld
+exits alpha, or Phase-5 push leases land. Any one justifies a
+computer-on-celld spike as the potential end-state substrate.
+
 ## Spike order
 
 1. `docker()` egress/network config (the gating unknown)
