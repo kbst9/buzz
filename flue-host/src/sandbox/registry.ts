@@ -1,3 +1,4 @@
+import { auditingTier } from "./audit.js";
 import { localTier } from "./local.js";
 import type { SandboxTier } from "./types.js";
 
@@ -16,12 +17,17 @@ const DEFAULT_TIER = "local";
 
 const tiers = new Map<string, SandboxTier>();
 
-/** Register a tier under its name. Duplicate names are a programmer error. */
+/**
+ * Register a tier under its name. Duplicate names are a programmer error.
+ * Registered tiers are wrapped with the per-exec audit log (M0.5) — every
+ * tier the selector hands out audits for free; raw tier objects stay
+ * available to the conformance suite via direct import.
+ */
 export function registerSandboxTier(tier: SandboxTier): void {
   if (tiers.has(tier.name)) {
     throw new Error(`sandbox tier "${tier.name}" is already registered`);
   }
-  tiers.set(tier.name, tier);
+  tiers.set(tier.name, auditingTier(tier));
 }
 
 /** Look up a tier by name, failing loudly with the known names. */

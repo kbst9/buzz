@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -13,6 +13,7 @@ import type { SessionEnv } from "@flue/runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createFlueEngine } from "../../src/engine/flue.js";
 import type { AgentEngine } from "../../src/engine/types.js";
+import { type AuditLine, onAuditLine } from "../../src/sandbox/audit.js";
 import {
   renderSandboxViolation,
   type SandboxTier,
@@ -433,6 +434,8 @@ export function describeSandboxConformance(tier: SandboxTier): void {
       });
 
       it("plays one full turn with a real exec in this tier", async () => {
+        const auditLines: AuditLine[] = [];
+        const unsubscribe = onAuditLine((line) => auditLines.push(line));
         const initId = client.request("initialize", {
           protocolVersion: 2,
           clientCapabilities: {},
@@ -478,6 +481,23 @@ export function describeSandboxConformance(tier: SandboxTier): void {
         expect(completed).toBeDefined();
         const output = JSON.stringify(completed);
         expect(output).toContain(`golden=marker-${tier.name}`);
+
+        // M0.5: the registry-wrapped tier emits one audit line per exec —
+        // versioned schema, argv0 + hash only, violations attached.
+        unsubscribe();
+        const goldenCommand = 'printf "golden=%s pwd=%s" "$CONF_GOLDEN_MARKER" "$PWD"';
+        const auditLine = auditLines.find(
+          (line) => line.cmd_sha256 === createHash("sha256").update(goldenCommand).digest("hex"),
+        );
+        expect(auditLine).toMatchObject({
+          v: 1,
+          tier: tier.name,
+          argv0: "printf",
+          exit: 0,
+          violations: [],
+        });
+        expect(auditLine?.cwd).toBe(workspace);
+        expect(auditLine?.ms).toBeGreaterThanOrEqual(0);
       });
 
       it("cancel during a sandboxed exec → durable abort → stopReason cancelled", async () => {
