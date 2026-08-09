@@ -216,9 +216,28 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 | M0.3 fleet smoke | ✅ 2026-08-10 (live PASS 9.4 s vs Fluelo; exit 2 proven vs stopped unit) |
 | M0.4 canary agent | ☐ (parked on invite — **flagged to Kevin 2026-08-10**) |
 | M0.5 audit log | ✅ 2026-08-10 (golden asserts lines; live lines in `journalctl -u buzz-acp-flue`) |
-| M0.6 workspace bench | ☐ |
+| M0.6 workspace bench | ✅ 2026-08-10 (gradient baseline PASS: pjdfstest 6791 tests, fio, git workload, coherence) |
 
 ## Progress notes (dated; newest first)
+
+### 2026-08-10 — M0.6 done (baseline on gradient local disk)
+
+- `workspace-bench.sh` baseline on gradient ext4/NVMe, overall PASS
+  (`~/bench/reports/local-baseline-20260809T224755Z.{json,md}`):
+  pjdfstest **6791 tests / 155 files PASS** (86.8 s, subset =
+  git-relevant syscall dirs, built at `85a8aea9` — pass
+  `PJDFSTEST_REF=85a8aea9` on M2 runs for a strict pin); fio 4k randrw
+  ≈12.8 k IOPS, 1 M seq write ≈3.2 GB/s, read ≈6.4 GB/s (the numbers M2
+  candidates get compared against); git workload green (clone 333 ms,
+  20 commits 903 ms, rebase 207 ms, gc 125 ms, fsck 59 ms, hash match);
+  coherence probes exercised same-dir (~10 ms floor).
+- Instruments installed on gradient via apt (registry row): fio 3.36,
+  autoconf/automake/libtool for the pjdfstest build. pjdfstest caches in
+  `~/.cache/workspace-bench/pjdfstest`.
+- Two bench-authoring bugs caught by first runs: rebase-stage conflicts
+  (main/feature rounds now mutate disjoint file ranges — the stage
+  measures history rewriting, not conflict resolution) and `git fsck -q`
+  (no such flag; exit 129 read as corruption).
 
 ### 2026-08-10 — M0.5 done (live on gradient)
 
