@@ -85,7 +85,7 @@ function parseTables(source: string): {
   const lines = source.split(/\r?\n/);
   for (let i = 0; i < lines.length; i += 1) {
     const lineNo = i + 1;
-    const line = lines[i].trim();
+    const line = (lines[i] ?? "").trim();
     if (line === "" || line.startsWith("#")) continue;
 
     if (line === "[fleet]") {
@@ -230,6 +230,7 @@ export function parseFleetConfig(source: string): FleetConfig {
     throw new FleetConfigError("fleet.invite_code must start with v2.");
   }
 
+  const providerEnv = optionalString(rawFleet, "provider_env", "fleet");
   const fleet: FleetSettings = {
     relayUrl,
     ownerPubkey,
@@ -238,7 +239,7 @@ export function parseFleetConfig(source: string): FleetConfig {
     agentCommand:
       optionalString(rawFleet, "agent_command", "fleet") ??
       DEFAULT_AGENT_COMMAND,
-    providerEnv: optionalString(rawFleet, "provider_env", "fleet"),
+    ...(providerEnv === undefined ? {} : { providerEnv }),
   };
 
   if (rawAgents.length === 0) {
