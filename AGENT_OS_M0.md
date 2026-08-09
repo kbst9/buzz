@@ -211,7 +211,7 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 
 | Item | Status |
 |---|---|
-| M0.1 gate wiring | ✅ 2026-08-10 (`feat/sandbox-m0`; merge to deploy pending green full CI on gradient) |
+| M0.1 gate wiring | ✅ 2026-08-10 (merged to deploy behind the green M0 checkpoint CI) |
 | M0.2 conformance suite | ✅ 2026-08-10 (`feat/sandbox-m0`) |
 | M0.3 fleet smoke | ✅ 2026-08-10 (live PASS 9.4 s vs Fluelo; exit 2 proven vs stopped unit) |
 | M0.4 canary agent | ☐ (parked on invite — **flagged to Kevin 2026-08-10**) |
@@ -219,6 +219,22 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 | M0.6 workspace bench | ✅ 2026-08-10 (gradient baseline PASS: pjdfstest 6791 tests, fio, git workload, coherence) |
 
 ## Progress notes (dated; newest first)
+
+### 2026-08-10 — M0 checkpoint: M0.1/2/3/5/6 complete, merged to deploy
+
+- Merge gate: full `just ci` (with `CHECK_FILE_SIZES_BASE=HEAD^1`) green
+  on gradient at the branch tip; flue-check now runs 59 tests + 3
+  sanctioned skips inside it. `feat/sandbox-m0` merged to deploy behind
+  it (12 commits + this note).
+- **M0.4 is the sole open item and the critical path**: the M1 entry gate
+  is "M0 complete", and M1's exit gate needs canary smoke — both wait on
+  the **canary invite (park point 1, Kevin)**. Everything scripted around
+  it is ready: `provision-fleet.ts` + fleet.toml consume the invite;
+  `BUZZ_FLUE_SANDBOX` env-pinning is live in the deployed dist;
+  fleet-smoke targets any unit by env.
+- Live-fleet posture after this checkpoint: the flue unit runs the
+  registry-wrapped `local` tier dist (audit lines live); relay, DB, and
+  the other five units untouched.
 
 ### 2026-08-10 — M0.6 done (baseline on gradient local disk)
 
