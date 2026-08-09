@@ -209,6 +209,17 @@ the plan's "T2, Cloudflare-computer shape" was literal.
   Workable pattern: copy through the mount, build, copy artifacts back —
   agent-visible ceremony, slow for big trees, sandbox is ephemeral (disposed
   with the VM). Needs a convention + prompt guidance + perf check.
+  **Better pattern, stolen from cloudflare/computer** (MIT, preview — the
+  matured "variant C"; its container backend FUSE-projects the
+  authoritative Durable-Object workspace INTO the sandbox via `computerd`):
+  make the workspace authoritative outside and project it in. For us: a
+  host-side JuiceFS-class mount of the agent's S3 prefix (same MinIO, same
+  prefix as the VM's `s3` mount) bind-mounted into the Docker container —
+  one source of truth, no copy ceremony, artifacts land in the workspace
+  automatically. Computer itself stays unusable as a tier (DO + Dynamic
+  Workers + CF Containers at every joint — platform-bound, and
+  "NOT suitable for production" by its own README), but it is the best
+  reference implementation of the T2 workspace-projection pattern.
 - **Failure UX.** What a native binary invocation actually errors with
   in-VM determines whether the model self-corrects to the sandbox binding.
   Mitigate via the binding description (auto-injected into the prompt).
@@ -259,7 +270,9 @@ the plan's "T2, Cloudflare-computer shape" was literal.
 2. macOS sidecar support (shapes where dev happens)
 3. `buzz` binding + guest wrapper (+ credential-helper seam)
 4. S3-mount git behavior on MinIO
-5. Failure-UX + copy-through-mount ergonomics
+5. Failure-UX + workspace projection into the Docker tier (bind-mounted
+   JuiceFS-class mount of the agent's S3 prefix — the cloudflare/computer
+   pattern — instead of copy-through-`/mnt/sandbox`)
 
 ## References
 
