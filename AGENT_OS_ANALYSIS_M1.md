@@ -1,11 +1,13 @@
-# agentOS Readiness Analysis — Phase-2 Sandbox Tier
+# agentOS Analysis (M1 reference) — Phase-2 Sandbox Tier
 
 > **Fork-local analysis doc (deploy branch only — never upstream).**
-> Date: **2026-08-08**. Companion to [AGENTOS_HOST_PLAN.md](AGENTOS_HOST_PLAN.md)
-> (v2) — this is the readiness re-check for its **Phase 2 (sandbox hardening
-> tier)**, against agentOS **v0.2.15** (stable, 2026-07-28) and
-> **v0.2.16-rc.2** (2026-08-07). agentOS is preview software and moves fast;
-> re-verify against current docs before acting on specifics.
+> Date: **2026-08-08/09** (renamed from AGENT_OS_ANALYSIS.md 2026-08-09).
+> Companions: [AGENTOS_HOST_PLAN.md](AGENTOS_HOST_PLAN.md) (plan of record)
+> and [AGENT_OS_M0.md](AGENT_OS_M0.md) (**the goal-mode execution spec** —
+> M0 verification substrate + the M1+ rung gates that execute this
+> analysis's revised ladder). Readiness re-check against agentOS
+> **v0.2.15** / **v0.2.16-rc.2**; preview software moves fast —
+> re-verify specifics before acting.
 
 ## Verdict
 
