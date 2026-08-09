@@ -212,13 +212,42 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 | Item | Status |
 |---|---|
 | M0.1 gate wiring | ✅ 2026-08-10 (`feat/sandbox-m0`; merge to deploy pending green full CI on gradient) |
-| M0.2 conformance suite | ☐ in progress |
+| M0.2 conformance suite | ✅ 2026-08-10 (`feat/sandbox-m0`) |
 | M0.3 fleet smoke | ☐ |
 | M0.4 canary agent | ☐ (parked on invite — **flagged to Kevin 2026-08-10**) |
 | M0.5 audit log | ☐ |
 | M0.6 workspace bench | ☐ |
 
 ## Progress notes (dated; newest first)
+
+### 2026-08-10 — M0.2 done
+
+- Suite shape: `describeSandboxConformance(tier)` where the `SandboxTier`
+  object bundles the spec's `makeFactory` (as `createFactory`) and
+  `capabilities` — one argument instead of two, same contract. Registration
+  file for a tier ≈ 15 lines (`test/conformance/local.conformance.test.ts`
+  is the template).
+- The tier registry + selector (invariant 1) and the normalized
+  `SandboxViolation` + renderer (invariant 3) landed **now** rather than
+  in M1 — the suite and M0.5's audit wrapper both need the seam, and M1
+  reduces to adding `srt.ts` + one registration file. `BuzzAgent` resolves
+  its factory via `BUZZ_FLUE_SANDBOX` (default `local`, unknown → loud
+  error at session start).
+- Baseline: 55 passed / 3 skipped — the 3 skips are the egress fixtures,
+  the one sanctioned skip for `local`. Contract canary verified to fire
+  (flipped a pin → tsc fails → restored).
+- Egress fixture design note: the "denied external name" target uses the
+  reserved `.invalid` TLD, so if a tier's policy did not fire before DNS
+  the test sees a DNS error with no normalized violation line and fails —
+  i.e. the fixture also pins *policy-before-resolution* ordering.
+- **Gap flagged for M1 (srt adapter design)**: `SessionEnv` FS verbs run
+  host-side in every adapter built on `createSandboxSessionEnv`-style
+  wrapping; the model-visible `read` tool could read host paths (e.g.
+  `/proc/self/environ` of the host process) even when `exec` is
+  sandboxed. The srt adapter must scope the FS verbs to the workspace (or
+  route them through the sandbox) — the conformance secret-canary probes
+  exec-side only, deliberately, so this must be handled in the adapter,
+  not papered over in the suite.
 
 ### 2026-08-10 — M0.1 done
 
