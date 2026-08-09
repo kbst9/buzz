@@ -215,10 +215,28 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 | M0.2 conformance suite | ✅ 2026-08-10 (`feat/sandbox-m0`) |
 | M0.3 fleet smoke | ✅ 2026-08-10 (live PASS 9.4 s vs Fluelo; exit 2 proven vs stopped unit) |
 | M0.4 canary agent | ☐ (parked on invite — **flagged to Kevin 2026-08-10**) |
-| M0.5 audit log | ☐ |
+| M0.5 audit log | ✅ 2026-08-10 (golden asserts lines; live lines in `journalctl -u buzz-acp-flue`) |
 | M0.6 workspace bench | ☐ |
 
 ## Progress notes (dated; newest first)
+
+### 2026-08-10 — M0.5 done (live on gradient)
+
+- Registry wraps every registered tier with `auditingTier` — tiers never
+  log; violations raised mid-exec attach to that exec's line via
+  AsyncLocalStorage (the correlation path srt relies on in M1, pinned by
+  `test/audit.test.ts` incl. concurrent-exec isolation).
+- **Deviation (documented)**: the live done-means names
+  `buzz-acp-canary`; canary is parked on the invite (M0.4), so the live
+  proof ran on `buzz-acp-flue` — new dist deployed (backup:
+  `/usr/local/lib/buzz-flue-host/dist.bak-20260810`; rollback = rsync it
+  back + restart), smoke PASS 9.4 s, journal shows
+  `sandbox exec {"v":1,"tier":"local","argv0":"buzz",…,"exit":0}` for the
+  turn's real exec. Re-verify on the canary once minted.
+- **Deploy gotcha found live**: buzz-acp execs `dist/main.js` directly, and
+  a fresh tsc build drops the execute bit — the unit crash-looped
+  (`Permission denied`) until `chmod 755`. Durable fix: `pnpm build` now
+  chmods `dist/main.js` 755 itself.
 
 ### 2026-08-10 — M0.3 done (live on gradient)
 
