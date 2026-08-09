@@ -114,9 +114,14 @@ async function buzz(
   bin: string,
   identity: BuzzIdentity,
   args: string[],
+  options: { format?: "compact" | "full" } = {},
 ): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+  // Compact format strips `pubkey` from reads (learned live 2026-08-10: the
+  // thread poll could never attribute the reply) — reads that need authorship
+  // must use the full format.
+  const formatArgs = options.format === "full" ? [] : ["--format", "compact"];
   try {
-    const { stdout, stderr } = await execFileAsync(bin, ["--format", "compact", ...args], {
+    const { stdout, stderr } = await execFileAsync(bin, [...formatArgs, ...args], {
       env: { ...process.env, ...identity },
       timeout: 30_000,
       maxBuffer: 16 * 1024 * 1024,
@@ -223,14 +228,12 @@ async function main(): Promise<void> {
   let reply: { id: string } | undefined;
   while (Date.now() < deadline && !reply) {
     await sleep(3_000);
-    const thread = await buzz(bin, identity, [
-      "messages",
-      "thread",
-      "--channel",
-      channel,
-      "--event",
-      eventId,
-    ]);
+    const thread = await buzz(
+      bin,
+      identity,
+      ["messages", "thread", "--channel", channel, "--event", eventId],
+      { format: "full" },
+    );
     if (!thread.ok) continue; // transient relay/CLI hiccups keep polling
     try {
       const events = JSON.parse(thread.stdout) as {
