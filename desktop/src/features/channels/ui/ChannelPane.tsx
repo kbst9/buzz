@@ -45,9 +45,9 @@ import {
   containsWelcomePersonaMention,
   WelcomeComposerGuidanceLayer,
 } from "@/features/channels/ui/WelcomeComposerBanner";
+import { useWelcomeComposerBanner } from "@/features/channels/ui/useWelcomeComposerBanner";
 import { mentionsKnownAgent } from "@/features/channels/ui/ChannelPane.helpers";
 import { useEditLastOwnMessage } from "@/features/channels/ui/useEditLastOwnMessage";
-import { useWelcomeComposerBanner } from "@/features/channels/ui/useWelcomeComposerBanner";
 import { HuddleStartingView, HuddleTranscriptIntro } from "@/features/huddle";
 import { useChannelIntro } from "@/features/channels/ui/useChannelIntro";
 import type { ChannelPaneProps } from "@/features/channels/ui/ChannelPane.types";
@@ -207,14 +207,21 @@ export const ChannelPane = React.memo(function ChannelPane({
     agentPubkeysPending && hasOtherDmParticipant(activeChannel, currentPubkey);
   const isActiveWelcomeChannel =
     activeChannel !== null && isWelcomeExperience(activeChannel);
-  const { welcomeComposerBannerState, completeWelcomeComposerBanner } =
-    useWelcomeComposerBanner({ activeChannelId, isActiveWelcomeChannel });
   useComposerHeightPadding(
     timelineScrollRef,
     composerWrapperRef,
     `${activeChannelId}:${isSinglePanelView}:${hasMainComposerOverlay}`,
     "css-variable",
     () => messageTimelineRef.current?.settleAtBottom() ?? false,
+  );
+  const {
+    bannerState: welcomeComposerBannerState,
+    completeBanner: completeWelcomeComposerBanner,
+    dismissBanner: handleDismissWelcomeBanner,
+  } = useWelcomeComposerBanner(
+    activeChannelId,
+    isActiveWelcomeChannel,
+    currentPubkey ?? null,
   );
   const isEditInThread =
     editTarget != null &&
@@ -659,6 +666,7 @@ export const ChannelPane = React.memo(function ChannelPane({
               >
                 {isActiveWelcomeChannel && !timeoutState.active ? (
                   <WelcomeComposerGuidanceLayer
+                    onDismiss={handleDismissWelcomeBanner}
                     settingUp={welcomeKickoffSettingUp}
                     state={welcomeComposerBannerState}
                   >

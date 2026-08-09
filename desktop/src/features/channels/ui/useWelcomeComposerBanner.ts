@@ -1,4 +1,5 @@
 import * as React from "react";
+
 import {
   WELCOME_COMPOSER_BANNER_DISMISS_DURATION_SECONDS,
   WELCOME_COMPOSER_BANNER_HIDE_BUFFER_MS,
@@ -7,90 +8,107 @@ import {
   type WelcomeComposerBannerState,
 } from "@/features/channels/ui/WelcomeComposerBanner";
 
+const completedWelcomeComposerIdentityPubkeys = new Set<string>();
+
 /**
- * State machine for the welcome-channel composer banner.
+ * Manages the Welcome-channel composer hint banner's state machine.
  *
- * The banner shows a prompt until the member sends a message that engages a
- * welcome persona, then settles through `complete` → `dismissing` → `hidden`
- * on timers. Channels that already completed the banner stay hidden for the
- * rest of the session; switching channels resets the prompt otherwise.
+ * Remembers completion across the Welcome experience per identity for this app
+ * session, so the hint stays hidden while moving between the private and
+ * starter Welcome channels without leaking dismissal to another identity.
+ * - `completeBanner`: agent-mention path — plays the "Nice work." success
+ *   animation before auto-dismissing.
+ * - `dismissBanner`: manual X-button path — immediately begins the slide-down
+ *   dismiss animation.
  */
-export function useWelcomeComposerBanner({
-  activeChannelId,
-  isActiveWelcomeChannel,
-}: {
-  activeChannelId: string | null;
-  isActiveWelcomeChannel: boolean;
-}): {
-  welcomeComposerBannerState: WelcomeComposerBannerState;
-  completeWelcomeComposerBanner: () => void;
+export function useWelcomeComposerBanner(
+  activeChannelId: string | null,
+  isActiveWelcomeChannel: boolean,
+  identityPubkey: string | null,
+): {
+  bannerState: WelcomeComposerBannerState;
+  completeBanner: () => void;
+  dismissBanner: () => void;
 } {
-  const completedWelcomeBannerChannelIdsRef = React.useRef(new Set<string>());
-  const welcomeComposerDismissTimerRef = React.useRef<number | null>(null);
-  const welcomeComposerHideTimerRef = React.useRef<number | null>(null);
-  const [welcomeComposerBannerState, setWelcomeComposerBannerState] =
+  const dismissTimerRef = React.useRef<number | null>(null);
+  const hideTimerRef = React.useRef<number | null>(null);
+  const [bannerState, setBannerState] =
     React.useState<WelcomeComposerBannerState>("prompt");
 
-  const clearWelcomeComposerDismissTimer = React.useCallback(() => {
-    if (welcomeComposerDismissTimerRef.current !== null) {
-      window.clearTimeout(welcomeComposerDismissTimerRef.current);
-      welcomeComposerDismissTimerRef.current = null;
+  const clearTimers = React.useCallback(() => {
+    if (dismissTimerRef.current !== null) {
+      window.clearTimeout(dismissTimerRef.current);
+      dismissTimerRef.current = null;
     }
-    if (welcomeComposerHideTimerRef.current !== null) {
-      window.clearTimeout(welcomeComposerHideTimerRef.current);
-      welcomeComposerHideTimerRef.current = null;
+    if (hideTimerRef.current !== null) {
+      window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
     }
   }, []);
 
-  React.useEffect(
-    () => () => clearWelcomeComposerDismissTimer(),
-    [clearWelcomeComposerDismissTimer],
-  );
+  React.useEffect(() => () => clearTimers(), [clearTimers]);
 
   React.useEffect(() => {
-    clearWelcomeComposerDismissTimer();
-
+    clearTimers();
     if (
-      activeChannelId &&
       isActiveWelcomeChannel &&
-      completedWelcomeBannerChannelIdsRef.current.has(activeChannelId)
+      identityPubkey &&
+      completedWelcomeComposerIdentityPubkeys.has(identityPubkey)
     ) {
-      setWelcomeComposerBannerState("hidden");
+      setBannerState("hidden");
+      return;
+    }
+    setBannerState("prompt");
+  }, [clearTimers, identityPubkey, isActiveWelcomeChannel]);
+
+  const scheduleHide = React.useCallback(() => {
+    hideTimerRef.current = window.setTimeout(
+      () => {
+        setBannerState("hidden");
+        hideTimerRef.current = null;
+      },
+      WELCOME_COMPOSER_BANNER_DISMISS_DURATION_SECONDS * 1000 +
+        WELCOME_COMPOSER_BANNER_HIDE_BUFFER_MS,
+    );
+  }, []);
+
+  const completeBanner = React.useCallback(() => {
+    if (!activeChannelId || !isActiveWelcomeChannel || !identityPubkey) {
       return;
     }
 
-    setWelcomeComposerBannerState("prompt");
-  }, [
-    activeChannelId,
-    clearWelcomeComposerDismissTimer,
-    isActiveWelcomeChannel,
-  ]);
-
-  const completeWelcomeComposerBanner = React.useCallback(() => {
-    if (!activeChannelId || !isActiveWelcomeChannel) {
-      return;
-    }
-
-    clearWelcomeComposerDismissTimer();
-    completedWelcomeBannerChannelIdsRef.current.add(activeChannelId);
-    setWelcomeComposerBannerState("complete");
-    welcomeComposerDismissTimerRef.current = window.setTimeout(() => {
-      setWelcomeComposerBannerState("dismissing");
-      welcomeComposerDismissTimerRef.current = null;
-      welcomeComposerHideTimerRef.current = window.setTimeout(
-        () => {
-          setWelcomeComposerBannerState("hidden");
-          welcomeComposerHideTimerRef.current = null;
-        },
-        WELCOME_COMPOSER_BANNER_DISMISS_DURATION_SECONDS * 1000 +
-          WELCOME_COMPOSER_BANNER_HIDE_BUFFER_MS,
-      );
+    clearTimers();
+    completedWelcomeComposerIdentityPubkeys.add(identityPubkey);
+    setBannerState("complete");
+    dismissTimerRef.current = window.setTimeout(() => {
+      setBannerState("dismissing");
+      dismissTimerRef.current = null;
+      scheduleHide();
     }, WELCOME_PERSONA_ROTATION_MS + WELCOME_COMPOSER_BANNER_SUCCESS_SETTLE_MS);
   }, [
     activeChannelId,
-    clearWelcomeComposerDismissTimer,
+    clearTimers,
+    identityPubkey,
     isActiveWelcomeChannel,
+    scheduleHide,
   ]);
 
-  return { welcomeComposerBannerState, completeWelcomeComposerBanner };
+  const dismissBanner = React.useCallback(() => {
+    if (!activeChannelId || !isActiveWelcomeChannel || !identityPubkey) {
+      return;
+    }
+
+    clearTimers();
+    completedWelcomeComposerIdentityPubkeys.add(identityPubkey);
+    setBannerState("dismissing");
+    scheduleHide();
+  }, [
+    activeChannelId,
+    clearTimers,
+    identityPubkey,
+    isActiveWelcomeChannel,
+    scheduleHide,
+  ]);
+
+  return { bannerState, completeBanner, dismissBanner };
 }

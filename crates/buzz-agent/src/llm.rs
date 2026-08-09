@@ -1932,9 +1932,24 @@ fn classify_body_read_error(
     }
 }
 
+/// Provider bodies that mean "this model cannot accept image input", the
+/// signal the agent loop uses to strip rejected images from history and
+/// continue the turn (see `replace_unsupported_images`).
+///
+/// Deliberately tight, same doctrine as [`is_context_length_error`]: each
+/// phrase is a verbatim capability rejection observed live. Misclassifying a
+/// generic 400 as recoverable would mutate history for an error that removing
+/// images cannot fix.
 fn is_unsupported_image_input_error(body: &str) -> bool {
-    body.to_ascii_lowercase()
-        .contains("no endpoints found that support image input")
+    let b = body.to_ascii_lowercase();
+    // OpenRouter 404: no provider endpoint accepts images for this model.
+    b.contains("no endpoints found that support image input")
+        // OpenAI-compatible 400 from text-only single-model deployments,
+        // e.g. Crusoe serverless GLM: `"crusoeai/GLM-5.2-NVFP4 is not a
+        // multimodal model"`. Without this arm the 400 is terminal, the image
+        // stays in history, and every subsequent request in the session fails
+        // identically — the turn wedges until the harness/user gives up.
+        || b.contains("is not a multimodal model")
 }
 
 /// Build the terminal `AgentError::Llm` for a `post()` exit that has given up
@@ -2129,6 +2144,13 @@ where
                     "{status}: {body}"
                 ))));
             }
+            // Image-capability rejection is equally recoverable and equally
+            // deterministic: a text-only deployment 400s the same request
+            // forever. Typed here (not just on the 404 arm) because
+            // OpenAI-compatible providers report it as a 400.
+            if status == 400 && is_unsupported_image_input_error(&body) {
+                return Err(PostError::Agent(AgentError::UnsupportedImageInput(body)));
+            }
             return Err(PostError::Agent(AgentError::Llm(format!(
                 "{status}: {body}"
             ))));
@@ -2181,8 +2203,33 @@ where
                 }
             }
         }
-        return serde_json::from_slice(&buf)
-            .map_err(|e| PostError::Agent(AgentError::Llm(format!("json: {e}"))));
+        // A 2xx body that fails to parse (e.g. a provider flushing a
+        // truncated JSON document and closing the stream cleanly) is a
+        // transient upstream fault, not a request problem: retry it like a
+        // 5xx. Safe to re-send — a malformed body produced no parsed
+        // response, so no tool call was ever extracted from it, and the
+        // retried request is the identical completion POST captured in
+        // `body_bytes` at function entry.
+        match serde_json::from_slice(&buf) {
+            Ok(value) => return Ok(value),
+            Err(e) => {
+                if attempt + 1 < MAX_RETRIES {
+                    tracing::warn!(
+                        attempt = attempt + 1,
+                        max_attempts = MAX_RETRIES,
+                        error = %e,
+                        "llm: malformed response body, retrying"
+                    );
+                    backoff_with_jitter(attempt).await;
+                    continue;
+                }
+                return Err(PostError::Agent(terminal_llm_error(
+                    call_start.elapsed(),
+                    attempt + 1,
+                    &format!("json: {e}"),
+                )));
+            }
+        }
     }
     // Unreachable in practice: every iteration either returns or continues.
     // A fallthrough here would mean MAX_RETRIES was 0, which is rejected at
@@ -2237,22 +2284,56 @@ pub(crate) fn build_token_source(cfg: &Config) -> Result<Arc<dyn TokenSource>, A
     }
 }
 
+/// Completion-token cap that [`Llm::summarize`] actually requests from
+/// `provider`, given the caller's visible-text budget. OpenRouter grants
+/// reasoning a separate, equal budget on top of the text budget (see
+/// [`openrouter_summary_body`]), so its top-level cap is double the caller's
+/// budget; every other provider requests the caller's budget unchanged.
+/// Callers that reserve output headroom in an input budget
+/// (`handoff_prompt_budget_bytes`) must reserve THIS value, not the text
+/// budget — otherwise input plus the actual completion allowance can exceed
+/// the configured context window.
+pub(crate) fn summary_completion_cap(provider: Provider, max_output_tokens: u32) -> u32 {
+    match provider {
+        Provider::OpenRouter => max_output_tokens.saturating_mul(2),
+        Provider::Anthropic | Provider::OpenAi | Provider::Databricks | Provider::DatabricksV2 => {
+            max_output_tokens
+        }
+    }
+}
+
 /// Build the request body for `Llm::summarize` on `Provider::OpenRouter`.
 /// Extracted so tests can assert on the actual wire shape instead of a
-/// hand-rolled literal — summaries never carry `reasoning` (see
-/// `apply_openrouter_mutations`, which the summary path never calls).
-/// It spells the token limit `max_tokens` directly for the same reason: the
-/// mutation that renames it is never applied here.
+/// hand-rolled literal — summaries never carry config-driven reasoning
+/// *effort* (see `apply_openrouter_mutations`, which the summary path never
+/// calls). It spells the token limit `max_tokens` directly for the same
+/// reason: the mutation that renames it is never applied here.
 fn openrouter_summary_body(
     effective_model: &str,
     system_prompt: &str,
     user_prompt: &str,
     max_output_tokens: u32,
 ) -> Value {
+    // Reasoning models spend output tokens thinking before emitting any
+    // visible text, and that spend counts against `max_tokens`. Left
+    // unseparated, a model can burn the entire cap mid-reasoning and return an
+    // empty `content` — observed with deepseek-v4-flash, where 13 consecutive
+    // handoff attempts length-stopped inside the reasoning channel and every
+    // one degraded to lossy history truncation. Give reasoning its own
+    // equal-sized budget on top of the text budget so `max_output_tokens`
+    // remains what the caller means: visible summary text. `exclude` keeps the
+    // reasoning out of the response body; `summarize()` only reads `content`.
+    // Non-reasoning endpoints ignore the `reasoning` object (see
+    // `apply_openrouter_mutations` on why it is never paired with
+    // `provider.require_parameters`).
     json!({
         "model": effective_model,
         "stream": false,
-        "max_tokens": max_output_tokens,
+        "max_tokens": summary_completion_cap(Provider::OpenRouter, max_output_tokens),
+        "reasoning": {
+            "max_tokens": max_output_tokens,
+            "exclude": true,
+        },
         "messages": [
             { "role": "system", "content": system_prompt },
             { "role": "user", "content": user_prompt },
@@ -2501,6 +2582,12 @@ async fn openrouter_post(
             if status == 400 && is_context_length_error(&body) {
                 return Err(AgentError::LlmContextExceeded(format!("{status}: {body}")));
             }
+            // Same 400-shaped image rejection as the shared `post()` terminal:
+            // OpenRouter normally reports this as a 404 (handled above), but a
+            // BYOK/passthrough upstream can surface the provider's own 400.
+            if status == 400 && is_unsupported_image_input_error(&body) {
+                return Err(AgentError::UnsupportedImageInput(body));
+            }
             return Err(AgentError::Llm(format!("{status}: {body}")));
         }
         if let Some(len) = resp.content_length() {
@@ -2548,7 +2635,31 @@ async fn openrouter_post(
                 }
             }
         }
-        return serde_json::from_slice(&buf).map_err(|e| AgentError::Llm(format!("json: {e}")));
+        // Same malformed-body retry as the shared `post()` terminal: a
+        // truncated 2xx JSON body is transient upstream trouble, and
+        // re-sending is provably tool-safe — nothing was parsed, so no tool
+        // call could have been extracted, and the retry re-uses the
+        // identical `body_bytes` completion request.
+        match serde_json::from_slice(&buf) {
+            Ok(value) => return Ok(value),
+            Err(e) => {
+                if attempt + 1 < MAX_RETRIES {
+                    tracing::warn!(
+                        attempt = attempt + 1,
+                        max_attempts = MAX_RETRIES,
+                        error = %e,
+                        "llm: openrouter malformed response body, retrying"
+                    );
+                    backoff_with_jitter(attempt).await;
+                    continue;
+                }
+                return Err(terminal_llm_error(
+                    call_start.elapsed(),
+                    attempt + 1,
+                    &format!("json: {e}"),
+                ));
+            }
+        }
     }
     Err(terminal_llm_error(
         call_start.elapsed(),
@@ -4729,6 +4840,237 @@ mod tests {
         );
     }
 
+    /// Regression (write-compressor, tb21-twins-1): a provider returning
+    /// HTTP 200 with a *truncated* JSON body (cleanly closed, correct
+    /// framing, unparseable content) previously surfaced as a terminal
+    /// `AgentError::Llm("json: EOF while parsing a value ...")` on the very
+    /// first attempt, killing the agent turn. A malformed body is transient
+    /// upstream trouble and must be retried like a 5xx. Re-sending is
+    /// tool-safe: nothing was parsed, so no tool call was extracted from the
+    /// bad body, and the retry replays the identical completion request.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn post_retries_malformed_json_body_and_succeeds() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/x", listener.local_addr().unwrap());
+        let accepts = Arc::new(AtomicU32::new(0));
+        let accepts_srv = accepts.clone();
+
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+                let n = accepts_srv.fetch_add(1, Ordering::SeqCst);
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 4096];
+                while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match sock.read(&mut tmp).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(k) => buf.extend_from_slice(&tmp[..k]),
+                    }
+                }
+                if n == 0 {
+                    // First attempt: 200 OK with a truncated JSON document.
+                    // Content-Length matches the bytes actually sent, so the
+                    // body read completes cleanly — the fault is purely that
+                    // the JSON is cut off mid-value.
+                    let body = "{\"choices\":[{\"mess";
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body,
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                    continue;
+                }
+                // Subsequent attempts: complete valid JSON.
+                let body = "{\"ok\":true}";
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body,
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+
+        let client = Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let out = post(
+            &client,
+            &url,
+            &serde_json::json!({}),
+            false,
+            Duration::from_secs(5),
+            |b| b,
+        )
+        .await
+        .expect("post should succeed after retrying the malformed body");
+        assert_eq!(out, serde_json::json!({ "ok": true }));
+        assert_eq!(
+            accepts.load(Ordering::SeqCst),
+            2,
+            "server must see exactly 2 attempts (malformed body retried once)"
+        );
+    }
+
+    /// A persistently malformed 200 body exhausts MAX_RETRIES and surfaces
+    /// the terminal error with the `json:` detail plus cumulative
+    /// duration/attempt count — never an early first-attempt death.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn post_exhausts_retries_on_persistent_malformed_json() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/x", listener.local_addr().unwrap());
+        let accepts = Arc::new(AtomicU32::new(0));
+        let accepts_srv = accepts.clone();
+
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+                accepts_srv.fetch_add(1, Ordering::SeqCst);
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 4096];
+                while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match sock.read(&mut tmp).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(k) => buf.extend_from_slice(&tmp[..k]),
+                    }
+                }
+                let body = "{\"choices\":[{\"mess";
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body,
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+
+        let client = Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let err = post(
+            &client,
+            &url,
+            &serde_json::json!({}),
+            false,
+            Duration::from_secs(5),
+            |b| b,
+        )
+        .await
+        .unwrap_err();
+        match &err {
+            PostError::Agent(AgentError::Llm(msg)) => {
+                assert!(
+                    msg.contains("json:"),
+                    "expected the json parse detail, got: {msg}"
+                );
+                assert!(
+                    msg.contains("cumulative") && msg.contains("3 attempts"),
+                    "expected cumulative duration + exact attempt count, got: {msg}"
+                );
+            }
+            other => panic!("expected PostError::Agent(AgentError::Llm), got: {other:?}"),
+        }
+        assert_eq!(
+            accepts.load(Ordering::SeqCst),
+            MAX_RETRIES,
+            "server must see exactly MAX_RETRIES attempts — malformed bodies must be retried"
+        );
+    }
+
+    /// Same regression coverage for `openrouter_post`, which carries its own
+    /// retry loop: a truncated 200 body on the first attempt is retried and
+    /// the call succeeds on the second.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn openrouter_post_retries_malformed_json_body_and_succeeds() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/x", listener.local_addr().unwrap());
+        let accepts = Arc::new(AtomicU32::new(0));
+        let accepts_srv = accepts.clone();
+
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+                let n = accepts_srv.fetch_add(1, Ordering::SeqCst);
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 4096];
+                while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match sock.read(&mut tmp).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(k) => buf.extend_from_slice(&tmp[..k]),
+                    }
+                }
+                if n == 0 {
+                    let body = "{\"choices\":[{\"mess";
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body,
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                    continue;
+                }
+                let body = r#"{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"#;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body,
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+
+        let client = Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let out = openrouter_post(&client, &url, &json!({}), "key", Duration::from_secs(5))
+            .await
+            .expect("openrouter_post should succeed after retrying the malformed body");
+        assert!(out.is_object(), "expected a JSON object: {out:?}");
+        assert_eq!(
+            accepts.load(Ordering::SeqCst),
+            2,
+            "server must see exactly 2 attempts (malformed body retried once)"
+        );
+    }
+
     /// A body-read timeout on the first attempt triggers a retry under an
     /// escalated budget, and the call succeeds on the second attempt.
     ///
@@ -6263,8 +6605,14 @@ mod tests {
         assert!(body.get("max_completion_tokens").is_none());
     }
 
+    /// The summary body reserves `max_output_tokens` for visible text by
+    /// granting reasoning a separate, equal budget on top and excluding it
+    /// from the response. Without the separation, a reasoning model can spend
+    /// the entire cap thinking and length-stop with empty `content`, which
+    /// `summarize()` reports as an empty summary and the handoff degrades to
+    /// lossy truncation.
     #[test]
-    fn openrouter_summary_carries_neither_reasoning_nor_provider() {
+    fn openrouter_summary_budgets_reasoning_separately_and_carries_no_provider() {
         let body = openrouter_summary_body(
             "anthropic/claude-opus-4-7",
             "summarize",
@@ -6274,14 +6622,25 @@ mod tests {
         assert_eq!(body["model"], "anthropic/claude-opus-4-7");
         assert_eq!(body["messages"][0]["role"], "system");
         assert_eq!(body["messages"][1]["content"], "text to summarize");
-        assert_eq!(body["max_tokens"], 1024);
+        assert_eq!(
+            body["max_tokens"], 2048,
+            "total cap must cover the text budget plus the reasoning budget"
+        );
+        assert_eq!(
+            body["reasoning"]["max_tokens"], 1024,
+            "reasoning gets its own budget so it cannot starve the summary text"
+        );
+        assert_eq!(
+            body["reasoning"]["exclude"], true,
+            "reasoning must not be included in the response; summarize() reads only content"
+        );
+        assert!(
+            body["reasoning"].get("effort").is_none(),
+            "budget-based cap only; effort stays unset for the summary call"
+        );
         assert!(
             body.get("max_completion_tokens").is_none(),
             "summary body must use OpenRouter's token-limit spelling"
-        );
-        assert!(
-            body.get("reasoning").is_none(),
-            "summary body must not carry reasoning"
         );
         assert!(
             body.get("provider").is_none(),
@@ -7484,6 +7843,73 @@ mod tests {
         .unwrap_err();
         assert!(
             matches!(&err, AgentError::UnsupportedImageInput(s) if s.contains("support image input")),
+            "image rejection must reach the history-recovery path: got {err:?}"
+        );
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a deterministic capability rejection must not be retried"
+        );
+    }
+
+    /// OpenAI-compatible text-only deployments report the image rejection as a
+    /// 400, not OpenRouter's 404 — Crusoe serverless GLM answers
+    /// `"crusoeai/GLM-5.2-NVFP4 is not a multimodal model"` to every request
+    /// whose history contains an image. Before the 400 arm existed, this fell
+    /// through to terminal `AgentError::Llm`: the image stayed in history and
+    /// every later call in the session failed identically (measured live:
+    /// 8 wedged benchmark trials, 40 min of doomed retries each). Asserted
+    /// through `complete()` so the arm's return path into the convergence
+    /// mapper is covered, same doctrine as the context-400 tests above.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn openai_400_unsupported_image_is_typed_through_complete() {
+        let (base_url, captured) = spawn_sequence_stub(vec![StubHttpResponse {
+            status: 400,
+            body: json!({"error":{"message":"crusoeai/GLM-5.2-NVFP4 is not a multimodal model","type":"invalid_request_error"}}),
+        }])
+        .await;
+        let mut c = cfg(Provider::OpenAi);
+        c.base_url = base_url;
+        let llm = Llm::new(&c).unwrap();
+        let err = complete_model(&llm, &c, "gpt-probe-model")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, AgentError::UnsupportedImageInput(s) if s.contains("not a multimodal model")),
+            "a text-only deployment's 400 must reach the history-recovery path: got {err:?}"
+        );
+        assert_eq!(
+            captured.lock().await.len(),
+            1,
+            "a deterministic capability rejection must not be retried"
+        );
+    }
+
+    /// Same 400-shaped rejection at the OpenRouter terminal, which has its own
+    /// status ladder: a BYOK/passthrough upstream can surface the provider's
+    /// own 400 body instead of OpenRouter's 404 routing error.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn openrouter_post_400_unsupported_image_is_typed_and_not_retried() {
+        let (url, _captured, attempts) = spawn_openrouter_stub(vec![CannedResponse::new(
+            400,
+            r#"{"error":{"message":"crusoeai/GLM-5.2-NVFP4 is not a multimodal model"}}"#,
+        )])
+        .await;
+        let http = Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let err = openrouter_post(
+            &http,
+            &format!("{url}/x"),
+            &json!({}),
+            "key",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, AgentError::UnsupportedImageInput(s) if s.contains("not a multimodal model")),
             "image rejection must reach the history-recovery path: got {err:?}"
         );
         assert_eq!(
