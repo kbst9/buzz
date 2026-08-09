@@ -213,12 +213,37 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 |---|---|
 | M0.1 gate wiring | ✅ 2026-08-10 (`feat/sandbox-m0`; merge to deploy pending green full CI on gradient) |
 | M0.2 conformance suite | ✅ 2026-08-10 (`feat/sandbox-m0`) |
-| M0.3 fleet smoke | ☐ |
+| M0.3 fleet smoke | ✅ 2026-08-10 (live PASS 9.4 s vs Fluelo; exit 2 proven vs stopped unit) |
 | M0.4 canary agent | ☐ (parked on invite — **flagged to Kevin 2026-08-10**) |
 | M0.5 audit log | ☐ |
 | M0.6 workspace bench | ☐ |
 
 ## Progress notes (dated; newest first)
+
+### 2026-08-10 — M0.3 done (live on gradient)
+
+- **Dedicated smoke channel created**: `smoke`
+  (`9c4f2c4c-fc67-4b89-b90c-2fa0d4c902c2`), minted by the codex unit
+  identity, Fluelo added role=bot. The harness's live membership handling
+  subscribed Fluelo within a second of the add (INFO line in journal) —
+  no restart needed for new smoke targets.
+- **Gate evidence**: `fleet-smoke.ts` PASS against live Fluelo (reply in
+  9.4 s, journal clean, exit 0); with `buzz-acp-flue` stopped the same
+  command returned exit 2 (no-reply) — the enumerated-code contract holds;
+  unit restarted and reconnected cleanly afterwards.
+- **Bug found by the live run**: `--format compact` reads strip `pubkey`,
+  so the reply-attribution predicate never matched — the first two probes
+  reported NO-REPLY while Fluelo had in fact replied in ~4–5 s. Thread
+  polling now uses the full sig-stripped format. (The debugging detour also
+  re-verified the fleet was healthy the whole time; a temporary
+  `RUST_LOG=debug` runtime drop-in on the flue unit was added and REMOVED,
+  standing config restored, two unit restarts total.)
+- `--frames` mode (owner-side): query shape validated against the real
+  `archive.db` (`archived_events.pubkey` = frame author, kind 24200;
+  385 historical Fluelo frames match). A live `--frames` run needs the
+  desktop app open (archiver last wrote Aug 8); exercise it during the
+  next desktop session. Exit-code note: 3 covers both journal-errors and
+  frames-missing; the JSON `reason` field disambiguates.
 
 ### 2026-08-10 — M0.2 done
 
