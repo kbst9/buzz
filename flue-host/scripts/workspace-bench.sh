@@ -169,7 +169,7 @@ run_fio() {
       name: .jobname,
       read:  { iops: (.read.iops|round),  bw_mbps: ((.read.bw  / 1024)|round) },
       write: { iops: (.write.iops|round), bw_mbps: ((.write.bw / 1024)|round) },
-      fsync_p99_us: (.sync.lat_ns.percentile["99.000000"] // 0) / 1000 | round
+      fsync_p99_us: (((.sync.lat_ns.percentile["99.000000"] // 0) / 1000) | round)
     } ]
   }' "$out")"
 }
