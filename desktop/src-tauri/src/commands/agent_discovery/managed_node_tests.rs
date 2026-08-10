@@ -377,9 +377,13 @@ fn test_probe_node_times_out_on_hung_binary() {
         elapsed >= probe_timeout,
         "probe_node returned before deadline: {elapsed:?} < {probe_timeout:?}"
     );
-    // Must not hang past the deadline by more than the poll interval + margin.
+    // Must not hang far past the deadline. The margin only needs to be large
+    // enough to catch a broken deadline/kill path — which would let the child
+    // run to its full `sleep 30`, i.e. ~30s — while tolerating the kill+reap
+    // and scheduling latency of a heavily loaded CI host (the 3s margin flaked
+    // there). 12s stays well under the ~30s a real regression would produce.
     assert!(
-        elapsed < probe_timeout + std::time::Duration::from_secs(3),
+        elapsed < probe_timeout + std::time::Duration::from_secs(12),
         "probe_node exceeded deadline by too much: {elapsed:?}"
     );
 }
