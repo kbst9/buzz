@@ -5,6 +5,7 @@ mod community_fetch;
 mod config;
 mod credential_sink;
 mod definition_fetch;
+mod delivery_state;
 mod engram_fetch;
 mod filter;
 mod observer;
@@ -1927,6 +1928,31 @@ async fn tokio_main() -> Result<()> {
 
     let pubkey_hex = config.keys.public_key().to_hex();
 
+    // Durable delivery (opt-in): load the persisted per-channel completion
+    // watermarks so startup subscribes can replay mentions missed while the
+    // process was down or in-flight when it was killed. Resolved AFTER
+    // workspace::prepare so the default state dir lands inside the nest.
+    // Init failure degrades to today's behavior (startup-watermark floor),
+    // never blocks startup.
+    let delivery: Option<delivery_state::DeliveryHandle> = if config.durable_delivery {
+        let state_dir = resolve_delivery_state_dir(
+            config.state_dir.as_deref(),
+            std::env::current_dir().ok().as_deref(),
+        );
+        match delivery_state::DeliveryHandle::init(state_dir.clone(), pubkey_hex.clone()) {
+            Ok(handle) => Some(handle),
+            Err(e) => {
+                tracing::warn!(
+                    state_dir = %state_dir.display(),
+                    "durable delivery disabled — state dir unusable: {e}"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Parse BUZZ_AUTH_TAG into a nostr::Tag for NIP-OA relay membership delegation.
     let relay_auth_tag: Option<nostr::Tag> = std::env::var("BUZZ_AUTH_TAG")
         .ok()
@@ -2159,8 +2185,38 @@ async fn tokio_main() -> Result<()> {
         tracing::warn!("no channel subscriptions resolved — agent will sit idle");
     }
     let mut subscribed_channel_ids = HashSet::with_capacity(channel_filters.len());
+    // Durable delivery: floor each startup subscribe at the persisted
+    // completion watermark (clamped to the backfill look-back window) instead
+    // of process start. The relay's REQ replay then re-delivers anything past
+    // the frontier through the normal live-subscription path — same filter
+    // kinds, same gates, same queue — which is the startup backfill. Bounds:
+    // the look-back clamp (warned when it truncates), the event-channel
+    // backpressure replay machinery, and the queue's per-channel depth cap.
+    let backfill_cutoff = startup_watermark.saturating_sub(config.backfill_max_age_secs);
     for (channel_id, filter) in &channel_filters {
-        if let Err(e) = relay.subscribe_channel(*channel_id, filter.clone()).await {
+        let replay_since = delivery
+            .as_ref()
+            .and_then(|d| d.startup_replay_since(*channel_id, backfill_cutoff));
+        match replay_since {
+            Some(since) => tracing::info!(
+                %channel_id,
+                since,
+                lag_secs = startup_watermark.saturating_sub(since),
+                "startup subscribe floored at persisted delivery watermark"
+            ),
+            // Never-seen channel: persist the floor NOW, before any turn can
+            // be in flight — a kill before the channel's first completion
+            // must still leave a frontier to replay from on the next start.
+            None => {
+                if let Some(d) = delivery.as_ref() {
+                    d.seed_channel_floor(*channel_id, startup_watermark);
+                }
+            }
+        }
+        if let Err(e) = relay
+            .subscribe_channel_from(*channel_id, filter.clone(), replay_since)
+            .await
+        {
             tracing::warn!("failed to subscribe to channel {channel_id}: {e}");
         } else {
             subscribed_channel_ids.insert(*channel_id);
@@ -2781,6 +2837,16 @@ async fn tokio_main() -> Result<()> {
                                         tracing::debug!(channel_id = %ch, "membership notification: channel already subscribed");
                                     } else if let Some(filter) = config::resolve_dynamic_channel_filter(&config, ch, &rules) {
                                         tracing::info!(channel_id = %ch, "membership notification: subscribing to new channel");
+                                        // Durable delivery: persist the join-time
+                                        // floor before the channel's first turn can
+                                        // be in flight (same rationale as the
+                                        // startup seeding). Advances past any stale
+                                        // pre-removal watermark: mentions sent while
+                                        // the agent was not a member are not its to
+                                        // answer (parity with drain-on-removal).
+                                        if let Some(d) = delivery.as_ref() {
+                                            d.advance_channel_floor(ch, ts);
+                                        }
                                         if let Err(e) = relay.subscribe_channel_from(ch, filter, Some(ts)).await {
                                             tracing::warn!("failed to subscribe to new channel {ch}: {e}");
                                         } else {
@@ -2848,6 +2914,45 @@ async fn tokio_main() -> Result<()> {
                                 continue;
                             }
 
+                            let event_id_hex = buzz_event.event.id.to_hex();
+                            let event_created_at = buzz_event.event.created_at.as_secs();
+                            // Durable delivery: drop events already durably
+                            // processed in a previous process lifetime. The
+                            // startup backfill floors `since` at the persisted
+                            // watermark minus a skew buffer, so the tail of
+                            // the last completed batch is re-delivered on
+                            // every restart — this ring check absorbs it.
+                            // Checked BEFORE the owner control commands so a
+                            // replayed, already-consumed `!shutdown` cannot
+                            // re-kill the process on every restart.
+                            // (In-lifetime duplicates never get here: the
+                            // relay task's TwoGenDedup already dropped them.)
+                            if delivery
+                                .as_ref()
+                                .is_some_and(|d| d.is_seen(buzz_event.channel_id, &event_id_hex))
+                            {
+                                tracing::info!(
+                                    channel_id = %buzz_event.channel_id,
+                                    event_id = %event_id_hex,
+                                    "skipping already-processed event (durable-delivery replay)"
+                                );
+                                continue;
+                            }
+                            // Records a consumed owner control command as
+                            // durably processed: control commands never reach
+                            // the queue, so the watermark alone can never
+                            // cover them — without this, a restart replays
+                            // them as fresh owner intent.
+                            let record_control_consumed =
+                                |delivery: &Option<delivery_state::DeliveryHandle>| {
+                                    if let Some(d) = delivery.as_ref() {
+                                        d.record_seen(
+                                            buzz_event.channel_id,
+                                            &[(event_id_hex.clone(), event_created_at)],
+                                        );
+                                    }
+                                };
+
                             // Check: kind:9, content "!shutdown", from owner, mentions THIS agent.
                             let is_shutdown = is_owner_control_command(
                                 &buzz_event.event,
@@ -2864,6 +2969,12 @@ async fn tokio_main() -> Result<()> {
                                             sender = %buzz_event.event.pubkey.to_hex(),
                                             "shutdown command from owner — exiting gracefully"
                                         );
+                                        // Persist BEFORE initiating shutdown; the
+                                        // shutdown path drains the writer, so the
+                                        // ring entry lands and the next start does
+                                        // not replay this !shutdown into a
+                                        // restart-exit loop.
+                                        record_control_consumed(&delivery);
                                         let _ = shutdown_tx.send(());
                                         continue;
                                     }
@@ -2900,6 +3011,7 @@ async fn tokio_main() -> Result<()> {
                                                 "!cancel received but no in-flight task — no-op"
                                             );
                                         }
+                                        record_control_consumed(&delivery);
                                         continue; // consume event — do NOT push to queue
                                     }
                                 }
@@ -2945,6 +3057,7 @@ async fn tokio_main() -> Result<()> {
                                                 "!rotate received — invalidated idle channel session(s)"
                                             );
                                         }
+                                        record_control_consumed(&delivery);
                                         continue; // consume event — do NOT push to queue
                                     }
                                 }
@@ -3001,7 +3114,6 @@ async fn tokio_main() -> Result<()> {
                             // Capture author pubkey before queue.push() moves
                             // buzz_event.event (needed for mode gate below).
                             let author_hex = buzz_event.event.pubkey.to_hex();
-                            let event_id_hex = buzz_event.event.id.to_hex();
                             // Clone for the non-cancelling steer fork, which
                             // needs the event to render the steer body. The
                             // clone is unconditional because we don't know
@@ -3020,6 +3132,20 @@ async fn tokio_main() -> Result<()> {
                                 received_at: std::time::Instant::now(),
                                 prompt_tag,
                             });
+                            // DedupMode::Drop discards events for in-flight
+                            // channels by policy. Record that decided fate so
+                            // a restart replay does not resurrect a message
+                            // this mode deliberately ignored (the watermark
+                            // alone cannot cover it: the drop happened mid-
+                            // turn, above the completing batch's frontier).
+                            if !accepted {
+                                if let Some(d) = delivery.as_ref() {
+                                    d.record_seen(
+                                        buzz_event.channel_id,
+                                        &[(event_id_hex.clone(), event_created_at)],
+                                    );
+                                }
+                            }
                             // 👀 — immediate "seen" reaction, only if the event
                             // was actually queued (not dropped by DedupMode::Drop).
                             // Fire-and-forget: on rare fast-failure paths the
@@ -3241,6 +3367,7 @@ async fn tokio_main() -> Result<()> {
                     &mut respawn_tasks,
                     observer.clone(),
                     Some(&ctx.rest_client),
+                    delivery.as_ref(),
                 ) == LoopAction::Exit
                 {
                     break;
@@ -3256,6 +3383,7 @@ async fn tokio_main() -> Result<()> {
                     &respawn_tx,
                     &mut respawn_tasks,
                     observer.clone(),
+                    delivery.as_ref(),
                 ) == LoopAction::Exit
                 {
                     break;
@@ -3280,6 +3408,7 @@ async fn tokio_main() -> Result<()> {
                     &respawn_tx,
                     &mut respawn_tasks,
                     observer.clone(),
+                    delivery.as_ref(),
                 );
                 if pool.live_count() == 0 && !any_respawn_in_flight(&crash_history) {
                     tracing::error!("all agents dead — exiting");
@@ -3600,6 +3729,12 @@ async fn tokio_main() -> Result<()> {
     // for the background task to finish, rather than aborting immediately (#40).
     relay.shutdown().await;
 
+    // Give the durable-delivery writer a bounded window to drain pending
+    // watermark persists; anything unflushed simply replays on next start.
+    if let Some(d) = delivery {
+        d.shutdown().await;
+    }
+
     tracing::info!("buzz-acp stopped");
     Ok(())
 }
@@ -3608,6 +3743,54 @@ async fn tokio_main() -> Result<()> {
 enum LoopAction {
     Continue,
     Exit,
+}
+
+/// Resolve the durable-delivery state directory: an explicit override wins;
+/// otherwise `.buzz-acp-state` under the current working directory — which is
+/// the resolved nest, because `workspace::prepare` has already chdir'd there.
+///
+/// Pure function (inputs injected) so the precedence is unit-testable.
+fn resolve_delivery_state_dir(
+    configured: Option<&str>,
+    cwd: Option<&std::path::Path>,
+) -> std::path::PathBuf {
+    match configured {
+        Some(p) => std::path::PathBuf::from(p),
+        None => cwd
+            .map(|c| c.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".buzz-acp-state"),
+    }
+}
+
+#[cfg(test)]
+mod delivery_state_dir_tests {
+    use super::resolve_delivery_state_dir;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn explicit_override_wins() {
+        assert_eq!(
+            resolve_delivery_state_dir(Some("/var/lib/buzz"), Some(Path::new("/nest"))),
+            PathBuf::from("/var/lib/buzz")
+        );
+    }
+
+    #[test]
+    fn defaults_to_dotdir_under_cwd() {
+        assert_eq!(
+            resolve_delivery_state_dir(None, Some(Path::new("/home/agent/.buzz"))),
+            PathBuf::from("/home/agent/.buzz/.buzz-acp-state")
+        );
+    }
+
+    #[test]
+    fn no_cwd_falls_back_to_relative() {
+        assert_eq!(
+            resolve_delivery_state_dir(None, None),
+            PathBuf::from("./.buzz-acp-state")
+        );
+    }
 }
 
 fn event_mentions_agent(event: &nostr::Event, agent_pubkey_hex: &str) -> bool {
@@ -4150,6 +4333,7 @@ fn handle_prompt_result(
     respawn_tasks: &mut tokio::task::JoinSet<()>,
     observer: Option<observer::ObserverHandle>,
     rest_client: Option<&relay::RestClient>,
+    delivery: Option<&delivery_state::DeliveryHandle>,
 ) -> LoopAction {
     let before = pool.task_map().len();
     let agent_index = result.agent.index;
@@ -4275,7 +4459,18 @@ fn handle_prompt_result(
     }
 
     match &result.source {
-        PromptSource::Channel(ch) => queue.mark_complete(*ch),
+        PromptSource::Channel(ch) => {
+            // Some(meta) ⇔ the batch reached a durable end (reply posted or
+            // dead-lettered): every requeue-for-retry / cancel-merge path
+            // above already stripped the meta. That is exactly the frontier
+            // the persisted delivery watermark may advance to — never on
+            // receipt, never on requeue.
+            if let Some(meta) = queue.mark_complete(*ch) {
+                if let Some(delivery) = delivery {
+                    delivery.record_turn_complete(*ch, &meta);
+                }
+            }
+        }
         PromptSource::Heartbeat => *heartbeat_in_flight = false,
     }
 
@@ -4518,6 +4713,7 @@ fn recover_panicked_agent(
     respawn_tx: &mpsc::Sender<RespawnResult>,
     respawn_tasks: &mut tokio::task::JoinSet<()>,
     observer: Option<observer::ObserverHandle>,
+    delivery: Option<&delivery_state::DeliveryHandle>,
 ) {
     let task_id = join_error.id();
     let Some(meta) = pool.task_map_mut().remove(&task_id) else {
@@ -4527,14 +4723,25 @@ fn recover_panicked_agent(
     let i = meta.agent_index;
 
     // Requeue BEFORE mark_complete (same rationale as handle_prompt_result).
+    //
+    // Delivery-watermark fate for the panicked batch: requeue-for-retry and
+    // dead-letter follow the usual rules (the queue strips/keeps the turn
+    // meta accordingly). With no recoverable batch (DedupMode::Drop), the
+    // dispatched events died with the task — do NOT advance the watermark,
+    // so a process restart replays exactly what this panic lost.
+    let mut fate_decided = false;
     if let Some(batch) = meta.recoverable_batch {
         if let Some(ch) = meta.channel_id {
             if !removed_channels.contains(&ch) {
                 // Dead-letter on exhaustion is logged inside requeue(); a
                 // panic path has no outcome to report, so no notice here.
-                let _ = queue.requeue(batch);
-                tracing::warn!("requeued batch for panicked agent {i}");
+                if queue.requeue(batch).is_some() {
+                    fate_decided = true;
+                } else {
+                    tracing::warn!("requeued batch for panicked agent {i}");
+                }
             } else {
+                fate_decided = true;
                 tracing::debug!(
                     channel_id = %ch,
                     "dropping panicked batch for removed channel"
@@ -4544,7 +4751,12 @@ fn recover_panicked_agent(
     }
 
     if let Some(ch) = meta.channel_id {
-        queue.mark_complete(ch);
+        let turn_meta = queue.mark_complete(ch);
+        if fate_decided {
+            if let (Some(tm), Some(delivery)) = (turn_meta, delivery) {
+                delivery.record_turn_complete(ch, &tm);
+            }
+        }
         typing_channels.remove(&ch);
         tracing::warn!("cleared wedged in-flight channel {ch} from panicked agent {i}");
     } else {
@@ -4616,6 +4828,7 @@ fn drain_ready_join_results(
     respawn_tx: &mpsc::Sender<RespawnResult>,
     respawn_tasks: &mut tokio::task::JoinSet<()>,
     observer: Option<observer::ObserverHandle>,
+    delivery: Option<&delivery_state::DeliveryHandle>,
 ) -> LoopAction {
     while let Some(Some(join_result)) = pool.join_set.join_next().now_or_never() {
         if let Err(join_error) = join_result {
@@ -4632,6 +4845,7 @@ fn drain_ready_join_results(
                 respawn_tx,
                 respawn_tasks,
                 observer.clone(),
+                delivery,
             );
             if pool.live_count() == 0 && !any_respawn_in_flight(crash_history) {
                 return LoopAction::Exit;
@@ -7000,6 +7214,9 @@ mod build_mcp_servers_tests {
             invite_code: None,
             no_base_prompt: false,
             base_prompt_content: None,
+            durable_delivery: false,
+            state_dir: None,
+            backfill_max_age_secs: 86_400,
         }
     }
 
@@ -7225,6 +7442,9 @@ mod error_outcome_emission_tests {
             invite_code: None,
             no_base_prompt: false,
             base_prompt_content: None,
+            durable_delivery: false,
+            state_dir: None,
+            backfill_max_age_secs: 86_400,
         }
     }
 
@@ -7321,6 +7541,7 @@ mod error_outcome_emission_tests {
             &mut respawn_tasks,
             Some(observer.clone()),
             None,
+            None,
         );
 
         let turn_errors: Vec<_> = observer
@@ -7393,6 +7614,7 @@ mod error_outcome_emission_tests {
             &respawn_tx,
             &mut respawn_tasks,
             Some(observer.clone()),
+            None,
         );
 
         let panic = observer
@@ -7486,6 +7708,7 @@ mod error_outcome_emission_tests {
                 &mut respawn_tasks,
                 Some(observer.clone()),
                 None,
+                None,
             );
             let events = observer.snapshot();
             let turn_error = events.iter().find(|e| e.kind == "turn_error").unwrap();
@@ -7574,6 +7797,7 @@ mod error_outcome_emission_tests {
                 &mut crash_history,
                 &respawn_tx,
                 &mut respawn_tasks,
+                None,
                 None,
                 None,
             );
@@ -7681,6 +7905,7 @@ mod error_outcome_emission_tests {
                 &mut respawn_tasks,
                 None,
                 None,
+                None,
             );
             (
                 queue.pending_channels(),
@@ -7771,6 +7996,7 @@ mod error_outcome_emission_tests {
             &respawn_tx,
             &mut respawn_tasks,
             Some(observer.clone()),
+            None,
             None,
         );
 
@@ -7864,6 +8090,7 @@ mod error_outcome_emission_tests {
             &respawn_tx,
             &mut respawn_tasks,
             Some(observer.clone()),
+            None,
             None,
         );
 
@@ -7979,6 +8206,7 @@ mod error_outcome_emission_tests {
             &respawn_tx,
             &mut respawn_tasks,
             Some(observer.clone()),
+            None,
             None,
         );
 
@@ -8111,6 +8339,7 @@ mod error_outcome_emission_tests {
             &respawn_tx,
             &mut respawn_tasks,
             Some(observer.clone()),
+            None,
             None,
         );
 
@@ -8294,6 +8523,7 @@ mod error_outcome_emission_tests {
             &mut respawn_tasks,
             None,
             None,
+            None,
         );
 
         // The batch must not be requeued: pending_channels returns 0.
@@ -8377,6 +8607,7 @@ mod error_outcome_emission_tests {
             &mut crash_history,
             &respawn_tx,
             &mut respawn_tasks,
+            None,
             None,
             None,
         );

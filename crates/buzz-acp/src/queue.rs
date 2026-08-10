@@ -72,6 +72,31 @@ pub enum CancelReason {
     Steer,
 }
 
+/// Durable-completion metadata for a dispatched batch.
+///
+/// Captured by [`EventQueue::flush_next`] when a batch is handed to an agent
+/// and returned by [`EventQueue::mark_complete`] once the batch reached a
+/// durable end — reply posted or dead-lettered — i.e. when no `requeue*` call
+/// put its events back into pending state first. The delivery-state store
+/// (`delivery_state.rs`) consumes it to advance the persisted per-channel
+/// completion watermark.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TurnMeta {
+    /// `(event_id_hex, created_at_secs)` for every event this turn delivered:
+    /// the flushed batch, its cancelled-carryover events, and any mid-turn
+    /// native-steer consumptions folded in by [`EventQueue::remove_event`].
+    pub event_ids: Vec<(String, u64)>,
+    /// Newest `created_at` across [`event_ids`](Self::event_ids).
+    pub max_created_at: u64,
+    /// Watermark advance target: [`max_created_at`](Self::max_created_at)
+    /// clamped below the oldest event still pending for the channel at
+    /// completion time. Relay replay delivers stored events newest-first, so
+    /// a drained batch can complete while *older* events still wait in the
+    /// queue — advancing the persisted watermark past them would silently
+    /// skip them if the process dies before their own turn completes.
+    pub advance_to: u64,
+}
+
 /// A batch of events to prompt the agent with.
 #[derive(Debug, Clone)]
 pub struct FlushBatch {
@@ -123,11 +148,12 @@ pub struct FlushBatch {
 ///     in_flight_deadlines.insert(channel, now + in_flight_deadline)
 ///     return Some(FlushBatch { channel, events })
 ///
-///   mark_complete(channel_id):
+///   mark_complete(channel_id) → Option<TurnMeta>:
 ///     in_flight_channels.remove(channel_id)
 ///     in_flight_deadlines.remove(channel_id)
 ///     retry_counts.remove(channel_id)
 ///     clean up expired retry_after entry if present
+///     return in_flight_meta.remove(channel_id)   (Some ⇒ durable completion)
 ///
 ///   requeue(batch):
 ///     increment retry_counts[channel]
@@ -168,6 +194,14 @@ pub struct EventQueue {
     /// Must be strictly greater than `max_turn_duration` so a turn running to
     /// the hard cap returns via `mark_complete` before the backstop fires.
     in_flight_deadline: Duration,
+    /// Durable-completion metadata for each in-flight batch, recorded by
+    /// `flush_next` and consumed by `mark_complete`. Removed (without being
+    /// returned) whenever a `requeue*` path puts the batch's events back into
+    /// pending state — a requeued batch has not durably completed — and on
+    /// in-flight deadline expiry (fate unknown; a restart should replay).
+    /// Deliberately retained on `requeue()`'s dead-letter return: dead-letter
+    /// is a durable end, so the subsequent `mark_complete` must surface it.
+    in_flight_meta: HashMap<Uuid, TurnMeta>,
 }
 
 impl EventQueue {
@@ -189,6 +223,7 @@ impl EventQueue {
             cancel_reasons: HashMap::new(),
             withheld_native_steer: HashMap::new(),
             in_flight_deadline: Duration::from_secs(DEFAULT_IN_FLIGHT_DEADLINE_SECS),
+            in_flight_meta: HashMap::new(),
         }
     }
 
@@ -219,6 +254,56 @@ impl EventQueue {
                 *current = extended;
             }
         }
+    }
+
+    /// Record durable-completion metadata for a batch being dispatched.
+    fn record_in_flight_meta(
+        &mut self,
+        channel_id: Uuid,
+        events: &[BatchEvent],
+        cancelled: &[BatchEvent],
+    ) {
+        let mut event_ids = Vec::with_capacity(events.len() + cancelled.len());
+        let mut max_created_at = 0u64;
+        for be in events.iter().chain(cancelled) {
+            let ts = be.event.created_at.as_secs();
+            max_created_at = max_created_at.max(ts);
+            event_ids.push((be.event.id.to_hex(), ts));
+        }
+        self.in_flight_meta.insert(
+            channel_id,
+            TurnMeta {
+                event_ids,
+                max_created_at,
+                advance_to: max_created_at,
+            },
+        );
+    }
+
+    /// Oldest `created_at` among events still pending for `channel_id` across
+    /// all three pending pools (queued, withheld-for-steer, cancelled). Used
+    /// by `mark_complete` to clamp the watermark advance below anything that
+    /// has not durably completed yet.
+    fn min_pending_created_at(&self, channel_id: &Uuid) -> Option<u64> {
+        let queued = self
+            .queues
+            .get(channel_id)
+            .into_iter()
+            .flatten()
+            .map(|qe| qe.event.created_at.as_secs());
+        let withheld = self
+            .withheld_native_steer
+            .get(channel_id)
+            .into_iter()
+            .flatten()
+            .map(|qe| qe.event.created_at.as_secs());
+        let cancelled = self
+            .cancelled_batches
+            .get(channel_id)
+            .into_iter()
+            .flatten()
+            .map(|be| be.event.created_at.as_secs());
+        queued.chain(withheld).chain(cancelled).min()
     }
 
     /// Push an event into the queue for its channel.
@@ -278,6 +363,10 @@ impl EventQueue {
             );
             self.in_flight_channels.remove(&id);
             self.in_flight_deadlines.remove(&id);
+            // Fate unknown (the turn never reported back) — drop the meta so
+            // the persisted delivery watermark does NOT advance; a restart
+            // then replays the orphaned events rather than skipping them.
+            self.in_flight_meta.remove(&id);
             // Recover any withheld goose-native steer events for the expired
             // channel back to the queue front so normal dispatch delivers
             // them. Unlike the in-flight batch above (already delivered to a
@@ -320,6 +409,7 @@ impl EventQueue {
                         self.in_flight_deadlines
                             .insert(id, now + self.in_flight_deadline);
                         self.in_flight_batch_sizes.insert(id, cancelled.len());
+                        self.record_in_flight_meta(id, &cancelled, &[]);
                         return Some(FlushBatch {
                             channel_id: id,
                             events: cancelled,
@@ -371,6 +461,8 @@ impl EventQueue {
             self.cancel_reasons.remove(&channel_id)
         };
 
+        self.record_in_flight_meta(channel_id, &events, &cancelled_events);
+
         Some(FlushBatch {
             channel_id,
             events,
@@ -389,7 +481,14 @@ impl EventQueue {
     /// so the backoff sequence continues on the next attempt.
     ///
     /// Also cleans up any already-expired `retry_after` entry.
-    pub fn mark_complete(&mut self, channel_id: Uuid) {
+    ///
+    /// Returns the batch's [`TurnMeta`] iff the batch reached a durable end:
+    /// `Some` after a successful turn or a dead-letter (no `requeue*` call
+    /// moved its events back to pending), `None` after any requeue-for-retry
+    /// or cancel-merge path. Callers persisting a delivery watermark advance
+    /// it on `Some` only; `advance_to` is already clamped below the oldest
+    /// still-pending event for the channel.
+    pub fn mark_complete(&mut self, channel_id: Uuid) -> Option<TurnMeta> {
         self.in_flight_channels.remove(&channel_id);
         self.in_flight_deadlines.remove(&channel_id);
         self.in_flight_batch_sizes.remove(&channel_id);
@@ -407,6 +506,14 @@ impl EventQueue {
                 self.retry_counts.remove(&channel_id);
             }
         }
+        let mut meta = self.in_flight_meta.remove(&channel_id);
+        if let Some(ref mut m) = meta {
+            m.advance_to = m.max_created_at.min(
+                self.min_pending_created_at(&channel_id)
+                    .map_or(u64::MAX, |oldest| oldest.saturating_sub(1)),
+            );
+        }
+        meta
     }
 
     /// Re-queue a batch of events that failed to process.
@@ -447,8 +554,16 @@ impl EventQueue {
             // Also clear retry_after so fresh traffic on this channel isn't
             // throttled by stale backoff from the discarded poison batch.
             self.retry_after.remove(&channel_id);
+            // Dead-letter is a durable end — keep in_flight_meta so the
+            // caller's mark_complete returns it and the delivery watermark
+            // advances past the discarded events (they will not be retried,
+            // so a restart must not replay them either).
             return Some(batch);
         }
+        // Requeued for retry: the events are pending again, so the batch has
+        // NOT durably completed — the upcoming mark_complete must not advance
+        // the delivery watermark.
+        self.in_flight_meta.remove(&channel_id);
 
         // Exponential backoff: BASE * 2^(attempt-1), capped at MAX, with ±20% jitter.
         let base_secs = BASE_RETRY_DELAY_SECS.saturating_mul(1u64 << (attempt - 1).min(6));
@@ -507,6 +622,8 @@ impl EventQueue {
     /// caller must call `mark_complete` separately.
     pub fn requeue_preserve_timestamps(&mut self, batch: FlushBatch) {
         let channel_id = batch.channel_id;
+        // Events return to pending — not a durable completion.
+        self.in_flight_meta.remove(&channel_id);
         let queue = self.queues.entry(channel_id).or_default();
         // Push to front in reverse order so original order is preserved.
         for be in batch.events.into_iter().rev() {
@@ -540,6 +657,9 @@ impl EventQueue {
     /// the generic queue — they are stored separately and merged by
     /// `flush_next()`. No retry throttle, no backoff.
     pub fn requeue_as_cancelled(&mut self, batch: FlushBatch, reason: CancelReason) {
+        // Events return to pending (as cancelled carryover) — not a durable
+        // completion; the merged re-prompt's own completion covers them.
+        self.in_flight_meta.remove(&batch.channel_id);
         let entry = self.cancelled_batches.entry(batch.channel_id).or_default();
         // Preserve any already-cancelled events from a prior cancel (double-cancel).
         entry.extend(batch.cancelled_events);
@@ -574,6 +694,9 @@ impl EventQueue {
             );
             self.in_flight_channels.remove(&id);
             self.in_flight_deadlines.remove(&id);
+            // Symmetric with the flush_next expiry block: fate unknown, so
+            // the delivery watermark must not advance for this batch.
+            self.in_flight_meta.remove(&id);
             // Symmetric with the flush_next expiry block: recover withheld
             // goose-native steer events for the expired channel so they are
             // not permanently orphaned in the side table.
@@ -740,18 +863,45 @@ impl EventQueue {
     /// Called on `SteerAck::Success` — the agent received the steer, so the
     /// event has been "delivered" via the non-cancelling path and must not
     /// be redelivered via normal dispatch. Idempotent across both stores.
+    ///
+    /// A steer-consumed event was delivered *into* the channel's in-flight
+    /// turn, so its id/timestamp are folded into that turn's [`TurnMeta`]:
+    /// the delivery watermark then advances past it on completion instead of
+    /// replaying an already-handled message after a restart. If the turn
+    /// already completed (late ack), there is no meta to fold into — the
+    /// event may replay after a restart, which is within the documented
+    /// at-least-once posture.
     pub fn remove_event(&mut self, channel_id: Uuid, event_id: &str) {
+        let mut consumed_created_at: Option<u64> = None;
         if let Some(entries) = self.withheld_native_steer.get_mut(&channel_id) {
-            entries.retain(|qe| qe.event.id.to_hex() != event_id);
+            if let Some(pos) = entries
+                .iter()
+                .position(|qe| qe.event.id.to_hex() == event_id)
+            {
+                let qe = entries.remove(pos);
+                consumed_created_at = Some(qe.event.created_at.as_secs());
+            }
             if entries.is_empty() {
                 self.withheld_native_steer.remove(&channel_id);
             }
         }
         if let Some(q) = self.queues.get_mut(&channel_id) {
-            q.retain(|qe| qe.event.id.to_hex() != event_id);
+            if let Some(pos) = q.iter().position(|qe| qe.event.id.to_hex() == event_id) {
+                if let Some(qe) = q.remove(pos) {
+                    consumed_created_at.get_or_insert_with(|| qe.event.created_at.as_secs());
+                }
+            }
             if q.is_empty() {
                 self.queues.remove(&channel_id);
             }
+        }
+        if let (Some(ts), Some(meta)) = (
+            consumed_created_at,
+            self.in_flight_meta.get_mut(&channel_id),
+        ) {
+            meta.event_ids.push((event_id.to_string(), ts));
+            meta.max_created_at = meta.max_created_at.max(ts);
+            meta.advance_to = meta.max_created_at;
         }
     }
 
@@ -4843,6 +4993,182 @@ mod tests {
         assert!(
             after_second >= after_first,
             "second extend must not move deadline backward (monotonic)"
+        );
+    }
+
+    // ── Durable-completion TurnMeta (delivery watermark source) ──────────────
+
+    /// A clean flush → mark_complete cycle returns TurnMeta covering every
+    /// batch event, with advance_to == max_created_at when nothing is pending.
+    #[test]
+    fn mark_complete_returns_meta_after_clean_turn() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        let a = make_queued_created_at(ch, "a", 1_000);
+        let b = make_queued_created_at(ch, "b", 1_005);
+        let ids = [a.event.id.to_hex(), b.event.id.to_hex()];
+        q.push(a);
+        q.push(b);
+
+        let _batch = q.flush_next().expect("flush");
+        let meta = q
+            .mark_complete(ch)
+            .expect("clean completion must yield meta");
+
+        assert_eq!(meta.max_created_at, 1_005);
+        assert_eq!(meta.advance_to, 1_005);
+        assert_eq!(meta.event_ids.len(), 2);
+        for id in ids {
+            assert!(
+                meta.event_ids.iter().any(|(eid, _)| *eid == id),
+                "meta must list every completed event id"
+            );
+        }
+
+        // A second mark_complete (no in-flight batch) must yield nothing.
+        assert!(q.mark_complete(ch).is_none());
+    }
+
+    /// Requeue-for-retry is not a durable completion: mark_complete returns
+    /// None, and only the retry cycle's own completion yields the meta.
+    #[test]
+    fn requeue_withholds_meta_until_retry_completes() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        q.push(make_queued_created_at(ch, "a", 2_000));
+        let batch = q.flush_next().expect("flush");
+
+        assert!(q.requeue(batch).is_none(), "first attempt must requeue");
+        assert!(
+            q.mark_complete(ch).is_none(),
+            "requeued batch has not durably completed"
+        );
+
+        // Wait out the backoff, retry, and complete.
+        q.retry_after.remove(&ch);
+        let _retry = q.flush_next().expect("retry flush");
+        let meta = q
+            .mark_complete(ch)
+            .expect("retry completion must yield meta");
+        assert_eq!(meta.max_created_at, 2_000);
+    }
+
+    /// Dead-letter is a durable end: after requeue() exhausts the retry
+    /// budget and returns the batch, mark_complete surfaces the meta so the
+    /// delivery watermark advances past the discarded events.
+    #[test]
+    fn dead_letter_yields_meta_on_mark_complete() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        q.push(make_queued_created_at(ch, "poison", 3_000));
+        let batch = q.flush_next().expect("flush");
+
+        q.set_retry_count_for_test(ch, MAX_RETRIES);
+        let dead = q.requeue(batch);
+        assert!(dead.is_some(), "exhausted budget must dead-letter");
+
+        let meta = q.mark_complete(ch).expect("dead-letter must yield meta");
+        assert_eq!(meta.max_created_at, 3_000);
+        assert_eq!(meta.advance_to, 3_000);
+    }
+
+    /// Cancel-merge withholds the meta; the merged re-prompt's completion
+    /// covers BOTH the new and the cancelled-carryover events.
+    #[test]
+    fn cancel_merge_meta_covers_carryover_events() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        q.push(make_queued_created_at(ch, "original", 4_000));
+        let batch = q.flush_next().expect("flush");
+        q.requeue_as_cancelled(batch, CancelReason::Steer);
+        assert!(
+            q.mark_complete(ch).is_none(),
+            "cancelled batch has not durably completed"
+        );
+
+        // A newer event arrives; the next flush merges the carryover.
+        q.push(make_queued_created_at(ch, "newer", 4_010));
+        let merged = q.flush_next().expect("merged flush");
+        assert_eq!(merged.events.len(), 1);
+        assert_eq!(merged.cancelled_events.len(), 1);
+
+        let meta = q.mark_complete(ch).expect("merged completion yields meta");
+        assert_eq!(meta.event_ids.len(), 2, "meta must cover both event sets");
+        assert_eq!(meta.max_created_at, 4_010);
+    }
+
+    /// requeue_preserve_timestamps (pool-exhausted path) withholds the meta —
+    /// the events went back to pending untouched.
+    #[test]
+    fn requeue_preserve_timestamps_withholds_meta() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        q.push(make_queued_created_at(ch, "a", 5_000));
+        let batch = q.flush_next().expect("flush");
+        q.requeue_preserve_timestamps(batch);
+        assert!(q.mark_complete(ch).is_none());
+
+        let retry = q.flush_next().expect("re-flush");
+        assert_eq!(retry.events.len(), 1);
+        assert!(q.mark_complete(ch).is_some());
+    }
+
+    /// Replayed bursts arrive newest-first, so a drained MAX_BATCH_EVENTS
+    /// batch can complete while OLDER events still wait in the queue. The
+    /// advance target must clamp below the oldest pending event, or a crash
+    /// after the watermark write would silently skip them.
+    #[test]
+    fn advance_to_clamps_below_older_pending_events() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        // Newest-first arrival (relay replay order): timestamps 10_060 down
+        // to 10_009 — 52 events, so the drain cap (50) leaves the two oldest
+        // (10_010, 10_009) in the queue.
+        for i in 0..52u64 {
+            q.push(make_queued_created_at(ch, "replay", 10_060 - i));
+        }
+        let batch = q.flush_next().expect("flush");
+        assert_eq!(batch.events.len(), 50);
+        assert_eq!(q.queued_event_count(&ch), 2);
+
+        let meta = q.mark_complete(ch).expect("completion yields meta");
+        assert_eq!(meta.max_created_at, 10_060);
+        assert_eq!(
+            meta.advance_to, 10_008,
+            "advance target must sit below the oldest pending event (10_009)"
+        );
+    }
+
+    /// A steer-consumed event (remove_event on SteerAck::Success) folds into
+    /// the in-flight turn's meta so the watermark advances past it.
+    #[test]
+    fn steer_consumed_event_folds_into_in_flight_meta() {
+        let mut q = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        q.push(make_queued_created_at(ch, "first", 6_000));
+        let _batch = q.flush_next().expect("flush");
+
+        // A newer event arrives mid-turn and is consumed by a native steer.
+        let steered = make_queued_created_at(ch, "steered", 6_020);
+        let steered_id = steered.event.id.to_hex();
+        q.push(steered);
+        assert!(q.mark_native_steer_pending(ch, &steered_id));
+        q.remove_event(ch, &steered_id);
+
+        let meta = q.mark_complete(ch).expect("completion yields meta");
+        assert_eq!(meta.max_created_at, 6_020);
+        assert!(
+            meta.event_ids
+                .iter()
+                .any(|(id, ts)| *id == steered_id && *ts == 6_020),
+            "steered event must be folded into the turn meta"
         );
     }
 }

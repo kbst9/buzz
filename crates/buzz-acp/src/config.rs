@@ -513,6 +513,24 @@ pub struct CliArgs {
     /// Connect and subscribe before starting the ACP/LLM subprocess pool.
     #[arg(long, env = "BUZZ_ACP_LAZY_POOL", default_value_t = false)]
     pub lazy_pool: bool,
+
+    /// Durable delivery: persist per-channel completion watermarks and replay
+    /// mentions missed across a restart (downtime or in-flight at kill).
+    /// Ships default-off so a canary can enable first.
+    #[arg(long, env = "BUZZ_ACP_DURABLE_DELIVERY", default_value_t = false)]
+    pub durable_delivery: bool,
+
+    /// Directory for persistent harness state (delivery watermarks). When
+    /// unset, defaults to `.buzz-acp-state` under the resolved workspace
+    /// (nest) directory.
+    #[arg(long, env = "BUZZ_ACP_STATE_DIR")]
+    pub state_dir: Option<String>,
+
+    /// Maximum look-back window (seconds) for the startup backfill of missed
+    /// mentions. Bounds replay after long downtime; the clamp is logged when
+    /// it truncates. Default: 86400 (24h).
+    #[arg(long, env = "BUZZ_ACP_BACKFILL_MAX_AGE_SECS", default_value_t = 86_400)]
+    pub backfill_max_age_secs: u64,
 }
 
 /// Merged NIP-01 subscription filter for a single channel.
@@ -606,6 +624,14 @@ pub struct Config {
     /// `from_cli()`. `None` when using the compiled-in default or when
     /// `--no-base-prompt` is set.
     pub base_prompt_content: Option<String>,
+    /// Whether durable delivery (persisted watermarks + startup backfill) is
+    /// enabled. Off by default; canary enables first.
+    pub durable_delivery: bool,
+    /// Explicit state directory override (`--state-dir` / `BUZZ_ACP_STATE_DIR`).
+    /// `None` resolves to `.buzz-acp-state` under the workspace at startup.
+    pub state_dir: Option<String>,
+    /// Startup backfill look-back bound in seconds.
+    pub backfill_max_age_secs: u64,
 }
 
 /// Maximum length, in characters, of a session title sent to the adapter.
@@ -1164,6 +1190,12 @@ impl Config {
                 .filter(|s| !s.is_empty()),
             no_base_prompt: args.no_base_prompt,
             base_prompt_content,
+            durable_delivery: args.durable_delivery,
+            state_dir: args
+                .state_dir
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            backfill_max_age_secs: args.backfill_max_age_secs,
         };
 
         Ok(config)
@@ -1184,8 +1216,17 @@ impl Config {
             modes.sort();
             format!(" allowed_respond_to=[{}]", modes.join(","))
         };
+        let durable_detail = if self.durable_delivery {
+            format!(
+                " durable_delivery=on(state_dir={}, backfill_max_age={}s)",
+                self.state_dir.as_deref().unwrap_or("<workspace>"),
+                self.backfill_max_age_secs,
+            )
+        } else {
+            " durable_delivery=off".to_string()
+        };
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} {}{}",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} {}{}{durable_detail}",
             self.relay_url,
             self.keys.public_key().to_hex(),
             self.agent_command,
@@ -1538,6 +1579,9 @@ mod tests {
             invite_code: None,
             no_base_prompt: false,
             base_prompt_content: None,
+            durable_delivery: false,
+            state_dir: None,
+            backfill_max_age_secs: 86_400,
         }
     }
 
