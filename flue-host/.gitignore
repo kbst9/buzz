@@ -1,1 +1,3 @@
 dist/
+# Never commit a live fleet config — it carries the invite code.
+fleet.toml
