@@ -142,7 +142,21 @@ export async function ensureSigningBroker(
     throw new Error("signing broker requires a 64-hex private key (nsec unsupported)");
   }
   pending = pending.then(async () => {
-    if (brokers.has(socketPath)) return;
+    const known = brokers.get(socketPath);
+    if (known) {
+      // The socket file lives in the agent-writable workspace: an agent (or
+      // a cleanup job) can delete it, which self-DoSes signing. Re-check the
+      // file each session start and re-bind when it vanished — the listener
+      // itself survives, only the filesystem name needs restoring.
+      try {
+        await fs.access(socketPath);
+        return;
+      } catch {
+        log.warn("signer socket file vanished; re-binding", { socket: socketPath });
+        await new Promise<void>((resolve) => known.server.close(() => resolve()));
+        brokers.delete(socketPath);
+      }
+    }
     const secretKey = hexToBytes(privateKeyHex);
     const pubkeyHex = getPublicKey(secretKey);
 

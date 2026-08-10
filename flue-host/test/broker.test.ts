@@ -115,6 +115,19 @@ describe("signing broker", () => {
     expect(await request(socketPath, { op: "get_public_key" })).toMatchObject({ ok: true });
   });
 
+  it("re-binds when the socket file vanished (agent self-DoS heals at session start)", async () => {
+    // The socket lives in the agent-writable workspace; deleting it is the
+    // one thing an agent can do to its broker. ensure() must detect and heal.
+    await rm(socketPath, { force: true });
+    await expect(request(socketPath, { op: "get_public_key" })).rejects.toThrow();
+    const healed = await ensureSigningBroker(workspace, secretHex);
+    expect(healed).toBe(socketPath);
+    expect(await request(socketPath, { op: "get_public_key" })).toMatchObject({
+      ok: true,
+      result: pubkeyHex,
+    });
+  });
+
   it("refuses non-hex private keys loudly", async () => {
     const other = await mkdtemp(join(tmpdir(), "broker-nsec-"));
     await expect(ensureSigningBroker(other, "nsec1notahexkey")).rejects.toThrow(/64-hex/);
