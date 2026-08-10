@@ -525,7 +525,11 @@ export const dockerTier: SandboxTier = {
       seedEnv: options.env,
     };
     const create = (): Promise<SessionEnv> => {
-      void ensureResources(policy);
+      // Opportunistic warmup. The InitChain pre-handles its own link, but
+      // ensureResources is an async WRAPPER around it — voiding the wrapper
+      // unhandled would crash the process on a failed warmup (caught live by
+      // the 4c drill). Failures are retried and surfaced by the first exec.
+      ensureResources(policy).catch(() => {});
       return Promise.resolve(createDockerSessionEnv(policy, options));
     };
     return { createSandbox: create, createSessionEnv: create };

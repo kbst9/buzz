@@ -450,7 +450,11 @@ export const srtTier: SandboxTier = {
     };
     const createSandbox = (): Promise<SessionEnv> => {
       // Kick off (or reuse) manager init up front; exec awaits it too.
-      void ensureManager(policy);
+      // ensureManager currently returns the pre-handled chain link, but
+      // catch here anyway so a future async-wrapper refactor can't turn a
+      // failed warmup into an unhandledRejection crash (the docker tier hit
+      // exactly that).
+      ensureManager(policy).catch(() => {});
       return Promise.resolve(createSrtSessionEnv(policy, options));
     };
     // Provide both names: `createSandbox` is Flue 2.0.3's method; the
