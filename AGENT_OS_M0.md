@@ -221,6 +221,34 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 
 ## Progress notes (dated; newest first)
 
+### 2026-08-10 — File-ops + complex-interaction campaign (model-driven, both tiers)
+
+Gap the first campaign missed: it exercised fs verbs at the conformance/API
+level but never drove real model-authored file work through live turns.
+Closed it — 7 tests, all PASS, no bugs (the projection/FS layer is solid;
+the earlier bugs were lifecycle, not data-path):
+
+1. **Container→host sync-back** (docker/canary): agent's in-container
+   `bash` write appeared on the HOST workspace in ~12 s, exact content,
+   owned by kbs.
+2. **Host→container read**: host-populated file read verbatim by the agent
+   inside the container.
+3. **Multi-step chain** (read→uppercase→write→count): host output file
+   correctly transformed + synced; agent reported the right line count.
+4. **Cross-turn persistence**: turn A writes, a separate later turn B reads
+   it back — durable across sessions.
+5. **srt tier (Fluelo)** file generation synced to host (different path —
+   host-side via bwrap, no bind-mount).
+6. **Complex git workflow** (docker/canary): agent ran `git init` + wrote 3
+   files + `git add`/`commit`; the repo synced to the host with the exact
+   commit hash/message/tracked-count; structured reply (`hash`\n`count`).
+7. **Filesystem containment**: `/home/kbs/.ssh` isn't even in the heavy
+   container (only the workspace is mounted); agent-driven read of
+   `~/.ssh/id_ed25519` → "No such file", `/etc/shadow` → "Permission
+   denied". Verified **0 actual key values** anywhere in the nest.
+
+Scratch cleaned; fleet healthy throughout.
+
 ### 2026-08-10 — Extensive live smoke campaign (post-M5): 2 real bugs found + fixed forward
 
 Eight-phase campaign across the whole infra, multiple interaction shapes.
