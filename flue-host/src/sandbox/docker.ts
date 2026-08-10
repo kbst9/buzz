@@ -220,6 +220,7 @@ function dockerExec(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let aborted = false;
     let killTimer: NodeJS.Timeout | undefined;
     const kill = (sig: NodeJS.Signals): void => {
       try {
@@ -229,7 +230,11 @@ function dockerExec(
       }
     };
     const onAbort = (): void => {
-      // Kill the docker-exec client and best-effort the in-container process.
+      // Kill the docker-exec client. NOTE: a killed `docker exec` client can
+      // exit 0 while the in-container process is orphaned (reparented to the
+      // container's PID 1) — so we force a non-zero exit below rather than
+      // trust the client's code, and the container teardown reaps the orphan.
+      aborted = true;
       kill("SIGTERM");
       killTimer = setTimeout(() => kill("SIGKILL"), KILL_GRACE_MS);
       killTimer.unref();
@@ -248,7 +253,10 @@ function dockerExec(
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (c) => (stderr += c));
     child.once("error", (e) => settle({ stdout, stderr: stderr || String(e.message ?? e), exitCode: 1 }));
-    child.once("close", (code) => settle({ stdout, stderr, exitCode: code ?? (signal?.aborted ? 124 : 1) }));
+    child.once("close", (code) =>
+      // On abort the client's own code is unreliable (often 0) — force 124.
+      settle({ stdout, stderr, exitCode: aborted ? 124 : (code ?? 1) }),
+    );
   });
 }
 
