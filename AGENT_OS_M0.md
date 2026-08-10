@@ -221,6 +221,21 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 
 ## Progress notes (dated; newest first)
 
+### 2026-08-10 — M4 gVisor pre-stage COMPLETE
+
+- runsc `release-20260803.0` installed (Google release URL, sha512-verified);
+  `/etc/docker/daemon.json` gained the `runsc` runtime **merged alongside
+  nvidia** (bak `daemon.json.bak-20260810-gvisor`); applied via **SIGHUP
+  live-reload — zero container restarts**, all prod containers stayed up
+  (a dockerd restart would have bounced the relay; avoided).
+- **Exit gate met**: `docker run --runtime=runsc buzz-heavy-base:latest` →
+  `4.19.0-gvisor` kernel, git functional inside; plain runc unaffected
+  (host 6.17). Per the rung, gVisor is **per-container opt-in, unused** until
+  the hostile-tenant phase — the heavy tier can adopt it by adding
+  `--runtime=runsc` to its container run.
+- Rollback: remove the `runsc` entry from daemon.json (restore the bak) +
+  SIGHUP; delete /usr/local/bin/runsc.
+
 ### 2026-08-10 — M3 heavy tier BUILT + validated on the canary
 
 Kevin redirected from "hold" to "build the heavy tier" → built the audit's
