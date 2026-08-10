@@ -1446,3 +1446,76 @@ async fn p_gated_persistent_kinds_have_storage_null_tsvector() {
 
     teardown(pool, &schema).await;
 }
+
+/// NIP-PC kind:30990 (agent provider credential) carries credential-bearing
+/// ciphertext and must be unsearchable, even though it is NOT a P_GATED kind —
+/// its read gate is authors-or-`#p` (`provider_credential_filters_authorized`),
+/// so the P_GATED tripwire above never covers it. Migration 0029 adds the
+/// storage-layer NULL-tsvector exclusion; this test is its tripwire.
+#[tokio::test]
+async fn provider_credential_kind_has_storage_null_tsvector() {
+    let (pool, schema) = setup().await;
+
+    let c = mk_community(&pool, "nip-pc-tripwire.example").await;
+    let token = "nippc_tripwire_marker_zxcvbn";
+
+    insert_event(
+        &pool,
+        c,
+        rand_bytes32(),
+        rand_bytes32(),
+        9,
+        &format!("public control — {token}"),
+        None,
+        1_700_000_000,
+    )
+    .await;
+
+    insert_event(
+        &pool,
+        c,
+        rand_bytes32(),
+        rand_bytes32(),
+        buzz_core::kind::KIND_AGENT_PROVIDER_CREDENTIAL as i32,
+        &format!("credential ciphertext stand-in — {token}"),
+        None,
+        1_700_000_100,
+    )
+    .await;
+
+    let svc = SearchService::new(pool.clone());
+    let result = svc
+        .search(&SearchQuery {
+            community: c,
+            q: token.into(),
+            channel_scope: ChannelScope::Any,
+            kinds: None,
+            authors: None,
+            since: None,
+            until: None,
+            page: 1,
+            per_page: 100,
+            mode: buzz_search::SearchMode::FullText,
+        })
+        .await
+        .expect("search ok");
+
+    let kinds: Vec<i32> = result.hits.iter().map(|h| h.kind).collect();
+    assert!(
+        kinds.contains(&9),
+        "kind:9 control row MUST be searchable, got kinds={kinds:?}",
+    );
+    assert!(
+        !kinds.contains(&(buzz_core::kind::KIND_AGENT_PROVIDER_CREDENTIAL as i32)),
+        "kind:30990 MUST NOT be searchable — migration 0029's NULL-tsvector \
+         exclusion is missing. hits={kinds:?}",
+    );
+    assert_eq!(
+        result.hits.len(),
+        1,
+        "expected exactly 1 hit (the kind:9 control), got {} (kinds={kinds:?})",
+        result.hits.len(),
+    );
+
+    teardown(pool, &schema).await;
+}

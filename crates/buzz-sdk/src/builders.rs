@@ -1,13 +1,14 @@
-//! Typed event builder functions (38 builders).
+//! Typed event builder functions (40 builders).
 //!
 //! All functions return `Result<nostr::EventBuilder, SdkError>`.
 //! The caller signs: `builder.sign_with_keys(&keys)?`.
 
 use buzz_core::{
     kind::{
-        KIND_AGENT_OBSERVER_FRAME, KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_DELETION,
-        KIND_DM_ADD_MEMBER, KIND_DM_OPEN, KIND_EMOJI_SET, KIND_GIT_ISSUE, KIND_GIT_PATCH,
-        KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST, KIND_GIT_REPO_ANNOUNCEMENT,
+        KIND_AGENT_OBSERVER_FRAME, KIND_AGENT_PROVIDER_CREDENTIAL,
+        KIND_AGENT_PROVIDER_CREDENTIAL_STATUS, KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT,
+        KIND_DELETION, KIND_DM_ADD_MEMBER, KIND_DM_OPEN, KIND_EMOJI_SET, KIND_GIT_ISSUE,
+        KIND_GIT_PATCH, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST, KIND_GIT_REPO_ANNOUNCEMENT,
         KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT, KIND_GIT_STATUS_MERGED,
         KIND_GIT_STATUS_OPEN, KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST,
         KIND_MODERATION_BAN, KIND_MODERATION_RESOLVE_REPORT, KIND_MODERATION_TIMEOUT,
@@ -17,6 +18,9 @@ use buzz_core::{
     observer::{
         content_looks_like_nip44, OBSERVER_AGENT_TAG, OBSERVER_FRAME_CONTROL, OBSERVER_FRAME_TAG,
         OBSERVER_FRAME_TELEMETRY,
+    },
+    provider_credential::{
+        is_valid_provider_id, provider_credential_d_tag, ProviderCredentialStatusPayload,
     },
 };
 use nostr::{EventBuilder, Kind, Tag};
@@ -277,6 +281,64 @@ pub fn build_agent_observer_frame(
     Ok(EventBuilder::new(
         Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16),
         encrypted_content,
+    )
+    .tags(tags))
+}
+
+/// Build a NIP-PC agent provider credential delivery (kind 30990).
+///
+/// `encrypted_content` must be a NIP-44 v2 ciphertext produced by
+/// `buzz_core::provider_credential::encrypt_provider_credential` (owner key →
+/// agent pubkey). The event is addressed at
+/// `(owner, 30990, "<agent>:<provider>")` and `p`-tags the recipient agent;
+/// the OWNER signs the returned builder.
+pub fn build_agent_provider_credential(
+    agent_pubkey: &str,
+    provider_id: &str,
+    encrypted_content: &str,
+) -> Result<EventBuilder, SdkError> {
+    if !is_valid_provider_id(provider_id) {
+        return Err(SdkError::InvalidInput(format!(
+            "provider_id must match [a-z0-9][a-z0-9_-]{{0,31}} (got {provider_id:?})"
+        )));
+    }
+    if !content_looks_like_nip44(encrypted_content) {
+        return Err(SdkError::InvalidInput(
+            "provider-credential content must be NIP-44 v2 ciphertext".into(),
+        ));
+    }
+    let agent_pubkey = check_pubkey_hex(agent_pubkey, "agent_pubkey")?;
+    let tags = vec![
+        tag(&["d", &provider_credential_d_tag(&agent_pubkey, provider_id)])?,
+        tag(&["p", &agent_pubkey])?,
+    ];
+    Ok(EventBuilder::new(
+        Kind::Custom(KIND_AGENT_PROVIDER_CREDENTIAL as u16),
+        encrypted_content,
+    )
+    .tags(tags))
+}
+
+/// Build a NIP-PC agent provider credential status projection (kind 30991).
+///
+/// The AGENT signs the returned builder; `payload.provider` becomes the `d`
+/// tag. Content is plaintext JSON and must never carry secret material.
+pub fn build_agent_provider_credential_status(
+    payload: &ProviderCredentialStatusPayload,
+) -> Result<EventBuilder, SdkError> {
+    if !is_valid_provider_id(&payload.provider) {
+        return Err(SdkError::InvalidInput(format!(
+            "provider must match [a-z0-9][a-z0-9_-]{{0,31}} (got {:?})",
+            payload.provider
+        )));
+    }
+    let content = serde_json::to_string(payload)
+        .map_err(|e| SdkError::InvalidInput(format!("status payload serialization: {e}")))?;
+    check_content(&content, 4096)?;
+    let tags = vec![tag(&["d", &payload.provider])?];
+    Ok(EventBuilder::new(
+        Kind::Custom(KIND_AGENT_PROVIDER_CREDENTIAL_STATUS as u16),
+        content,
     )
     .tags(tags))
 }
@@ -2358,6 +2420,79 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn agent_provider_credential_envelope() {
+        use buzz_core::provider_credential::{
+            encrypt_provider_credential, ProviderCredentialPayload,
+        };
+
+        let owner = nostr::Keys::generate();
+        let agent = nostr::Keys::generate();
+        let agent_hex = agent.public_key().to_hex();
+        let payload = ProviderCredentialPayload {
+            v: 1,
+            provider: "anthropic".to_string(),
+            credential: Some(serde_json::json!({"type": "api_key", "key": "k"})),
+            revoked: false,
+        };
+        let encrypted = encrypt_provider_credential(&owner, &agent.public_key(), &payload).unwrap();
+
+        let ev = build_agent_provider_credential(&agent_hex, "anthropic", &encrypted)
+            .unwrap()
+            .sign_with_keys(&owner)
+            .unwrap();
+
+        assert_eq!(ev.kind.as_u16(), KIND_AGENT_PROVIDER_CREDENTIAL as u16);
+        assert_eq!(ev.content, encrypted);
+        assert!(has_tag(&ev, "p", &agent_hex));
+        assert!(has_tag(&ev, "d", &format!("{agent_hex}:anthropic")));
+    }
+
+    #[test]
+    fn agent_provider_credential_rejects_bad_inputs() {
+        // Plaintext content.
+        let err = build_agent_provider_credential(&"a".repeat(64), "anthropic", "not encrypted")
+            .unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+        // Invalid provider id.
+        let err = build_agent_provider_credential(&"a".repeat(64), "Not Valid", "x").unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+        // Invalid pubkey — use a syntactically plausible ciphertext so the
+        // pubkey check is what fires.
+        let err =
+            build_agent_provider_credential("nothex", "anthropic", &"A".repeat(200)).unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn agent_provider_credential_status_envelope() {
+        use buzz_core::provider_credential::{
+            ProviderCredentialState, ProviderCredentialStatusPayload,
+        };
+
+        let agent = nostr::Keys::generate();
+        let payload = ProviderCredentialStatusPayload {
+            v: 1,
+            provider: "xai".to_string(),
+            state: ProviderCredentialState::Applied,
+            detail: None,
+            updated_at: 1_754_800_000,
+        };
+        let ev = build_agent_provider_credential_status(&payload)
+            .unwrap()
+            .sign_with_keys(&agent)
+            .unwrap();
+
+        assert_eq!(
+            ev.kind.as_u16(),
+            KIND_AGENT_PROVIDER_CREDENTIAL_STATUS as u16
+        );
+        assert!(has_tag(&ev, "d", "xai"));
+        let parsed: serde_json::Value = serde_json::from_str(&ev.content).unwrap();
+        assert_eq!(parsed["state"], "applied");
+        assert_eq!(parsed["provider"], "xai");
     }
 
     #[test]

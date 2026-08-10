@@ -67,6 +67,13 @@ pub async fn handle_count(
         ));
         return;
     }
+    if !super::req::provider_credential_filters_authorized(&filters, &authed_pubkey_hex) {
+        conn.send(RelayMessage::closed(
+            &sub_id,
+            "restricted: provider-credential reads require authors=[self] or #p=[self]",
+        ));
+        return;
+    }
     if !super::req::author_only_filters_authorized(&filters, &authed_pubkey_hex) {
         conn.send(RelayMessage::closed(
             &sub_id,

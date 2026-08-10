@@ -389,6 +389,24 @@ pub async fn is_agent_owner(
     Ok(row.unwrap_or(false))
 }
 
+/// Check whether `pubkey` is a registered agent — i.e. has a non-NULL
+/// `agent_owner_pubkey` (materialized at NIP-OA auth or invite claim).
+/// Returns `false` when the user row is missing.
+pub async fn is_registered_agent(
+    pool: &PgPool,
+    community_id: CommunityId,
+    pubkey: &[u8],
+) -> Result<bool> {
+    let row = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE community_id = $1 AND pubkey = $2 AND agent_owner_pubkey IS NOT NULL)",
+    )
+    .bind(community_id.as_uuid())
+    .bind(pubkey)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
 /// Set the channel_add_policy for a user.
 /// Returns an error if the pubkey is not found (rows_affected == 0).
 /// Returns an error if `policy` is not one of the valid ENUM values.
