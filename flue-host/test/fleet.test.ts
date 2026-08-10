@@ -239,6 +239,30 @@ BUZZ_ACP_PROFILE_NAME=Sonnet One
     expect(env).not.toContain("BUZZ_FLUE_EGRESS");
   });
 
+  it("escalation = true binds the agent to the heavy (docker) tier, overriding tier", () => {
+    const escConfig = parseFleetConfig(`[fleet]
+relay_url = "wss://buzz.example.com"
+owner_pubkey = "${OWNER}"
+invite_code = "v2.abc123"
+run_user = "kbs"
+
+[[agents]]
+name = "heavy1"
+model = "xai/grok-4.5"
+[agents.sandbox]
+tier = "srt"
+egress = ["relay"]
+escalation = true
+`);
+    const heavy = escConfig.agents[0];
+    if (!heavy) throw new Error("fixture must parse one agent");
+    const env = renderEnvFile(escConfig.fleet, heavy, SECRET);
+    // escalation wins over tier=srt.
+    expect(env).toContain("BUZZ_FLUE_SANDBOX=docker");
+    expect(env).not.toContain("BUZZ_FLUE_SANDBOX=srt");
+    expect(env).toContain("BUZZ_FLUE_EGRESS=relay");
+  });
+
   it("emits BUZZ_FLUE_SANDBOX and BUZZ_FLUE_EGRESS from a sandbox block", () => {
     const srtConfig = parseFleetConfig(`[fleet]
 relay_url = "wss://buzz.example.com"

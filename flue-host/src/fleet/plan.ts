@@ -57,14 +57,24 @@ export function renderEnvFile(
   // Sandbox policy → runtime env. Emitted only when it diverges from the
   // default (local tier, no egress), so agents without a [agents.sandbox]
   // block render byte-identically to before this schema existed.
-  if (agent.sandbox.tier !== "local") {
-    lines.push(`BUZZ_FLUE_SANDBOX=${agent.sandbox.tier}`);
+  //
+  // Escalation binding (M3): `escalation = true` binds the agent to the heavy
+  // tier — it overrides `tier`, so a fleet operator moves an agent to the
+  // Docker heavy tier by flipping one flag. Rollback is the inverse: set
+  // escalation back to false (re-provision or edit the env) and stop the
+  // agent's heavy-tier containers.
+  const effectiveTier = agent.sandbox.escalation ? HEAVY_TIER : agent.sandbox.tier;
+  if (effectiveTier !== "local") {
+    lines.push(`BUZZ_FLUE_SANDBOX=${effectiveTier}`);
   }
   if (agent.sandbox.egress.length > 0) {
     lines.push(`BUZZ_FLUE_EGRESS=${agent.sandbox.egress.join(",")}`);
   }
   return `${lines.join("\n")}\n`;
 }
+
+/** The tier `escalation = true` binds an agent to (M3). */
+const HEAVY_TIER = "docker";
 
 /**
  * Render the systemd unit. Identical shape to new-standalone-agent.sh so
