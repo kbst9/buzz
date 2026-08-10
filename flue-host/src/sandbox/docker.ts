@@ -252,6 +252,15 @@ function dockerExec(
   });
 }
 
+/**
+ * Denial log lines already reported (keyed on the full line — tinyproxy
+ * stamps each with a timestamp+pid, so it is unique). A short `--since`
+ * window can overlap the previous exec's denial; this ensures each denial is
+ * surfaced exactly once, attributed to the exec that read it first. Bounded
+ * to avoid unbounded growth on a long-lived agent.
+ */
+const reportedDenials = new Set<string>();
+
 /** Read recent proxy denials as normalized egress violations for this window. */
 async function collectEgressViolations(
   proxy: string,
@@ -261,19 +270,24 @@ async function collectEgressViolations(
   const logs = await docker(["logs", "--since", since, proxy]);
   const out: SandboxViolation[] = [];
   const seen = new Set<string>();
+  if (reportedDenials.size > 4000) reportedDenials.clear();
   // tinyproxy denial line:
   //   NOTICE ...: Proxying refused on filtered domain "denied.invalid"
   // (also tolerate "Filtered connection"/"Access violation" phrasings.)
   const re =
     /(?:refused on filtered domain|Filtered connection|Access violation)[^"'\n]*["']([a-zA-Z0-9.:_-]+)["']/gi;
-  for (const line of `${logs.stdout}\n${logs.stderr}`.split("\n")) {
+  for (const raw of `${logs.stdout}\n${logs.stderr}`.split("\n")) {
+    const line = raw.trim();
+    // Report each unique denial line at most once, ever (cross-exec dedup).
+    if (line === "" || reportedDenials.has(line)) continue;
     let m: RegExpExecArray | null;
     re.lastIndex = 0;
     while ((m = re.exec(line)) !== null) {
       const target = m[1];
       if (target && !seen.has(target)) {
         seen.add(target);
-        out.push({ kind: "egress", tier, target, nativeDetail: line.trim() });
+        reportedDenials.add(line);
+        out.push({ kind: "egress", tier, target, nativeDetail: line });
       }
     }
   }
