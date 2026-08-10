@@ -505,3 +505,17 @@ only edge is topological (reuses existing MinIO) — entirely contingent on
 the MinIO-succession decision. Projection (bind-mount into a container)
 works on both, requiring UID-aligned container users + a git-preinstalled
 base image (both M3 inputs).
+
+## M3 heavy-tier audit (2026-08-10)
+
+OpenSandbox vs Docker+srt-proxy vs microsandbox audited (Docker+srt-proxy
+egress spiked on gradient; the two ADOPT-candidates researched from primary
+sources). Full write-up: [docs/heavy-tier-audit.md](docs/heavy-tier-audit.md).
+**Direction (park point 5 is Kevin's):** adopt **Docker + srt-proxy** as the
+heavy tier (own-agent posture; egress + SeaweedFS projection proven; lowest
+weight; gVisor/M4 as opt-in hardening); **reserve microsandbox for M5**
+(hardware-VM boundary when a hostile-tenant/prompt-injection trigger lands —
+spike its egress + microVM projection then); **do not adopt OpenSandbox**
+(heavier framework, egress no deeper than baseline, gVisor-XOR-egress
+coupling, vault does not cover local Nostr signing). No candidate vault
+covers in-process nsec signing → that still needs the M5 signing broker.

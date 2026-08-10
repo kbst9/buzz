@@ -203,8 +203,8 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 1. ~~**Canary invite** (M0.4)~~ ✅ resolved 2026-08-10 — minted, canary live.
 2. ~~**Web-egress policy** (gates M1 fleet rollout)~~ ✅ resolved 2026-08-10 — relay + curated allowlist; Fluelo live with `relay,github.com,raw.githubusercontent.com,docs.rs`.
 3. ~~**srt prod rollout order/timing** (gates M1 completion)~~ ✅ resolved 2026-08-10 — switch Fluelo now (done, smoke PASS). **M1 COMPLETE.**
-4. **MinIO succession** (gates M2 → any prod storage change) — **REACHED 2026-08-10** (pilot done, informs it), awaiting Kevin. Also gates M3's workspace substrate.
-5. **Heavy-tier selection** (gates M3 deploy) — **REACHED 2026-08-10** (M3 entry needs it), awaiting Kevin.
+4. ~~**MinIO succession** (gates M2 → prod storage; M3 substrate)~~ ✅ resolved 2026-08-10 — **SeaweedFS for workspace, keep MinIO for media**. M3 entry gate satisfied.
+5. **Heavy-tier selection** (gates M3 deploy) — audit authorized 2026-08-10 (read-only, informs it); **still awaiting Kevin's sign-off after the audit**.
 6. **M5 trigger** (whether/when the isolate tier is warranted).
 
 ## M0 status
@@ -219,6 +219,35 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 | M0.6 workspace bench | ✅ 2026-08-10 (gradient baseline PASS: pjdfstest 6791 tests, fio, git workload, coherence) |
 
 ## Progress notes (dated; newest first)
+
+### 2026-08-10 — M3 heavy-tier audit done; **park point 5 ready for sign-off**
+
+Entered M3 (substrate = SeaweedFS, park pt 4). First deliverable — the
+heavy-tier audit — complete: [docs/heavy-tier-audit.md](docs/heavy-tier-audit.md).
+
+- **Docker+srt-proxy baseline empirically validated on gradient**:
+  deny-by-default (internal Docker net = no egress) + allowlist proxy →
+  allowed reached / denied → HTTP 403 Filtered. Same egress depth as the
+  light tier, container boundary; SeaweedFS projection proven (M2). Docker
+  spike torn down; prod intact.
+- **OpenSandbox + microsandbox researched from primary sources** (two
+  parallel subagents). Distilled: no candidate's egress is *deeper* than the
+  baseline (all deny-by-default-capable); they differ in ISOLATION, which
+  maps to threat model. microsandbox = true KVM microVM (strongest, but
+  overkill for own non-hostile agents + projection is its least-mature
+  layer + fast-churning beta) → **the M5 isolate-tier candidate, not the
+  heavy tier now**. OpenSandbox = pre-1.0 Python framework whose egress ≈
+  baseline, whose gVisor ⊥ its own egress sidecar, and whose credential
+  vault is HTTP-auth-shaped → **do not adopt**. Neither vault covers
+  in-process Nostr nsec signing (that stays the M5 signing-broker job).
+- **Gradient facts**: /dev/kvm present + nested virt + bare metal (all three
+  viable); microsandbox needs kvm-group prep (kbs not in it) → the
+  microsandbox egress/projection spike is deferred to if/when it's chosen
+  (M5), rather than installing a microVM stack on prod for a non-frontrunner.
+- **Recommendation direction (park pt 5, Kevin's)**: **Docker + srt-proxy**
+  heavy tier (cloudflare sandbox-sdk base image, gVisor/M4 opt-in hardening).
+  Awaiting sign-off; on approval I build the heavy tier + escalation binding
+  (fleet.toml flag already schema-ready) toward the M3 exit gate.
 
 ### 2026-08-10 — M2 workspace pilot COMPLETE; ladder now blocked on park points 4 & 5
 
