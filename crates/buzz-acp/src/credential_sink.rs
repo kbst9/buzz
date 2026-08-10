@@ -309,10 +309,8 @@ pub(crate) fn apply_delivery(
         let parts = tag.as_slice();
         match parts.first().map(|s| s.as_str()) {
             Some("d") => d_value = parts.get(1).map(|s| s.to_string()),
-            Some("p") => {
-                if parts.get(1).map(|s| s.as_str()) == Some(self_hex.as_str()) {
-                    p_matches_self = true;
-                }
+            Some("p") if parts.get(1).map(|s| s.as_str()) == Some(self_hex.as_str()) => {
+                p_matches_self = true;
             }
             _ => {}
         }
