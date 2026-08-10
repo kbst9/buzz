@@ -201,8 +201,8 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 ## Park points (consolidated — Kevin's decisions)
 
 1. ~~**Canary invite** (M0.4)~~ ✅ resolved 2026-08-10 — minted, canary live.
-2. **Web-egress policy** per agent class (gates M1 fleet rollout) — **REACHED 2026-08-10**, awaiting Kevin.
-3. **srt prod rollout order/timing** (gates M1 completion) — **REACHED 2026-08-10**, awaiting Kevin.
+2. ~~**Web-egress policy** (gates M1 fleet rollout)~~ ✅ resolved 2026-08-10 — relay + curated allowlist; Fluelo live with `relay,github.com,raw.githubusercontent.com,docs.rs`.
+3. ~~**srt prod rollout order/timing** (gates M1 completion)~~ ✅ resolved 2026-08-10 — switch Fluelo now (done, smoke PASS). **M1 COMPLETE.**
 4. **MinIO succession** (gates M2 → any prod storage change).
 5. **Heavy-tier selection** (gates M3 deploy).
 6. **M5 trigger** (whether/when the isolate tier is warranted).
@@ -263,17 +263,27 @@ goal's "verify, don't assume"):
   by buzz-desktop). Fixed forward — margin 3s→12s, still far under the ~30s
   a real regression yields — on `feat/probe-node-test-load-margin` (off
   main, upstream-PR candidate; the fork's documented CI-robustness pattern,
-  cf. feat/provider-spawn-etxtbsy-retry), merged to deploy. CI re-run to
-  confirm all-green.
-- **Prod state**: canary on srt; dist refreshed (2.0.3+srt); full backup
-  `/usr/local/lib/buzz-flue-host.bak-20260810-srt`; the other six units and
-  the relay untouched. Rollback refs in session memory.
-- **PARKED — points 2 & 3 (Kevin's).** The srt tier applies only to
-  flue-acp-driven agents; today that's `flue` (prod) + `canary`. Fleet
-  rollout needs: (2) the **web-egress allowlist** for the flue prod unit
-  (relay-only like the canary would break any web/repo fetch it does), and
-  (3) **when** to switch `flue` to srt. Both surfaced to Kevin at this
-  boundary; M1 stays open until they resolve.
+  cf. feat/provider-spawn-etxtbsy-retry), merged to deploy. **CI re-run
+  all-green** (recipe-failures: 0, "All tests passed!") — M1 `just ci` gate
+  clean.
+- **Park points 2 & 3 resolved by Kevin (2026-08-10)**: egress =
+  **relay + curated allowlist**; rollout = **switch Fluelo now**.
+- **FLEET ROLLOUT DONE — Fluelo live on srt**: `buzz-acp-flue` switched to
+  `BUZZ_FLUE_SANDBOX=srt`, `BUZZ_FLUE_EGRESS=relay,github.com,raw.githubusercontent.com,docs.rs`
+  (starter list curated from Fluelo's actual footprint — buzz git is
+  relay-hosted so clone/push/pull ride `relay`; docs.rs was the only extra
+  host seen; github added as the obvious code-fetch default; api.x.ai NOT
+  needed — model calls are host-side). Smoke **PASS 6.3 s**, audit line
+  `tier:"srt"` allowedDomains `[buzz.gradientcm.com, github.com,
+  raw.githubusercontent.com, docs.rs]`, zero violations. The audit log is
+  the tuning loop: any denied host surfaces there to add/remove.
+- **Prod state**: canary + Fluelo on srt; the other five units run non-
+  flue-acp binaries (tier N/A); dist refreshed (2.0.3+srt); full backup
+  `/usr/local/lib/buzz-flue-host.bak-20260810-srt`; env baks
+  `canary.env.bak-20260810-srt`, `flue.env.bak-20260810-srt`; relay
+  untouched. Rollback refs in session memory.
+- **✅ M1 COMPLETE** — every exit-gate criterion green and the authorized
+  fleet rollout live.
 
 ### 2026-08-10 — M0.4 done → **M0 COMPLETE**; M1 entry gate satisfied
 
