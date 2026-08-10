@@ -200,9 +200,9 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 
 ## Park points (consolidated — Kevin's decisions)
 
-1. **Canary invite** (M0.4 — small, immediate): mint one.
-2. **Web-egress policy** per agent class (gates M1 fleet rollout).
-3. **srt prod rollout order/timing** (gates M1 completion).
+1. ~~**Canary invite** (M0.4)~~ ✅ resolved 2026-08-10 — minted, canary live.
+2. **Web-egress policy** per agent class (gates M1 fleet rollout) — **REACHED 2026-08-10**, awaiting Kevin.
+3. **srt prod rollout order/timing** (gates M1 completion) — **REACHED 2026-08-10**, awaiting Kevin.
 4. **MinIO succession** (gates M2 → any prod storage change).
 5. **Heavy-tier selection** (gates M3 deploy).
 6. **M5 trigger** (whether/when the isolate tier is warranted).
@@ -219,6 +219,61 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 | M0.6 workspace bench | ✅ 2026-08-10 (gradient baseline PASS: pjdfstest 6791 tests, fio, git workload, coherence) |
 
 ## Progress notes (dated; newest first)
+
+### 2026-08-10 — M1 srt tier: exit gate met on the canary; **fleet rollout parked (points 2 & 3)**
+
+srt native light tier built, conformance-green on both platforms, and
+live-validated on the canary. **Empirical spike drove every choice** (the
+goal's "verify, don't assume"):
+
+- **AppArmor blocker + resolution (the M1 prereq that bit).** gradient's
+  `apparmor_restrict_unprivileged_userns=1` confines srt's apply-seccomp
+  nested userns through the apt bwrap AppArmor profile, so srt's own
+  documented `sysctl=0` fix ALONE does not work — proven by toggling it and
+  re-spiking. Fix without any host-security change: the tier sets
+  `allowAllUnixSockets:true`, which makes srt skip the apply-seccomp step;
+  egress + FS scoping stay enforced by bwrap's empty netns + UDS proxy +
+  binds, dropping only the AF_UNIX defense-in-depth layer. Documented in
+  `src/sandbox/srt.ts`; a full-seccomp posture (disable bwrap profile +
+  sysctl) is a later host-hardening option, not required.
+- **srt API pinned by spike, not docs**: `customConfig` does NOT override
+  egress (proxy enforces the init allowlist) → init-once-per-process,
+  re-init on policy change; `wrapWithSandboxArgv` derives env from
+  `process.env` → the tier scrubs to the Ring-2 allowlist + seed BUZZ_* +
+  srt's proxy vars (secret-canary holds under srt); loopback echo servers
+  don't survive netns removal → conformance egress redesigned around the
+  **violation differential** (allowlisted host = no policy violation,
+  denied host = normalized violation), hermetic and cross-platform.
+- **Deliverables**: `src/sandbox/srt.ts` (native+git+egress-allowlist,
+  fs-verbs cwd-jailed to close the M0.2 read-tool hole); `egress.ts`
+  (our vocab → allowedDomains); fleet.toml `[agents.sandbox]` block
+  (invariant 2) parsed + validated + golden-tested, wired to
+  `BUZZ_FLUE_SANDBOX`/`BUZZ_FLUE_EGRESS`; Flue **2.0.1→2.0.3** bump — the
+  contract-drift canary caught the `createSessionEnv→createSandbox` rename,
+  adapters migrated, canary re-pinned to contract-v2 (its documented flow).
+- **Exit gate**: conformance **27/27 on both** macOS/seatbelt AND
+  Linux/bwrap (local skips only egress; srt runs the full set); golden
+  green on 2.0.3; **canary smoke PASS 6.3 s on tier=srt**, audit line
+  `tier:"srt"` with the agent's `buzz` exec egress-scoped to
+  `buzz.gradientcm.com` only; **rollback rehearsed live** (env-flip
+  srt→local→srt, smoke PASS each). `just ci` on gradient: every recipe
+  green EXCEPT one buzz-desktop test — `test_probe_node_times_out_on_hung_binary`,
+  a timing assertion (3s margin) that flaked under full-CI load on the
+  high-core host (passes 3/3 isolated). NOT M1 code (flue-host is untouched
+  by buzz-desktop). Fixed forward — margin 3s→12s, still far under the ~30s
+  a real regression yields — on `feat/probe-node-test-load-margin` (off
+  main, upstream-PR candidate; the fork's documented CI-robustness pattern,
+  cf. feat/provider-spawn-etxtbsy-retry), merged to deploy. CI re-run to
+  confirm all-green.
+- **Prod state**: canary on srt; dist refreshed (2.0.3+srt); full backup
+  `/usr/local/lib/buzz-flue-host.bak-20260810-srt`; the other six units and
+  the relay untouched. Rollback refs in session memory.
+- **PARKED — points 2 & 3 (Kevin's).** The srt tier applies only to
+  flue-acp-driven agents; today that's `flue` (prod) + `canary`. Fleet
+  rollout needs: (2) the **web-egress allowlist** for the flue prod unit
+  (relay-only like the canary would break any web/repo fetch it does), and
+  (3) **when** to switch `flue` to srt. Both surfaced to Kevin at this
+  boundary; M1 stays open until they resolve.
 
 ### 2026-08-10 — M0.4 done → **M0 COMPLETE**; M1 entry gate satisfied
 
