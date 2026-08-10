@@ -2565,6 +2565,15 @@ impl Db {
         user::is_agent_owner(&self.pool, community_id, target_pubkey, actor_pubkey).await
     }
 
+    /// Check whether `pubkey` is a registered agent (non-NULL `agent_owner_pubkey`).
+    pub async fn is_registered_agent(
+        &self,
+        community_id: CommunityId,
+        pubkey: &[u8],
+    ) -> Result<bool> {
+        user::is_registered_agent(&self.pool, community_id, pubkey).await
+    }
+
     /// Set the channel_add_policy for a user.
     pub async fn set_channel_add_policy(
         &self,

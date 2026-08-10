@@ -117,6 +117,43 @@ pub const KIND_PUSH_LEASE: u32 = 30350;
 /// plus exact public projection bindings. See `docs/nips/NIP-PMA.md`.
 pub const KIND_PRIVATE_MANAGED_AGENT: u32 = 30179;
 
+/// NIP-PC: Agent Provider Credential (parameterized replaceable, owner-authored).
+///
+/// Delivers one AI-provider credential (API key or OAuth token pair) from an
+/// agent's owner to the harness process running that agent. Addressed by
+/// `(owner pubkey, kind, "<agent-pubkey-hex>:<provider-id>")` so re-delivery
+/// and revocation replace in place (NIP-33 LWW); the single `p` tag names the
+/// recipient agent and MUST equal the `d` tag's agent component. Content is
+/// NIP-44 v2 ciphertext (owner key → agent pubkey) decoding to a
+/// [`crate::provider_credential::ProviderCredentialPayload`].
+///
+/// # Access control
+///
+/// Write: only the registered owner of the `p`-tagged agent
+/// (`users.agent_owner_pubkey`). Read: filter-layer gate
+/// (`provider_credential_filters_authorized`) admits only `authors=[reader]`
+/// (the owner) or `#p=[reader]` (the agent) queries, with NO `ids` exemption;
+/// member of [`RESULT_GATED_KINDS`] so per-event delivery re-checks
+/// author-or-recipient (`filter::reader_authorized_for_event`); storage writes
+/// a NULL `search_tsv`. Deliberately NOT in [`P_GATED_KINDS`] — that gate has
+/// no author arm and would block the owner's own `authors` queries; the
+/// dedicated gate mirrors the NIP-AE engram model instead.
+///
+/// 30990 sits clear of the sequentially-allocated 3017x block for the same
+/// race-avoidance reason documented on other out-of-sequence kinds.
+pub const KIND_AGENT_PROVIDER_CREDENTIAL: u32 = 30990;
+
+/// NIP-PC: Agent Provider Credential Status (parameterized replaceable,
+/// agent-authored).
+///
+/// Non-secret status projection published by the agent harness after applying
+/// or removing a delivered credential: `d` = provider id, content = small
+/// plaintext JSON (`{v, provider, state, detail?, updatedAt}`). Readable by
+/// every member (deliberately ungated — it is the owner-facing health signal),
+/// writable only by registered agents (authors with a non-NULL
+/// `users.agent_owner_pubkey`).
+pub const KIND_AGENT_PROVIDER_CREDENTIAL_STATUS: u32 = 30991;
+
 /// Kinds whose stored events are readable only by their author.
 ///
 /// The relay must never reveal the existence, count, tags, content, schedule,
@@ -139,7 +176,14 @@ pub const AUTHOR_ONLY_KINDS: &[u32] = &[
 ///
 /// Used by `filter_can_match_result_gated_kinds` to force the per-event
 /// fallback path in COUNT rather than the fast SQL `count_events()`.
-pub const RESULT_GATED_KINDS: &[u32] = &[KIND_DM_VISIBILITY, KIND_AGENT_TURN_METRIC];
+pub const RESULT_GATED_KINDS: &[u32] = &[
+    KIND_DM_VISIBILITY,
+    KIND_AGENT_TURN_METRIC,
+    // NIP-PC: credential deliveries are readable only by their author (the
+    // owner) or the `p`-tagged agent — including via `ids` filters. The
+    // author arm lives in `filter::reader_authorized_for_event`.
+    KIND_AGENT_PROVIDER_CREDENTIAL,
+];
 
 /// Kinds whose stored events have `#p`-bound read access — readable only by
 /// subscribers whose pubkey appears in the event's `#p` tag.
@@ -657,6 +701,8 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_MANAGED_AGENT,
     KIND_TEAM_CATALOG,
     KIND_PRIVATE_MANAGED_AGENT,
+    KIND_AGENT_PROVIDER_CREDENTIAL,
+    KIND_AGENT_PROVIDER_CREDENTIAL_STATUS,
     KIND_REPORT,
     KIND_PRODUCT_FEEDBACK,
     KIND_NIP29_PUT_USER,
@@ -858,6 +904,11 @@ const _: () = assert!(is_parameterized_replaceable(KIND_TEAM)); // 30176 ∈ 300
 const _: () = assert!(is_parameterized_replaceable(KIND_MANAGED_AGENT)); // 30177 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM_CATALOG)); // 30178 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_PRIVATE_MANAGED_AGENT)); // 30179 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_AGENT_PROVIDER_CREDENTIAL)); // 30990 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(
+    KIND_AGENT_PROVIDER_CREDENTIAL_STATUS
+)); // 30991 ∈ 30000–39999
+const _: () = assert!(KIND_AGENT_PROVIDER_CREDENTIAL_STATUS <= u16::MAX as u32);
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_EVENT_REMINDER)); // 30300 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_DM_VISIBILITY)); // 30622 ∈ 30000–39999

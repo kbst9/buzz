@@ -7,8 +7,9 @@ use tracing::{debug, warn};
 
 use buzz_core::filter::filters_match;
 use buzz_core::kind::{
-    is_unshared_gated_event, AUTHOR_ONLY_KINDS, KIND_AGENT_ENGRAM, KIND_AGENT_TURN_METRIC,
-    KIND_DM_VISIBILITY, P_GATED_KINDS, RESULT_GATED_KINDS, SHARED_GATED_KINDS,
+    is_unshared_gated_event, AUTHOR_ONLY_KINDS, KIND_AGENT_ENGRAM, KIND_AGENT_PROVIDER_CREDENTIAL,
+    KIND_AGENT_TURN_METRIC, KIND_DM_VISIBILITY, P_GATED_KINDS, RESULT_GATED_KINDS,
+    SHARED_GATED_KINDS,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_db::EventQuery;
@@ -191,6 +192,13 @@ pub async fn handle_req(
             conn.send(RelayMessage::closed(
                 &sub_id,
                 "restricted: agent-engram reads require authors=[self] or #p=[self]",
+            ));
+            return;
+        }
+        if !provider_credential_filters_authorized(&filters, &authed_pubkey_hex) {
+            conn.send(RelayMessage::closed(
+                &sub_id,
+                "restricted: provider-credential reads require authors=[self] or #p=[self]",
             ));
             return;
         }
@@ -1144,6 +1152,60 @@ pub(crate) fn engram_filters_authorized(filters: &[Filter], authed_pubkey_hex: &
     })
 }
 
+/// Authorize read access for filters that can match
+/// KIND_AGENT_PROVIDER_CREDENTIAL events.
+///
+/// NIP-PC credential deliveries have encrypted content, but their public
+/// envelope (owner author, `#p` agent, `d` = `<agent>:<provider>`, timestamps)
+/// leaks which providers an owner has configured for which agent. Only the
+/// delivering owner (the author) or the recipient agent (the `#p` value) may
+/// enumerate them.
+///
+/// Same authors-or-`#p` shape as [`engram_filters_authorized`], with one
+/// deliberate difference: filters that EXPLICITLY name kind 30990 get no
+/// `ids` exemption (NIP-AM strict model — knowing an event id is not
+/// authorization). A kindless `{ids:[…]}` lookup is unaffected at this layer;
+/// it is closed per-event by [`RESULT_GATED_KINDS`] membership and
+/// `reader_authorized_for_event`'s author-or-`#p` arm.
+pub(crate) fn provider_credential_filters_authorized(
+    filters: &[Filter],
+    authed_pubkey_hex: &str,
+) -> bool {
+    let p_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::P);
+    filters.iter().all(|filter| {
+        let explicitly_named = filter.kinds.as_ref().is_some_and(|ks| {
+            ks.iter()
+                .any(|k| k.as_u16() as u32 == KIND_AGENT_PROVIDER_CREDENTIAL)
+        });
+        let can_match = filter.kinds.as_ref().is_none_or(|ks| {
+            ks.iter()
+                .any(|k| k.as_u16() as u32 == KIND_AGENT_PROVIDER_CREDENTIAL)
+        });
+        if !can_match {
+            return true;
+        }
+        // Kindless specific-event lookups don't fish; the per-event reader
+        // gate (RESULT_GATED + reader_authorized_for_event) protects them.
+        if !explicitly_named && filter.ids.as_ref().is_some_and(|ids| !ids.is_empty()) {
+            return true;
+        }
+
+        let authors_ok = filter.authors.as_ref().is_some_and(|authors| {
+            !authors.is_empty()
+                && authors
+                    .iter()
+                    .all(|a| a.to_hex().eq_ignore_ascii_case(authed_pubkey_hex))
+        });
+        if authors_ok {
+            return true;
+        }
+
+        filter.generic_tags.get(&p_tag).is_some_and(|values| {
+            !values.is_empty() && values.iter().all(|v| v == authed_pubkey_hex)
+        })
+    })
+}
+
 /// Returns `true` if the filter CAN match author-only kinds — meaning it either
 /// has no `kinds` constraint (wildcard) or includes at least one author-only kind.
 ///
@@ -1872,6 +1934,85 @@ mod tests {
             &public,
             &reader_keys.public_key().to_bytes()
         ));
+    }
+
+    // ─── provider_credential_filters_authorized (NIP-PC) ─────────────────
+
+    #[test]
+    fn provider_credential_gate_allows_agent_querying_by_p() {
+        // The agent's boot fetch: {kinds:[30990], #p:[self]} (+authors=owner).
+        let (agent, owner, _) = three_pubkeys();
+        let p_tag = SingleLetterTag::lowercase(Alphabet::P);
+        let f = Filter::new()
+            .kind(nostr::Kind::Custom(KIND_AGENT_PROVIDER_CREDENTIAL as u16))
+            .author(nostr::PublicKey::from_hex(&owner).unwrap())
+            .custom_tags(p_tag, [&agent]);
+        assert!(provider_credential_filters_authorized(&[f], &agent));
+    }
+
+    #[test]
+    fn provider_credential_gate_allows_owner_querying_by_authors() {
+        // The owner's reconciliation read: {kinds:[30990], authors:[self]}.
+        let (_, owner, _) = three_pubkeys();
+        let f = Filter::new()
+            .kind(nostr::Kind::Custom(KIND_AGENT_PROVIDER_CREDENTIAL as u16))
+            .author(nostr::PublicKey::from_hex(&owner).unwrap());
+        assert!(provider_credential_filters_authorized(&[f], &owner));
+    }
+
+    #[test]
+    fn provider_credential_gate_rejects_unrelated_reader() {
+        let (agent, owner, attacker) = three_pubkeys();
+        let p_tag = SingleLetterTag::lowercase(Alphabet::P);
+        let f = Filter::new()
+            .kind(nostr::Kind::Custom(KIND_AGENT_PROVIDER_CREDENTIAL as u16))
+            .author(nostr::PublicKey::from_hex(&owner).unwrap())
+            .custom_tags(p_tag, [&agent]);
+        assert!(!provider_credential_filters_authorized(&[f], &attacker));
+    }
+
+    #[test]
+    fn provider_credential_gate_rejects_bare_and_wildcard_kind_filters() {
+        let (agent, _, _) = three_pubkeys();
+        let bare = Filter::new().kind(nostr::Kind::Custom(KIND_AGENT_PROVIDER_CREDENTIAL as u16));
+        assert!(!provider_credential_filters_authorized(&[bare], &agent));
+        let wildcard = Filter::new();
+        assert!(!provider_credential_filters_authorized(&[wildcard], &agent));
+    }
+
+    #[test]
+    fn provider_credential_gate_no_ids_exemption_when_kind_named() {
+        // NIP-AM strict model: explicitly naming 30990 with ids must still
+        // satisfy authors-or-#p.
+        let (agent, _, _) = three_pubkeys();
+        let id = nostr::EventId::from_hex(
+            "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        )
+        .unwrap();
+        let f = Filter::new()
+            .kind(nostr::Kind::Custom(KIND_AGENT_PROVIDER_CREDENTIAL as u16))
+            .id(id);
+        assert!(!provider_credential_filters_authorized(&[f], &agent));
+    }
+
+    #[test]
+    fn provider_credential_gate_allows_kindless_ids_lookup() {
+        // A kindless {ids:[…]} lookup passes this layer; the per-event
+        // reader gate (RESULT_GATED + reader_authorized_for_event) protects it.
+        let (agent, _, _) = three_pubkeys();
+        let id = nostr::EventId::from_hex(
+            "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        )
+        .unwrap();
+        let f = Filter::new().id(id);
+        assert!(provider_credential_filters_authorized(&[f], &agent));
+    }
+
+    #[test]
+    fn provider_credential_gate_skips_other_kinds() {
+        let (agent, _, _) = three_pubkeys();
+        let f = Filter::new().kind(nostr::Kind::Custom(9));
+        assert!(provider_credential_filters_authorized(&[f], &agent));
     }
 
     #[test]

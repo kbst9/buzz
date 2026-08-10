@@ -11,18 +11,27 @@ pub fn filters_match(filters: &[Filter], event: &StoredEvent) -> bool {
     filters.iter().any(|f| filter_match_one(f, event))
 }
 
-/// Result-level read authorization for relay-signed events whose content is
-/// private to a single viewer. Currently gates `KIND_DM_VISIBILITY` and
-/// `KIND_AGENT_TURN_METRIC`: the reader MUST equal the event's `#p` tag
-/// (owner). Returns `true` for every other kind.
+/// Result-level read authorization for events whose content is private to a
+/// small fixed audience. Gates `KIND_DM_VISIBILITY` and
+/// `KIND_AGENT_TURN_METRIC` (reader MUST equal the event's `#p` tag — owner
+/// only, the authoring agent deliberately gets no read-back) and
+/// `KIND_AGENT_PROVIDER_CREDENTIAL` (reader MUST be the event author — the
+/// delivering owner — or the `#p`-tagged recipient agent). Returns `true` for
+/// every other kind.
 ///
 /// This guards every delivery surface — WS historical pull (`req.rs`), HTTP
 /// bridge (`bridge.rs`), and live fan-out (`event.rs`) — so a query that
-/// bypasses the filter-level `#p` gate (e.g. a kindless `ids:[…]` lookup of
+/// bypasses the filter-level gates (e.g. a kindless `ids:[…]` lookup of
 /// a known event id) still cannot read another user's private event.
 pub fn reader_authorized_for_event(event: &nostr::Event, reader_pubkey_hex: &str) -> bool {
     let kind = crate::kind::event_kind_u32(event);
-    if kind != crate::kind::KIND_DM_VISIBILITY && kind != crate::kind::KIND_AGENT_TURN_METRIC {
+    let p_only =
+        kind == crate::kind::KIND_DM_VISIBILITY || kind == crate::kind::KIND_AGENT_TURN_METRIC;
+    let author_or_p = kind == crate::kind::KIND_AGENT_PROVIDER_CREDENTIAL;
+    if !p_only && !author_or_p {
+        return true;
+    }
+    if author_or_p && event.pubkey.to_hex() == reader_pubkey_hex {
         return true;
     }
     let p = nostr::SingleLetterTag::lowercase(nostr::Alphabet::P);
@@ -263,6 +272,39 @@ mod tests {
             .sign_with_keys(&relay)
             .expect("sign");
         assert!(reader_authorized_for_event(&note, other));
+    }
+
+    #[test]
+    fn reader_authorized_for_event_gates_provider_credential_by_author_or_p() {
+        let owner_keys = Keys::generate();
+        let agent_keys = Keys::generate();
+        let agent_hex = agent_keys.public_key().to_hex();
+        let attacker = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+        // NIP-PC envelope shape: pubkey=owner, p tag=agent, d = "<agent>:<provider>".
+        let delivery = EventBuilder::new(
+            Kind::Custom(crate::kind::KIND_AGENT_PROVIDER_CREDENTIAL as u16),
+            "encrypted-payload",
+        )
+        .tags([
+            Tag::parse(["d", &format!("{agent_hex}:anthropic")]).unwrap(),
+            Tag::parse(["p", &agent_hex]).unwrap(),
+        ])
+        .sign_with_keys(&owner_keys)
+        .expect("sign");
+
+        assert!(
+            reader_authorized_for_event(&delivery, &owner_keys.public_key().to_hex()),
+            "the delivering owner (author) must be authorized to read back their delivery"
+        );
+        assert!(
+            reader_authorized_for_event(&delivery, &agent_hex),
+            "the recipient agent (p tag) must be authorized to read its credential"
+        );
+        assert!(
+            !reader_authorized_for_event(&delivery, attacker),
+            "a third party must NOT be authorized to read a credential delivery"
+        );
     }
 
     #[test]

@@ -12,9 +12,10 @@ use uuid::Uuid;
 use buzz_auth::Scope;
 use buzz_core::kind::{
     event_kind_u32, is_identity_archive_request_kind, is_parameterized_replaceable,
-    is_relay_admin_kind, KIND_AGENT_ENGRAM, KIND_AGENT_PROFILE, KIND_AGENT_TURN_METRIC,
-    KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_AUTH, KIND_BOOKMARK_LIST, KIND_BOOKMARK_SET,
-    KIND_CANVAS, KIND_CONTACT_LIST, KIND_DELETION, KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN,
+    is_relay_admin_kind, KIND_AGENT_ENGRAM, KIND_AGENT_PROFILE, KIND_AGENT_PROVIDER_CREDENTIAL,
+    KIND_AGENT_PROVIDER_CREDENTIAL_STATUS, KIND_AGENT_TURN_METRIC, KIND_APPROVAL_DENY,
+    KIND_APPROVAL_GRANT, KIND_AUTH, KIND_BOOKMARK_LIST, KIND_BOOKMARK_SET, KIND_CANVAS,
+    KIND_CONTACT_LIST, KIND_DELETION, KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN,
     KIND_EMOJI_LIST, KIND_EMOJI_SET, KIND_EVENT_REMINDER, KIND_FOLLOW_SET, KIND_FORUM_COMMENT,
     KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_GIFT_WRAP, KIND_GIT_ISSUE, KIND_GIT_PATCH,
     KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST, KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE,
@@ -335,6 +336,10 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         }
         // NIP-AM: agent turn metrics are agent-authored global events (encrypted to owner).
         KIND_AGENT_TURN_METRIC => Ok(Scope::MessagesWrite),
+        // NIP-PC: credential deliveries are owner-authored user-scoped state.
+        KIND_AGENT_PROVIDER_CREDENTIAL => Ok(Scope::UsersWrite),
+        // NIP-PC: credential status is agent-authored, same shape as turn metrics.
+        KIND_AGENT_PROVIDER_CREDENTIAL_STATUS => Ok(Scope::MessagesWrite),
         // NIP-56 reports are ordinary member writes into the mod-only queue.
         // Ingest persists them to `moderation_reports` and suppresses public
         // storage/fanout; reports are signals, never enforcement triggers.
@@ -585,6 +590,10 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             // NIP-AM: agent turn metrics are owner-scoped global events.
             // Channel identity is encrypted inside the payload — no `h` tag.
             | KIND_AGENT_TURN_METRIC
+            // NIP-PC: credential deliveries and their status projections are
+            // owner↔agent global state; a stray `h` tag must not channel-scope them.
+            | KIND_AGENT_PROVIDER_CREDENTIAL
+            | KIND_AGENT_PROVIDER_CREDENTIAL_STATUS
             // NIP-PL leases are author-owned, addressable global state.
             | super::push_lease::KIND_PUSH_LEASE
     )
@@ -1709,6 +1718,122 @@ fn validate_agent_turn_metric_envelope(event: &nostr::Event) -> Result<(), Strin
     Ok(())
 }
 
+/// Validate the public envelope of a NIP-PC `kind:30990` event.
+///
+/// Enforces (without touching the encrypted payload):
+/// - Exactly one `d` tag of the form `<agent-pubkey-hex>:<provider-id>`
+///   (64 lowercase hex chars, `:`, then a grammar-valid provider id).
+/// - Exactly one `p` tag: 64 lowercase hex chars equal to the `d` tag's
+///   agent component (the recipient agent).
+/// - No `h` tag (credential deliveries are never channel-scoped).
+/// - Content syntactically resembles NIP-44 v2 ciphertext (delegated to
+///   `validate_engram_nip44_content`).
+///
+/// Ownership (`is_agent_owner`: the author must be the registered owner of the
+/// `p`-tagged agent) is an async DB check performed separately in
+/// `ingest_event_inner` after this synchronous envelope check.
+fn validate_provider_credential_envelope(event: &nostr::Event) -> Result<(), String> {
+    use buzz_core::provider_credential::{
+        is_lowercase_hex_pubkey, parse_provider_credential_d_tag,
+    };
+
+    let mut p_tags: Vec<Option<&str>> = Vec::new();
+    let mut d_tags: Vec<Option<&str>> = Vec::new();
+    let mut has_h_tag = false;
+    for tag in event.tags.iter() {
+        let parts = tag.as_slice();
+        match parts.first().map(|s| s.as_str()) {
+            Some("p") => p_tags.push(parts.get(1).map(|s| s.as_str())),
+            Some("d") => d_tags.push(parts.get(1).map(|s| s.as_str())),
+            Some("h") => has_h_tag = true,
+            _ => {}
+        }
+    }
+
+    if has_h_tag {
+        return Err("provider-credential event must not have an `h` tag".to_string());
+    }
+
+    if d_tags.len() != 1 {
+        return Err(format!(
+            "provider-credential event must have exactly one `d` tag (got {})",
+            d_tags.len()
+        ));
+    }
+    let d = d_tags[0].unwrap_or_default();
+    let Some((agent, _provider)) = parse_provider_credential_d_tag(d) else {
+        return Err(
+            "provider-credential `d` tag must be `<agent-pubkey-hex>:<provider-id>` \
+             (64 lowercase hex chars, then a lowercase provider slug)"
+                .to_string(),
+        );
+    };
+
+    if p_tags.len() != 1 {
+        return Err(format!(
+            "provider-credential event must have exactly one `p` tag (got {})",
+            p_tags.len()
+        ));
+    }
+    let p = p_tags[0].unwrap_or_default();
+    if !is_lowercase_hex_pubkey(p) {
+        return Err("provider-credential `p` tag must be 64 lowercase hex chars".to_string());
+    }
+    if p != agent {
+        return Err(
+            "provider-credential `p` tag must equal the `d` tag's agent component".to_string(),
+        );
+    }
+
+    // Content must look like a NIP-44 v2 ciphertext (length, base64, version prefix).
+    validate_engram_nip44_content(&event.content)
+        .map_err(|e| e.replace("agent-engram", "provider-credential"))?;
+
+    Ok(())
+}
+
+/// Validate the public envelope of a NIP-PC `kind:30991` status event.
+///
+/// - Exactly one bounded `d` tag that is a grammar-valid provider id.
+/// - No `h` tag (status is owner-facing global state).
+/// - Content: a JSON object of at most 4096 bytes — the non-secret status
+///   projection; the schema itself is client-side.
+///
+/// Authorship (the author must be a registered agent — non-NULL
+/// `users.agent_owner_pubkey`) is an async DB check performed separately in
+/// `ingest_event_inner`.
+fn validate_provider_credential_status_envelope(event: &nostr::Event) -> Result<(), String> {
+    use buzz_core::provider_credential::is_valid_provider_id;
+
+    const LABEL: &str = "provider-credential-status event";
+    const MAX_CONTENT_BYTES: usize = 4096;
+
+    let d = single_bounded_d_tag(event, LABEL)?;
+    if !is_valid_provider_id(d) {
+        return Err(format!(
+            "{LABEL} `d` tag must be a provider id matching [a-z0-9][a-z0-9_-]{{0,31}}"
+        ));
+    }
+    if event
+        .tags
+        .iter()
+        .any(|t| t.as_slice().first().map(|s| s.as_str()) == Some("h"))
+    {
+        return Err(format!("{LABEL} must not have an `h` tag"));
+    }
+    if event.content.len() > MAX_CONTENT_BYTES {
+        return Err(format!(
+            "{LABEL} content too large ({} bytes, max {MAX_CONTENT_BYTES})",
+            event.content.len()
+        ));
+    }
+    match serde_json::from_str::<serde_json::Value>(&event.content) {
+        Ok(value) if value.is_object() => Ok(()),
+        Ok(_) => Err(format!("{LABEL} content must be a JSON object")),
+        Err(e) => Err(format!("{LABEL} content is not valid JSON: {e}")),
+    }
+}
+
 /// Parse a NIP-ER `not_before` tag value into a Unix timestamp.
 ///
 /// The value MUST be a decimal integer string containing only ASCII digits, with
@@ -2513,6 +2638,66 @@ async fn ingest_event_inner(
             return Err(IngestError::AuthFailed(
                 "restricted: agent-turn-metric `p` tag must be the registered owner of this agent"
                     .into(),
+            ));
+        }
+    }
+
+    if kind_u32 == KIND_AGENT_PROVIDER_CREDENTIAL {
+        validate_provider_credential_envelope(&event)
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+
+        // Ownership check: the AUTHOR must be the registered owner of the
+        // `p`-tagged recipient agent. Direction is inverted vs the 44200 gate
+        // above (there the agent authors and the owner is `p`-tagged).
+        let Some(agent_hex) = event.tags.iter().find_map(|t| {
+            let parts = t.as_slice();
+            (parts.len() >= 2 && parts[0].as_str() == "p").then(|| parts[1].to_string())
+        }) else {
+            return Err(IngestError::Rejected(
+                "invalid: provider-credential event must have exactly one `p` tag".into(),
+            ));
+        };
+        let Ok(agent_bytes) = hex::decode(&agent_hex) else {
+            return Err(IngestError::Rejected(
+                "invalid: provider-credential `p` tag must be 64 lowercase hex chars".into(),
+            ));
+        };
+        let owner_bytes = event.pubkey.to_bytes().to_vec();
+        let is_owner = state
+            .db
+            .is_agent_owner(tenant.community(), &agent_bytes, &owner_bytes)
+            .await
+            .map_err(|e| {
+                IngestError::Internal(format!(
+                    "error: db error checking provider-credential ownership: {e}"
+                ))
+            })?;
+        if !is_owner {
+            return Err(IngestError::AuthFailed(
+                "restricted: provider-credential author must be the registered owner of the `p`-tagged agent"
+                    .into(),
+            ));
+        }
+    }
+
+    if kind_u32 == KIND_AGENT_PROVIDER_CREDENTIAL_STATUS {
+        validate_provider_credential_status_envelope(&event)
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+
+        // Authorship check: only registered agents publish credential status.
+        let author_bytes = event.pubkey.to_bytes().to_vec();
+        let is_agent = state
+            .db
+            .is_registered_agent(tenant.community(), &author_bytes)
+            .await
+            .map_err(|e| {
+                IngestError::Internal(format!(
+                    "error: db error checking provider-credential-status authorship: {e}"
+                ))
+            })?;
+        if !is_agent {
+            return Err(IngestError::AuthFailed(
+                "restricted: provider-credential-status author must be a registered agent".into(),
             ));
         }
     }
@@ -5043,6 +5228,232 @@ mod tests {
         let err = validate_agent_turn_metric_envelope(&ev).unwrap_err();
         // error comes from validate_engram_nip44_content with label replaced
         assert!(err.contains("agent-turn-metric"), "got: {err}");
+    }
+
+    // ─── provider_credential envelope tests (NIP-PC) ─────────────────────────
+
+    /// Build a kind:30990 event signed by `owner_keys` with the given tags.
+    fn make_provider_credential(
+        owner_keys: &nostr::Keys,
+        tags: &[&[&str]],
+        content: &str,
+    ) -> nostr::Event {
+        let nostr_tags: Vec<nostr::Tag> = tags
+            .iter()
+            .map(|t| nostr::Tag::parse(t.iter().copied()).unwrap())
+            .collect();
+        nostr::EventBuilder::new(
+            nostr::Kind::Custom(buzz_core::kind::KIND_AGENT_PROVIDER_CREDENTIAL as u16),
+            content,
+        )
+        .tags(nostr_tags)
+        .sign_with_keys(owner_keys)
+        .unwrap()
+    }
+
+    #[test]
+    fn provider_credential_envelope_accepts_canonical() {
+        let owner = nostr::Keys::generate();
+        let agent_hex = "a".repeat(64);
+        let d = format!("{agent_hex}:anthropic");
+        let ev =
+            make_provider_credential(&owner, &[&["d", &d], &["p", &agent_hex]], &fake_nip44_v2());
+        assert!(validate_provider_credential_envelope(&ev).is_ok());
+    }
+
+    #[test]
+    fn provider_credential_envelope_rejects_h_tag() {
+        let owner = nostr::Keys::generate();
+        let agent_hex = "a".repeat(64);
+        let d = format!("{agent_hex}:anthropic");
+        let ev = make_provider_credential(
+            &owner,
+            &[
+                &["d", &d],
+                &["p", &agent_hex],
+                &["h", "12345678-1234-1234-1234-123456789abc"],
+            ],
+            &fake_nip44_v2(),
+        );
+        let err = validate_provider_credential_envelope(&ev).unwrap_err();
+        assert!(err.contains("`h` tag"), "got: {err}");
+    }
+
+    #[test]
+    fn provider_credential_envelope_rejects_d_tag_shapes() {
+        let owner = nostr::Keys::generate();
+        let agent_hex = "a".repeat(64);
+        let good_d = format!("{agent_hex}:anthropic");
+
+        // Missing d.
+        let ev = make_provider_credential(&owner, &[&["p", &agent_hex]], &fake_nip44_v2());
+        assert!(validate_provider_credential_envelope(&ev)
+            .unwrap_err()
+            .contains("exactly one `d` tag"));
+
+        // Two d tags.
+        let ev = make_provider_credential(
+            &owner,
+            &[&["d", &good_d], &["d", &good_d], &["p", &agent_hex]],
+            &fake_nip44_v2(),
+        );
+        assert!(validate_provider_credential_envelope(&ev)
+            .unwrap_err()
+            .contains("exactly one `d` tag"));
+
+        // Malformed d values: no colon, uppercase agent, short agent, bad provider.
+        for bad_d in [
+            "no-colon".to_string(),
+            format!("{}:anthropic", "A".repeat(64)),
+            format!("{}:anthropic", "a".repeat(63)),
+            format!("{agent_hex}:Not-Valid"),
+            format!("{agent_hex}:"),
+        ] {
+            let ev = make_provider_credential(
+                &owner,
+                &[&["d", &bad_d], &["p", &agent_hex]],
+                &fake_nip44_v2(),
+            );
+            let err = validate_provider_credential_envelope(&ev).unwrap_err();
+            assert!(err.contains("`d` tag must be"), "d={bad_d:?} got: {err}");
+        }
+    }
+
+    #[test]
+    fn provider_credential_envelope_rejects_p_tag_shapes() {
+        let owner = nostr::Keys::generate();
+        let agent_hex = "a".repeat(64);
+        let other_hex = "b".repeat(64);
+        let d = format!("{agent_hex}:anthropic");
+
+        // Missing p.
+        let ev = make_provider_credential(&owner, &[&["d", &d]], &fake_nip44_v2());
+        assert!(validate_provider_credential_envelope(&ev)
+            .unwrap_err()
+            .contains("exactly one `p` tag"));
+
+        // Two p tags.
+        let ev = make_provider_credential(
+            &owner,
+            &[&["d", &d], &["p", &agent_hex], &["p", &other_hex]],
+            &fake_nip44_v2(),
+        );
+        assert!(validate_provider_credential_envelope(&ev)
+            .unwrap_err()
+            .contains("exactly one `p` tag"));
+
+        // p does not match the d agent component — coordinate spoof.
+        let ev =
+            make_provider_credential(&owner, &[&["d", &d], &["p", &other_hex]], &fake_nip44_v2());
+        assert!(validate_provider_credential_envelope(&ev)
+            .unwrap_err()
+            .contains("agent component"));
+    }
+
+    #[test]
+    fn provider_credential_envelope_rejects_plaintext_content() {
+        let owner = nostr::Keys::generate();
+        let agent_hex = "a".repeat(64);
+        let d = format!("{agent_hex}:anthropic");
+        let ev = make_provider_credential(
+            &owner,
+            &[&["d", &d], &["p", &agent_hex]],
+            "{\"type\":\"api_key\",\"key\":\"plaintext-not-allowed\"}",
+        );
+        let err = validate_provider_credential_envelope(&ev).unwrap_err();
+        assert!(err.contains("provider-credential"), "got: {err}");
+    }
+
+    /// Build a kind:30991 status event signed by `agent_keys`.
+    fn make_provider_credential_status(
+        agent_keys: &nostr::Keys,
+        tags: &[&[&str]],
+        content: &str,
+    ) -> nostr::Event {
+        let nostr_tags: Vec<nostr::Tag> = tags
+            .iter()
+            .map(|t| nostr::Tag::parse(t.iter().copied()).unwrap())
+            .collect();
+        nostr::EventBuilder::new(
+            nostr::Kind::Custom(buzz_core::kind::KIND_AGENT_PROVIDER_CREDENTIAL_STATUS as u16),
+            content,
+        )
+        .tags(nostr_tags)
+        .sign_with_keys(agent_keys)
+        .unwrap()
+    }
+
+    #[test]
+    fn provider_credential_status_envelope_accepts_canonical() {
+        let agent = nostr::Keys::generate();
+        let ev = make_provider_credential_status(
+            &agent,
+            &[&["d", "anthropic"]],
+            r#"{"v":1,"provider":"anthropic","state":"applied","updatedAt":1754800000}"#,
+        );
+        assert!(validate_provider_credential_status_envelope(&ev).is_ok());
+    }
+
+    #[test]
+    fn provider_credential_status_envelope_rejects_bad_shapes() {
+        let agent = nostr::Keys::generate();
+
+        // d is not a provider id.
+        let ev = make_provider_credential_status(&agent, &[&["d", "Not-Valid"]], "{}");
+        assert!(validate_provider_credential_status_envelope(&ev)
+            .unwrap_err()
+            .contains("provider id"));
+
+        // h tag present.
+        let ev = make_provider_credential_status(
+            &agent,
+            &[
+                &["d", "xai"],
+                &["h", "12345678-1234-1234-1234-123456789abc"],
+            ],
+            "{}",
+        );
+        assert!(validate_provider_credential_status_envelope(&ev)
+            .unwrap_err()
+            .contains("`h` tag"));
+
+        // Content not JSON.
+        let ev = make_provider_credential_status(&agent, &[&["d", "xai"]], "not json");
+        assert!(validate_provider_credential_status_envelope(&ev)
+            .unwrap_err()
+            .contains("not valid JSON"));
+
+        // Content JSON but not an object.
+        let ev = make_provider_credential_status(&agent, &[&["d", "xai"]], "[1,2,3]");
+        assert!(validate_provider_credential_status_envelope(&ev)
+            .unwrap_err()
+            .contains("JSON object"));
+
+        // Content too large.
+        let big = format!("{{\"pad\":\"{}\"}}", "x".repeat(4200));
+        let ev = make_provider_credential_status(&agent, &[&["d", "xai"]], &big);
+        assert!(validate_provider_credential_status_envelope(&ev)
+            .unwrap_err()
+            .contains("too large"));
+    }
+
+    #[test]
+    fn provider_credential_kinds_are_global_only_and_in_scope_allowlist() {
+        assert!(is_global_only_kind(KIND_AGENT_PROVIDER_CREDENTIAL));
+        assert!(is_global_only_kind(KIND_AGENT_PROVIDER_CREDENTIAL_STATUS));
+
+        let keys = nostr::Keys::generate();
+        let dummy = nostr::EventBuilder::new(nostr::Kind::Custom(1), "")
+            .sign_with_keys(&keys)
+            .unwrap();
+        assert_eq!(
+            required_scope_for_kind(KIND_AGENT_PROVIDER_CREDENTIAL, &dummy).unwrap(),
+            Scope::UsersWrite,
+        );
+        assert_eq!(
+            required_scope_for_kind(KIND_AGENT_PROVIDER_CREDENTIAL_STATUS, &dummy).unwrap(),
+            Scope::MessagesWrite,
+        );
     }
 
     /// The HTTP bridge's `submit_event` 400 arm and the WS `EVENT` handler's
