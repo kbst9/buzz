@@ -221,6 +221,31 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 
 ## Progress notes (dated; newest first)
 
+### 2026-08-10 — Harness propagation check (prompt + provided files + skill), under docker+broker
+
+Verified the *Buzz-agent experience itself* survives the sandbox + broker,
+not just raw file I/O:
+
+- **Provided nest files present + visible in the sandbox**: AGENTS.md,
+  `.agents/skills/buzz-cli/SKILL.md`, GUIDES/PLANS/RESEARCH/OUTBOX/REPOS,
+  `.mcp.json`, `.gitconfig` — all on the host AND readable inside the heavy
+  container (`# Buzz Nest` reads fine); srt (Fluelo) sees them too (Test 5).
+- **Harness system prompt reaches + is USED by the agent** (behavioral
+  probe, docker+broker canary): it answered its working dir
+  (`/home/kbs/.buzz`), workspace subdirs (`RESEARCH/`, `PLANS/`), the buzz
+  CLI verbs (`channels list` / `messages send`), and **read its AGENTS.md**
+  (`# Buzz Nest`) — each only answerable if the [Workspace]/[Base]/[Buzz CLI]
+  sections and the files propagated.
+- **Raw prompt capture** (temporary RUST_LOG drop-in, removed after):
+  section headers `[Workspace]`, `[Base]`, `Buzz CLI`, `Session Model`, and
+  `core memory` all PRESENT in the session/new the harness sends.
+  `[Team Instructions]` / `[Community Guide]` absent because **unset** for
+  this community (`community guide get` → null) — not a propagation fault.
+- Prompt assembly is a buzz-acp (harness) concern, tier-independent, so it
+  propagates identically for local/srt; the canary (deepest: docker +
+  broker) is the direct proof. Debug drop-in removed, canary clean
+  (0 DEBUG), post-check smoke PASS 6.3 s.
+
 ### 2026-08-10 — File-ops + complex-interaction campaign (model-driven, both tiers)
 
 Gap the first campaign missed: it exercised fs verbs at the conformance/API
