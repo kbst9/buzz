@@ -205,7 +205,7 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 3. ~~**srt prod rollout order/timing** (gates M1 completion)~~ ✅ resolved 2026-08-10 — switch Fluelo now (done, smoke PASS). **M1 COMPLETE.**
 4. ~~**MinIO succession** (gates M2 → prod storage; M3 substrate)~~ ✅ resolved 2026-08-10 — **SeaweedFS for workspace, keep MinIO for media**. M3 entry gate satisfied.
 5. ~~**Heavy-tier selection** (gates M3 deploy)~~ ✅ resolved 2026-08-10 — **BUILD the heavy tier now**: Docker + srt-proxy (the audit's recommendation). (Kevin first said hold, then redirected to build.) microsandbox stays the M5 isolate-tier option; gVisor (M4) is the opt-in hardening layer on the Docker heavy image.
-6. **M5 trigger** (whether/when the isolate tier is warranted) — Kevin's call; not yet triggered.
+6. ~~**M5 trigger**~~ ✅ resolved 2026-08-10 — **triggered as SIGNING BROKER ONLY** (Kevin, on the recommendation grounded in the ecosystem pattern: every surveyed system keeps secrets outside the exec boundary; the isolate tier stays untriggered — VM-per-sandbox is the hostile-tenant norm, not the own-agent norm; microsandbox remains the vetted candidate if that changes).
 6. **M5 trigger** (whether/when the isolate tier is warranted).
 
 ## M0 status
@@ -220,6 +220,52 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 | M0.6 workspace bench | ✅ 2026-08-10 (gradient baseline PASS: pjdfstest 6791 tests, fio, git workload, coherence) |
 
 ## Progress notes (dated; newest first)
+
+### 2026-08-10 — M5 signing broker BUILT + live on the canary: **the nsec is out of Ring 2**
+
+Park point 6 resolved as broker-only (see § Park points). The one hole no
+egress tier could close — an agent prompt-injected into posting
+`$BUZZ_PRIVATE_KEY` **through an allowlisted channel** — is now closed by
+removing the key from every sandbox.
+
+- **Rust half** (`feat/signer-socket` off main, upstream-PR candidate;
+  merged to deploy): buzz-cli `signer.rs` — `BUZZ_SIGNER_SOCKET` mode.
+  `BuzzClient` holds a `BuzzSigner` (Local = today, byte-identical;
+  Socket = one-shot newline-JSON over UDS: `get_public_key`, `sign_event`
+  — verified + pubkey-checked client-side — and `nip44_conversation_key`
+  for `buzz mem`). `keys()` split into `public_key()` (both modes) and
+  `local_keys()` (owner ops — auth-tag minting, drafts, ephemeral ws
+  publish — refuse clearly under the broker). buzz-core engram gains
+  `build_unsigned` + `validate_and_decrypt_with_key` (wire-format
+  identical) so agent memory works fully brokered. 350 cli + 34 engram
+  tests, clippy clean. Merge conflicts (lib.rs surface guard, fork's
+  users.rs `cmd_get_profile`) resolved + rerere-recorded.
+- **Node half** (flue-host): `src/sandbox/broker.ts` (nostr-tools 2.24.1
+  exact) — the host-side key holder; socket at `<cwd>/.signer.sock` so
+  every tier reaches it with zero tier plumbing (local trivially, srt via
+  cwd allow-read, docker via the workspace bind-mount), 0600,
+  foreign-pubkey refusals, per-op audit lines (never content, never key
+  material). `BUZZ_FLUE_SIGNER=broker` makes the ACP seed DROP
+  `BUZZ_PRIVATE_KEY` and carry `BUZZ_SIGNER_SOCKET` (server test pins the
+  strip). flue-host 104/104.
+- **Live proof on the canary (docker heavy tier — the deepest stack:
+  Rust buzz in a container ↔ UDS through the bind-mount ↔ Node broker on
+  the host)**: smoke PASS 9.6 s; journal shows `signing broker listening`
+  + `broker signed event kind 27235` (NIP-98) + `kind 9` (the reply
+  itself). **In-sandbox verification**: `BUZZ_PRIVATE_KEY=[ABSENT]`,
+  0 printenv occurrences, socket `srw-------`; the motivating exfil test
+  — `printf "$BUZZ_PRIVATE_KEY"` inside the sandbox — prints **empty**.
+- **Rollback rehearsed live** (flag off → key-in-env legacy path, smoke
+  PASS 6.3 s; restored → broker smoke PASS 9.4 s, 6 broker signatures).
+  Fleet `buzz` binary refreshed (backward-compatible — codex sanity
+  green; bak `~/buzz-backups/bin-20260810-signer/`).
+- **Deploy gotchas burned**: pnpm node_modules are symlink farms — rsync
+  the whole tree, never a single package dir (dangling symlink →
+  ERR_MODULE_NOT_FOUND crash-loop). And a feat-branch checkout removes
+  fork-only dirs: never run pnpm inside flue-host while off deploy (it
+  fabricates a stub package.json and pollutes the ROOT workspace
+  lockfile — both reverted).
+- `just ci` gate: running; M5 closes on green.
 
 ### 2026-08-10 — M4 gVisor pre-stage COMPLETE
 
