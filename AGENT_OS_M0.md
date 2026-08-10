@@ -204,7 +204,8 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 2. ~~**Web-egress policy** (gates M1 fleet rollout)~~ ✅ resolved 2026-08-10 — relay + curated allowlist; Fluelo live with `relay,github.com,raw.githubusercontent.com,docs.rs`.
 3. ~~**srt prod rollout order/timing** (gates M1 completion)~~ ✅ resolved 2026-08-10 — switch Fluelo now (done, smoke PASS). **M1 COMPLETE.**
 4. ~~**MinIO succession** (gates M2 → prod storage; M3 substrate)~~ ✅ resolved 2026-08-10 — **SeaweedFS for workspace, keep MinIO for media**. M3 entry gate satisfied.
-5. **Heavy-tier selection** (gates M3 deploy) — audit authorized 2026-08-10 (read-only, informs it); **still awaiting Kevin's sign-off after the audit**.
+5. ~~**Heavy-tier selection** (gates M3 deploy)~~ ✅ resolved 2026-08-10 — **BUILD the heavy tier now**: Docker + srt-proxy (the audit's recommendation). (Kevin first said hold, then redirected to build.) microsandbox stays the M5 isolate-tier option; gVisor (M4) is the opt-in hardening layer on the Docker heavy image.
+6. **M5 trigger** (whether/when the isolate tier is warranted) — Kevin's call; not yet triggered.
 6. **M5 trigger** (whether/when the isolate tier is warranted).
 
 ## M0 status
