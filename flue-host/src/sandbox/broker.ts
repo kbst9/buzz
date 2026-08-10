@@ -4,6 +4,7 @@ import * as net from "node:net";
 import * as path from "node:path";
 import { finalizeEvent, getPublicKey, nip44, verifyEvent } from "nostr-tools";
 import { log } from "../log.js";
+import { InitChain } from "./initchain.js";
 
 /**
  * Host-side signing broker (M5): holds the agent's Nostr private key so the
@@ -45,7 +46,8 @@ interface Broker {
 
 /** Live brokers keyed by socket path (one per workspace in this process). */
 const brokers = new Map<string, Broker>();
-let pending: Promise<void> = Promise.resolve();
+/** Retries a failed bind on the next call instead of poisoning the chain. */
+const initChain = new InitChain("signing broker");
 
 /** The socket path the sandbox env advertises for a given workspace. */
 export function signerSocketPath(cwd: string): string {
@@ -141,7 +143,7 @@ export async function ensureSigningBroker(
     // would silently derive garbage — refuse loudly instead.
     throw new Error("signing broker requires a 64-hex private key (nsec unsupported)");
   }
-  pending = pending.then(async () => {
+  await initChain.run(socketPath, async () => {
     const known = brokers.get(socketPath);
     if (known) {
       // The socket file lives in the agent-writable workspace: an agent (or
@@ -190,13 +192,13 @@ export async function ensureSigningBroker(
     brokers.set(socketPath, { socketPath, server });
     log.info("signing broker listening", { socket: socketPath, pubkey: pubkeyHex });
   });
-  await pending;
   return socketPath;
 }
 
 /** Test-only: close all brokers and remove their socket files. */
 export async function resetSigningBrokersForTests(): Promise<void> {
-  await pending.catch(() => {});
+  await initChain.idle();
+  initChain.clearFailures();
   for (const broker of brokers.values()) {
     await new Promise<void>((resolve) => broker.server.close(() => resolve()));
     await fs.rm(broker.socketPath, { force: true });

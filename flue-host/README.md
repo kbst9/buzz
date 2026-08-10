@@ -62,6 +62,10 @@ Rollback is the same two env lines reverted plus a unit restart.
 | `BUZZ_FLUE_MODEL` | yes | Flue model specifier, `provider/model`, resolved against pi-ai's catalog — e.g. `xai/grok-4.5`, `openai-codex/gpt-5.5`, `anthropic/claude-sonnet-4-6` |
 | `BUZZ_FLUE_DB` | no | SQLite path for Flue persistence (default `:memory:`, matching buzz-acp's session lifecycle — it never reattaches sessions across respawns) |
 | `BUZZ_FLUE_LOG` | no | stderr log level: `debug`\|`info`\|`warn`\|`error` |
+| `BUZZ_FLUE_MAX_EXEC_OUTPUT_BYTES` | no | host-side per-exec output cap for the srt/docker tiers (default `67108864` = 64 MiB, matching Flue's local tier); on exceed the exec is killed and the model sees a truncation error |
+| `BUZZ_FLUE_HEAVY_MEMORY` | no | heavy-tier container memory limit, also applied as `--memory-swap` so there is no swap headroom (default `4g`); cgroup OOM surfaces as exit 137 on the exec |
+| `BUZZ_FLUE_HEAVY_PIDS` | no | heavy-tier container `--pids-limit` — fork-bomb guard (default `1024`) |
+| `BUZZ_FLUE_HEAVY_CPUS` | no | heavy-tier container `--cpus` — busy-loop guard (default `4`) |
 | provider keys | per model | `XAI_API_KEY`, `OPENAI_API_KEY`, … — resolved host-side; **never forwarded into the sandbox** |
 
 The sandbox env is allowlisted, not inherited: `BUZZ_RELAY_URL`,

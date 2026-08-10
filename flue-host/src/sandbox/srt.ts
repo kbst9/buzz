@@ -8,7 +8,9 @@ import {
 } from "@anthropic-ai/sandbox-runtime";
 import type { FileStat, SessionEnv, ShellResult } from "@flue/runtime";
 import { log } from "../log.js";
+import { type BoundedCapture, createBoundedCapture } from "./capture.js";
 import { DEFAULT_EGRESS, resolveEgress } from "./egress.js";
+import { InitChain } from "./initchain.js";
 import type { SandboxTier, SandboxViolation, TierFactoryOptions } from "./types.js";
 
 /**
@@ -132,16 +134,24 @@ function buildSrtConfig(policy: SrtPolicy): SandboxRuntimeConfig {
  * Serialize init/re-init of the process-global SandboxManager. `current`
  * holds the signature the manager is initialized with; a factory whose
  * signature differs triggers reset()+initialize(). In production this runs
- * exactly once (all sessions share one policy).
+ * exactly once (all sessions share one policy). The InitChain retries a
+ * failed init on the next call instead of poisoning the chain.
  */
 let current: string | undefined;
-let pending: Promise<void> = Promise.resolve();
+const initChain = new InitChain("srt sandbox");
 
 function ensureManager(policy: SrtPolicy): Promise<void> {
   const signature = policySignature(policy);
-  pending = pending.then(async () => {
+  return initChain.run(signature, async () => {
     if (current === signature) return;
-    if (current !== undefined) await SandboxManager.reset();
+    // Honest state at every await point: once we decide to (re)build, the
+    // manager is no longer validly initialized — a failure below must leave
+    // the next attempt starting from scratch, not trusting a stale `current`.
+    current = undefined;
+    // reset() is defensively conditional internally: a no-op on a pristine
+    // manager, and it tears down half-initialized state after a failed
+    // attempt (e.g. initialized but the network proxy never came up).
+    await SandboxManager.reset();
     await SandboxManager.initialize(buildSrtConfig(policy));
     const ready = await SandboxManager.waitForNetworkInitialization();
     if (!ready) throw new Error("srt: network proxy failed to initialize");
@@ -151,7 +161,6 @@ function ensureManager(policy: SrtPolicy): Promise<void> {
       allowedDomains: policy.allowedDomains,
     });
   });
-  return pending;
 }
 
 /** Map srt's native violation lines into our normalized shape (invariant 3). */
@@ -219,12 +228,17 @@ function abortError(): Error {
   return error;
 }
 
-/** Spawn a resolved argv in its own process group; kill the tree on abort. */
+/**
+ * Spawn a resolved argv in its own process group; kill the tree on abort or
+ * when `capture` crosses the output cap (the two share one SIGTERM→SIGKILL
+ * escalation).
+ */
 function spawnSandboxed(
   argv: string[],
   env: NodeJS.ProcessEnv,
   cwd: string,
   signal: AbortSignal | undefined,
+  capture: BoundedCapture,
 ): Promise<ShellResult> {
   return new Promise((resolve) => {
     const [command, ...args] = argv;
@@ -241,8 +255,6 @@ function spawnSandboxed(
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let stdout = "";
-    let stderr = "";
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
     const killTree = (sig: NodeJS.Signals): void => {
@@ -257,11 +269,14 @@ function spawnSandboxed(
         }
       }
     };
-    const onAbort = (): void => {
+    const killWithGrace = (): void => {
+      if (killTimer !== undefined) return; // already escalating
       killTree("SIGTERM");
       killTimer = setTimeout(() => killTree("SIGKILL"), KILL_GRACE_MS);
       killTimer.unref();
     };
+    const onAbort = killWithGrace;
+    capture.onExceed = killWithGrace;
     const settle = (result: ShellResult): void => {
       if (settled) return;
       settled = true;
@@ -272,15 +287,27 @@ function spawnSandboxed(
     if (signal?.aborted) onAbort();
     else signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stdout.on("data", (chunk) => capture.append("stdout", chunk));
     child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.stderr.on("data", (chunk) => capture.append("stderr", chunk));
     child.once("error", (err) => {
       killTree("SIGTERM");
-      settle({ stdout, stderr: stderr || String(err.message ?? err), exitCode: 1 });
+      settle({
+        stdout: capture.stdout,
+        stderr: capture.stderr || String(err.message ?? err),
+        exitCode: 1,
+      });
     });
     child.once("close", (code) => {
-      settle({ stdout, stderr, exitCode: code ?? (signal?.aborted ? 124 : 1) });
+      if (capture.exceeded) {
+        settle(capture.killedResult());
+        return;
+      }
+      settle({
+        stdout: capture.stdout,
+        stderr: capture.stderr,
+        exitCode: code ?? (signal?.aborted ? 124 : 1),
+      });
     });
   });
 }
@@ -324,9 +351,10 @@ function createSrtSessionEnv(policy: SrtPolicy, options: TierFactoryOptions): Se
         timer.unref();
       }
 
+      const capture = createBoundedCapture();
       let result: ShellResult;
       try {
-        result = await spawnSandboxed(argv, mergedEnv, execCwd, controller.signal);
+        result = await spawnSandboxed(argv, mergedEnv, execCwd, controller.signal, capture);
       } finally {
         if (timer !== undefined) clearTimeout(timer);
         signal?.removeEventListener("abort", onOuterAbort);
@@ -334,6 +362,18 @@ function createSrtSessionEnv(policy: SrtPolicy, options: TierFactoryOptions): Se
 
       // Caller abort (not timeout) rejects promptly, per the SessionEnv contract.
       if (signal?.aborted && !timedOut) throw abortError();
+
+      if (capture.exceeded) {
+        // Audit-only: the model-visible rendering is the marker
+        // killedResult() already put on stderr; a second [sandbox] line
+        // there would be noise.
+        options.onViolation?.({
+          kind: "resource",
+          tier: srtTier.name,
+          target: "exec-output",
+          nativeDetail: `output exceeded ${capture.maxBytes} bytes; process tree killed`,
+        });
+      }
 
       const violations = normalizeViolations(
         SandboxManager.getSandboxViolationStore().getViolationsForCommand(commandId),
@@ -422,7 +462,8 @@ export const srtTier: SandboxTier = {
 
 /** Test-only: drop the srt manager so a fresh policy re-initializes. */
 export async function resetSrtForTests(): Promise<void> {
-  await pending.catch(() => {});
+  await initChain.idle();
+  initChain.clearFailures();
   if (current !== undefined) {
     await SandboxManager.reset();
     current = undefined;

@@ -4,7 +4,9 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { FileStat, SessionEnv, ShellResult } from "@flue/runtime";
 import { log } from "../log.js";
+import { type BoundedCapture, createBoundedCapture } from "./capture.js";
 import { DEFAULT_EGRESS, resolveEgress } from "./egress.js";
+import { InitChain } from "./initchain.js";
 import type { SandboxTier, SandboxViolation, TierFactoryOptions } from "./types.js";
 
 /**
@@ -44,6 +46,32 @@ const DEFAULT_IMAGE = "buzz-heavy-base:latest";
 /** Host path of the buzz CLI to project into the container (read-only). */
 const BUZZ_BIN = process.env["BUZZ_HEAVY_CLI_PATH"] ?? "/usr/local/bin/buzz";
 
+/**
+ * Agent-container resource limits: cgroup caps that bound a runaway (memory
+ * hog, fork bomb, busy loop) without quota-ing legitimate work — the host
+ * also runs the production relay, Postgres, and MinIO. Kernel-enforced, zero
+ * steady-state overhead. A cgroup OOM surfaces on the exec as exit 137 — a
+ * reactable model-visible tool error, same shape as a container kill.
+ * Defaults are deliberately generous (compiles, git, node installs pass).
+ */
+interface HeavyLimits {
+  memory: string;
+  pids: string;
+  cpus: string;
+}
+
+function heavyLimits(): HeavyLimits {
+  const pick = (name: string, fallback: string): string => {
+    const value = process.env[name]?.trim();
+    return value ? value : fallback;
+  };
+  return {
+    memory: pick("BUZZ_FLUE_HEAVY_MEMORY", "4g"),
+    pids: pick("BUZZ_FLUE_HEAVY_PIDS", "1024"),
+    cpus: pick("BUZZ_FLUE_HEAVY_CPUS", "4"),
+  };
+}
+
 function policySignature(policy: DockerPolicy): string {
   return JSON.stringify([policy.cwd, [...policy.allowedDomains].sort(), policy.image]);
 }
@@ -76,7 +104,9 @@ function docker(args: string[], input?: string): Promise<{ ok: boolean; stdout: 
 
 /** tinyproxy config: default-deny + one allow regex per allowlisted host. */
 function proxyConfig(allowedDomains: string[]): string {
-  const lines = ["Port 8888", "Listen 0.0.0.0", "Timeout 60", "Allow 0.0.0.0/0"];
+  // MaxClients bounds concurrent proxy connections (an in-container
+  // connection flood degrades the proxy, not the host).
+  const lines = ["Port 8888", "Listen 0.0.0.0", "Timeout 60", "MaxClients 64", "Allow 0.0.0.0/0"];
   if (allowedDomains.length > 0) {
     lines.push('FilterDefaultDeny Yes', 'Filter "/etc/tp-filter"', "FilterExtended On");
   }
@@ -92,9 +122,12 @@ function proxyFilter(allowedDomains: string[]): string {
 /**
  * Serialize creation/teardown of the process-global Docker resources per
  * policy signature. In production this runs once (single agent policy).
+ * The InitChain retries a failed build on the next call (dockerd blip,
+ * image pull, proxy start) instead of poisoning the chain; the build body
+ * is re-entrant after a partial failure (`rm -f` before each `run`).
  */
 const resourcesBySig = new Map<string, DockerResources>();
-let pending: Promise<void> = Promise.resolve();
+const initChain = new InitChain("docker heavy sandbox");
 
 /** True iff a container exists AND is running (not just in our memory map). */
 async function containerAlive(name: string): Promise<boolean> {
@@ -113,7 +146,7 @@ const lastAliveCheck = new Map<string, number>();
 
 async function ensureResources(policy: DockerPolicy): Promise<DockerResources> {
   const sig = policySignature(policy);
-  pending = pending.then(async () => {
+  await initChain.run(sig, async () => {
     const known = resourcesBySig.get(sig);
     if (known) {
       const last = lastAliveCheck.get(sig) ?? 0;
@@ -149,6 +182,9 @@ async function ensureResources(policy: DockerPolicy): Promise<DockerResources> {
     ].join("\n");
     const proxyRun = await docker([
       "run", "-d", "--name", proxy, "--network", network,
+      // Small fixed caps: the sidecar only ever proxies; equal memory-swap
+      // denies swap headroom.
+      "--memory", "128m", "--memory-swap", "128m", "--pids-limit", "64",
       "alpine:latest", "sh", "-c", proxyScript,
     ]);
     if (!proxyRun.ok) throw new Error(`docker heavy: proxy start failed: ${proxyRun.stderr.trim()}`);
@@ -178,9 +214,15 @@ async function ensureResources(policy: DockerPolicy): Promise<DockerResources> {
       "-v", `${policy.cwd}:${policy.cwd}`,
       "-v", `${BUZZ_BIN}:/usr/local/bin/buzz:ro`,
     ];
+    const limits = heavyLimits();
     const run = await docker([
       "run", "-d", "--name", container,
       "--network", network,
+      // Blast-radius caps (see HeavyLimits): equal memory-swap denies swap
+      // headroom; pids bounds a fork bomb; cpus bounds a busy loop.
+      "--memory", limits.memory, "--memory-swap", limits.memory,
+      "--pids-limit", limits.pids,
+      "--cpus", limits.cpus,
       "--user", `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
       "-w", policy.cwd,
       ...mounts, ...envArgs,
@@ -191,10 +233,9 @@ async function ensureResources(policy: DockerPolicy): Promise<DockerResources> {
     resourcesBySig.set(sig, { network, proxy, container });
     lastAliveCheck.set(sig, Date.now());
     log.info("docker heavy sandbox initialized", {
-      container, allowedDomains: policy.allowedDomains, image: policy.image,
+      container, allowedDomains: policy.allowedDomains, image: policy.image, limits,
     });
   });
-  await pending;
   const res = resourcesBySig.get(sig);
   if (!res) throw new Error("docker heavy: resources missing after init");
   return res;
@@ -235,21 +276,26 @@ function abortError(): Error {
   return e;
 }
 
-/** `docker exec` a command in the session container; kill on abort/timeout. */
+/**
+ * `docker exec` a command in the session container; kill on abort/timeout or
+ * when `capture` crosses the output cap. Killing targets the docker-exec
+ * CLIENT: the in-container process is orphaned (reparented to the
+ * container's PID 1), its next pipe write fails with EPIPE, and anything
+ * that survives that is bounded by the container's cgroup caps.
+ */
 function dockerExec(
   container: string,
   command: string,
   env: Record<string, string> | undefined,
   execCwd: string,
   signal: AbortSignal | undefined,
+  capture: BoundedCapture,
 ): Promise<ShellResult> {
   return new Promise((resolve) => {
     const args = ["exec", "-w", execCwd];
     if (env) for (const [k, v] of Object.entries(env)) args.push("-e", `${k}=${v}`);
     args.push(container, "bash", "-lc", command);
     const child = spawn("docker", args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
     let settled = false;
     let aborted = false;
     let killTimer: NodeJS.Timeout | undefined;
@@ -260,16 +306,20 @@ function dockerExec(
         /* gone */
       }
     };
-    const onAbort = (): void => {
-      // Kill the docker-exec client. NOTE: a killed `docker exec` client can
-      // exit 0 while the in-container process is orphaned (reparented to the
-      // container's PID 1) — so we force a non-zero exit below rather than
-      // trust the client's code, and the container teardown reaps the orphan.
-      aborted = true;
+    const killWithGrace = (): void => {
+      if (killTimer !== undefined) return; // already escalating
       kill("SIGTERM");
       killTimer = setTimeout(() => kill("SIGKILL"), KILL_GRACE_MS);
       killTimer.unref();
     };
+    const onAbort = (): void => {
+      // A killed `docker exec` client can exit 0 while the in-container
+      // process is orphaned — so we force a non-zero exit below rather than
+      // trust the client's code, and the container teardown reaps the orphan.
+      aborted = true;
+      killWithGrace();
+    };
+    capture.onExceed = killWithGrace;
     const settle = (r: ShellResult): void => {
       if (settled) return;
       settled = true;
@@ -280,14 +330,20 @@ function dockerExec(
     if (signal?.aborted) onAbort();
     else signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (c) => (stdout += c));
+    child.stdout.on("data", (c) => capture.append("stdout", c));
     child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (c) => (stderr += c));
-    child.once("error", (e) => settle({ stdout, stderr: stderr || String(e.message ?? e), exitCode: 1 }));
-    child.once("close", (code) =>
-      // On abort the client's own code is unreliable (often 0) — force 124.
-      settle({ stdout, stderr, exitCode: aborted ? 124 : (code ?? 1) }),
+    child.stderr.on("data", (c) => capture.append("stderr", c));
+    child.once("error", (e) =>
+      settle({ stdout: capture.stdout, stderr: capture.stderr || String(e.message ?? e), exitCode: 1 }),
     );
+    child.once("close", (code) => {
+      if (capture.exceeded) {
+        settle(capture.killedResult());
+        return;
+      }
+      // On abort the client's own code is unreliable (often 0) — force 124.
+      settle({ stdout: capture.stdout, stderr: capture.stderr, exitCode: aborted ? 124 : (code ?? 1) });
+    });
   });
 }
 
@@ -383,14 +439,26 @@ function createDockerSessionEnv(policy: DockerPolicy, options: TierFactoryOption
         timer.unref();
       }
 
+      const capture = createBoundedCapture();
       let result: ShellResult;
       try {
-        result = await dockerExec(container, command, opts?.env, execCwd, controller.signal);
+        result = await dockerExec(container, command, opts?.env, execCwd, controller.signal, capture);
       } finally {
         if (timer !== undefined) clearTimeout(timer);
         signal?.removeEventListener("abort", onOuter);
       }
       if (signal?.aborted && !timedOut) throw abortError();
+
+      if (capture.exceeded) {
+        // Audit-only: the model-visible rendering is the marker
+        // killedResult() already put on stderr.
+        options.onViolation?.({
+          kind: "resource",
+          tier: dockerTier.name,
+          target: "exec-output",
+          nativeDetail: `output exceeded ${capture.maxBytes} bytes; exec client killed`,
+        });
+      }
 
       const violations = await collectEgressViolations(proxy, startedAtIso, dockerTier.name);
       for (const v of violations) options.onViolation?.(v);
@@ -466,7 +534,8 @@ export const dockerTier: SandboxTier = {
 
 /** Test-only: tear down all heavy-tier Docker resources this process created. */
 export async function resetDockerForTests(): Promise<void> {
-  await pending.catch(() => {});
+  await initChain.idle();
+  initChain.clearFailures();
   for (const res of resourcesBySig.values()) {
     await docker(["rm", "-f", res.container]);
     await docker(["rm", "-f", res.proxy]);
