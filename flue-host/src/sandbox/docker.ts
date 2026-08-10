@@ -96,10 +96,40 @@ function proxyFilter(allowedDomains: string[]): string {
 const resourcesBySig = new Map<string, DockerResources>();
 let pending: Promise<void> = Promise.resolve();
 
+/** True iff a container exists AND is running (not just in our memory map). */
+async function containerAlive(name: string): Promise<boolean> {
+  const r = await docker(["inspect", "-f", "{{.State.Running}}", name]);
+  return r.ok && r.stdout.trim() === "true";
+}
+
+/**
+ * Liveness re-check throttle: `docker inspect` on every exec would add ~25ms
+ * to each of the dozens of execs in a turn. Bounding the check to at most
+ * once per this window keeps steady-state overhead negligible while still
+ * detecting an externally-killed container within seconds.
+ */
+const LIVENESS_TTL_MS = 5_000;
+const lastAliveCheck = new Map<string, number>();
+
 async function ensureResources(policy: DockerPolicy): Promise<DockerResources> {
   const sig = policySignature(policy);
   pending = pending.then(async () => {
-    if (resourcesBySig.has(sig)) return;
+    const known = resourcesBySig.get(sig);
+    if (known) {
+      const last = lastAliveCheck.get(sig) ?? 0;
+      // Trust the map only if the container is ACTUALLY running — an
+      // externally-killed container (OOM, `docker restart`, operator
+      // cleanup) must be rebuilt, not assumed alive; otherwise the agent
+      // bricks on every exec until flue-acp restarts (caught by smoke test).
+      if (Date.now() - last < LIVENESS_TTL_MS) return;
+      if (await containerAlive(known.container)) {
+        lastAliveCheck.set(sig, Date.now());
+        return;
+      }
+      log.warn("docker heavy container gone; rebuilding", { container: known.container });
+      resourcesBySig.delete(sig);
+      lastAliveCheck.delete(sig);
+    }
     const id = shortId(policy);
     const network = `buzz-heavy-net-${id}`;
     const proxy = `buzz-heavy-proxy-${id}`;
@@ -159,6 +189,7 @@ async function ensureResources(policy: DockerPolicy): Promise<DockerResources> {
     if (!run.ok) throw new Error(`docker heavy: container start failed: ${run.stderr.trim()}`);
 
     resourcesBySig.set(sig, { network, proxy, container });
+    lastAliveCheck.set(sig, Date.now());
     log.info("docker heavy sandbox initialized", {
       container, allowedDomains: policy.allowedDomains, image: policy.image,
     });
@@ -442,4 +473,5 @@ export async function resetDockerForTests(): Promise<void> {
     await docker(["network", "rm", res.network]);
   }
   resourcesBySig.clear();
+  lastAliveCheck.clear();
 }
