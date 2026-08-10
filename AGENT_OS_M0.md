@@ -269,7 +269,9 @@ recommended **Docker + srt-proxy** tier and validated it end-to-end.
   agent's `buzz` exec running INSIDE container `buzz-heavy-*`, egress scoped
   to the relay, audit `tier:"docker"`; **rollback rehearsed live** (docker→srt
   one flag + stop containers → smoke PASS on srt, 0 containers left).
-  `just ci` on gradient: running (final gate).
+  `just ci` on gradient: **GREEN** (0 recipe failures; flue-check inside it
+  ran both heavy-tier conformances — 123 passed | 3 sanctioned skips).
+  **✅ M3 COMPLETE.**
 - **Prod state**: canary on the **docker** heavy tier (validated resting
   state; 2 idle containers: agent + proxy). Fluelo stays on **srt** — moving
   prod agents to the heavy tier is a separate rollout decision (not taken).
