@@ -175,16 +175,24 @@ function shellQuote(s: string): string {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-/** Poll until the in-container proxy port answers (busybox wget exit 4 = refused). */
+/**
+ * Poll until tinyproxy is actually LISTENING on 8888 inside the proxy
+ * container (busybox `netstat`). A port check is reliable where a wget probe
+ * is not — busybox wget's exit code on connection-refused is indistinguishable
+ * from other errors, so it false-positives before the proxy is up. If the
+ * config is bad tinyproxy never listens and this throws with its logs.
+ */
 async function waitForProxy(proxy: string, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  const probe = 'wget -q -O /dev/null -T 2 http://127.0.0.1:8888/ 2>/dev/null; [ "$?" != 4 ]';
+  const probe = "netstat -ltn 2>/dev/null | grep -q ':8888 ' || netstat -ltn 2>/dev/null | grep -q ':8888$'";
   for (;;) {
     const r = await docker(["exec", proxy, "sh", "-c", probe]);
     if (r.ok) return;
     if (Date.now() > deadline) {
-      const logs = await docker(["logs", "--tail", "5", proxy]);
-      throw new Error(`docker heavy: proxy not ready in ${timeoutMs}ms: ${logs.stderr.trim() || logs.stdout.trim()}`);
+      const logs = await docker(["logs", "--tail", "8", proxy]);
+      throw new Error(
+        `docker heavy: proxy not listening on 8888 in ${timeoutMs}ms: ${logs.stderr.trim() || logs.stdout.trim()}`,
+      );
     }
     await sleep(500);
   }
