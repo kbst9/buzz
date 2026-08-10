@@ -349,9 +349,14 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
   Rust/Tauri compiles that fork ops assigns to gradient. Subsequent pushes
   are range-scoped; hooks run normally (verified: the blocked broken-test
   push ran them).
-- **Upstream quirk noted**: the justfile is tracked as `Justfile`
-  (capital J); upstream lefthook globs say `justfile`, so justfile edits
-  never fire the rust/tauri pre-push commands anywhere. Not fixed here.
+- ~~Upstream quirk: `Justfile` never matches the lowercase globs~~ —
+  **wrong, corrected 2026-08-10**: lefthook's glob matching is
+  case-insensitive on macOS, so pushes carrying Justfile edits DO fire
+  `rust-tests` + `desktop-tauri-checks` locally (~6 GB of parallel cargo
+  builds — more than this Mac's free disk; the M0 deploy push ENOSPC'd
+  twice). Deploy pushes whose delta includes the Justfile should run the
+  equivalent gates on gradient and push `--no-verify`, per the standing
+  heavy-builds-on-gradient rule.
 - **Ops event**: local disk hit ENOSPC mid-hook-run; reclaimed ~4.1 GB by
   deleting `target/` dirs per the standing discipline; truncation-shrapnel
   grep clean (the one hit is CLAUDE.md's own documentation line).
