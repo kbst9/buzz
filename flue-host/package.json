@@ -18,6 +18,7 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.71",
     "@earendil-works/pi-ai": "0.83.0",
     "@flue/cli": "2.0.1",
     "@flue/runtime": "2.0.1"
