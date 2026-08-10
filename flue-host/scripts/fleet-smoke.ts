@@ -23,6 +23,13 @@
  *                     observer frames for the target in the archive DB
  *                     window (default db: ~/.buzz/archive/archive.db)
  *
+ * Concurrency caveat (measured live 2026-08-10): two probes in flight
+ * against the SAME agent in the SAME channel may coalesce into one combined
+ * reply — Flue merges submissions that join a live response — so one probe
+ * reports NO-REPLY even though the agent acknowledged both. Run probes
+ * against one target sequentially; concurrent probes across DIFFERENT
+ * agents are fine.
+ *
  * Output contract: human progress lines, then ONE JSON object (v: 1) as
  * the LAST stdout line. Enumerated exit codes so goal mode branches on
  * failure class, never on prose:
