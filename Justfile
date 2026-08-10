@@ -281,8 +281,10 @@ desktop-e2e-pre-push: _ensure-migrations
     git fetch origin main
     cd {{desktop_dir}} && pnpm build:e2e && pnpm exec playwright test --only-changed=origin/main
 
-# Run all checks suitable for CI / pre-push (no infra needed)
-ci: check test-unit desktop-test desktop-build desktop-tauri-check desktop-tauri-test web-build mobile-test
+# Run all checks suitable for CI / pre-push (no infra needed).
+# flue-check runs first: it is the cheapest full gate (seconds), so a broken
+# flue-host change fails fast before the heavy Rust/desktop steps.
+ci: flue-check check test-unit desktop-test desktop-build desktop-tauri-check desktop-tauri-test web-build mobile-test
 
 # ─── Test ─────────────────────────────────────────────────────────────────────
 
@@ -696,6 +698,19 @@ mobile-dev:
 # Uninstall stale worktree-suffixed Buzz debug installs (production apps kept)
 mobile-clean:
     ./scripts/mobile-worktree-clean.sh
+
+# ─── Flue Host (fork-only: flue-host/ exists on the deploy lineage only) ─────
+
+flue_dir := "flue-host"
+
+# Install flue-host deps reproducibly (standalone pnpm root, own lockfile)
+flue-install-ci:
+    cd {{flue_dir}} && pnpm install --frozen-lockfile
+
+# Run flue-host typecheck + tests (agent-harness gate: sandbox tier
+# conformance and the Flue contract-drift canary live here)
+flue-check: flue-install-ci
+    cd {{flue_dir}} && pnpm typecheck && pnpm test
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 

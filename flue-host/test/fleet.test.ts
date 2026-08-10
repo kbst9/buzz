@@ -129,10 +129,14 @@ describe("parseFleetConfig", () => {
 
 describe("fleet plan rendering", () => {
   const config = parseFleetConfig(VALID);
+  const [grokAgent, sonnetAgent] = config.agents;
+  if (!grokAgent || !sonnetAgent) {
+    throw new Error("fixture must parse to two agents");
+  }
   const SECRET = "c".repeat(64);
 
   it("pins the exact env file an entry produces", () => {
-    expect(renderEnvFile(config.fleet, config.agents[1], SECRET)).toBe(
+    expect(renderEnvFile(config.fleet, sonnetAgent, SECRET)).toBe(
       `BUZZ_RELAY_URL=wss://buzz.example.com
 BUZZ_PRIVATE_KEY=${SECRET}
 BUZZ_INVITE_CODE=v2.abc123
@@ -148,7 +152,7 @@ BUZZ_ACP_PROFILE_NAME=Sonnet One
   });
 
   it("omits the allowlist line outside allowlist mode", () => {
-    const env = renderEnvFile(config.fleet, config.agents[0], SECRET);
+    const env = renderEnvFile(config.fleet, grokAgent, SECRET);
     expect(env).not.toContain("ALLOWLIST");
     expect(env).toContain("BUZZ_ACP_RESPOND_TO=owner-only");
     expect(env).toContain("BUZZ_ACP_PROFILE_NAME=grok-1");
@@ -166,7 +170,7 @@ BUZZ_ACP_PROFILE_NAME=Sonnet One
 
     const unit = renderUnitFile(
       config.fleet,
-      config.agents[0],
+      grokAgent,
       "/usr/local/bin/buzz-acp",
     );
     expect(unit).toContain("Description=Buzz ACP agent (grok-1)");

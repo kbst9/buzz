@@ -1,5 +1,5 @@
 import { useInitialData, useModel, useSandbox } from "@flue/runtime";
-import { local } from "@flue/runtime/node";
+import { selectSandboxTier } from "../sandbox/registry.js";
 import type { SessionSeed } from "./types.js";
 
 /**
@@ -10,10 +10,12 @@ import type { SessionSeed } from "./types.js";
  *
  * `useSandbox` is what grants the built-in coding toolset (bash, read,
  * write, edit, grep, glob); without it the agent has no environment at all.
- * The sandbox env is passed explicitly — Flue's `local()` deliberately does
- * not inherit the host environment, which is exactly the containment we
- * want: the shell sees only what the seed grants (the BUZZ_* auth vars that
- * make the `buzz` CLI work).
+ * The sandbox comes from the tier registry (`src/sandbox/`): the
+ * `BUZZ_FLUE_SANDBOX` env var picks the tier at session start (default
+ * `local`), so the canary switches tiers by env edit + restart, no rebuild.
+ * The sandbox env is passed explicitly — tiers deliberately do not inherit
+ * the host environment; the shell sees only what the seed grants (the
+ * BUZZ_* auth vars that make the `buzz` CLI work).
  */
 export function BuzzAgent(): string {
   const seed = useInitialData<SessionSeed | undefined>();
@@ -23,7 +25,10 @@ export function BuzzAgent(): string {
     throw new Error("BUZZ_FLUE_MODEL is not set");
   }
   useModel(model);
-  useSandbox(local({ cwd: seed?.cwd ?? process.cwd(), env: seed?.env ?? {} }));
+  const tier = selectSandboxTier();
+  useSandbox(
+    tier.createFactory({ cwd: seed?.cwd ?? process.cwd(), env: seed?.env ?? {} }),
+  );
   return (
     seed?.systemPrompt ??
     "You are a Buzz agent. Use your sandbox tools to complete the task you are given."

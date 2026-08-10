@@ -75,3 +75,8 @@ pre-push:
     mobile-test:
       glob: ["mobile/**"]
       run: just mobile-test
+    flue-check:
+      # Fork-only surface: flue-host/ exists on the deploy lineage only, so
+      # there is no upstream ci.yml paths-filter group to mirror here.
+      glob: ["flue-host/**"]
+      run: just flue-check
