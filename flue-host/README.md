@@ -103,6 +103,45 @@ entries whose env file exists: growing the fleet is "add an entry, run
 again". Config parsing and file rendering live in `src/fleet/` with golden
 tests in `test/fleet.test.ts`.
 
+## Provider credentials (NIP-PC)
+
+Provider credentials are owner-delivered over the relay — no SSH, no env
+edits (see [docs/nips/NIP-PC.md](../docs/nips/NIP-PC.md)):
+
+```
+owner key ──kind:30990 (NIP-44)──► relay ──► buzz-acp credential sink
+                                              └─► ~/.buzz/credentials.json (0600)
+                                                    └─► flue-acp FileCredentialStore
+                                                         (per-call read-through; OAuth
+                                                          refresh written back in place)
+```
+
+The store beats env (pi-ai precedence); `provider_env` files keep working as
+the legacy fallback until every provider is delivered. Rotation applies on
+the next model call with no restart. The agent publishes a plaintext
+`kind:30991` status (`applied` / `removed` / `error`) after each delivery.
+
+Until the desktop AI-accounts pane ships, the owner-side publisher is
+[`scripts/deliver-credential.ts`](scripts/deliver-credential.ts):
+
+```bash
+# Subscription sign-in (Claude Pro/Max, ChatGPT/Codex, Grok) — prints the
+# authorize URL / device code, you approve in a browser:
+BUZZ_OWNER_PRIVATE_KEY=<owner-64hex> BUZZ_RELAY_URL=wss://buzz.example.com \
+  pnpm exec tsx scripts/deliver-credential.ts \
+    --agent <agent-pubkey-hex> --provider anthropic --login
+
+# Revoke:
+… --provider anthropic --revoke
+```
+
+The owner key signs the delivery and the NIP-98 request; it is read from the
+environment once and never persisted. Verify on the host with
+`journalctl -u buzz-acp-<name> | grep credential_sink` and by the agent's
+`kind:30991` status event. OAuth pairs are single-chain: after delivery the
+host store owns rotation — if the chain breaks, re-run `--login` rather than
+re-importing tokens from elsewhere.
+
 ## What v1 deliberately does not do
 
 - **Spawn stdio MCP servers.** Flue's transports are HTTP-only, and its
