@@ -124,7 +124,7 @@ export class AcpServer {
     }
     const seed: SessionSeed = {
       cwd: p.cwd,
-      env: buildSandboxEnv(p.mcpServers ?? []),
+      env: await applySignerMode(p.cwd, buildSandboxEnv(p.mcpServers ?? [])),
       ...(typeof p.systemPrompt === "string" && p.systemPrompt.length > 0 ? { systemPrompt: p.systemPrompt } : {}),
     };
     try {
@@ -199,6 +199,29 @@ function buildSandboxEnv(servers: McpServerConfig[]): Record<string, string> {
     for (const { name, value } of server.env ?? []) env[name] = value;
   }
   return env;
+}
+
+/**
+ * Signing-broker mode (M5): with `BUZZ_FLUE_SIGNER=broker`, the private key
+ * is STRIPPED from the sandbox env and replaced by `BUZZ_SIGNER_SOCKET` — a
+ * host-side broker (src/sandbox/broker.ts) holds the key and signs on
+ * request, so no sandbox tier ever sees the secret. Default (unset flag) is
+ * byte-identical to today's behavior.
+ */
+async function applySignerMode(
+  cwd: string,
+  env: Record<string, string>,
+): Promise<Record<string, string>> {
+  if (process.env["BUZZ_FLUE_SIGNER"] !== "broker") return env;
+  const privateKey = env["BUZZ_PRIVATE_KEY"];
+  if (!privateKey) {
+    log.warn("BUZZ_FLUE_SIGNER=broker but no BUZZ_PRIVATE_KEY to hold; env unchanged");
+    return env;
+  }
+  const { ensureSigningBroker } = await import("../sandbox/broker.js");
+  const socketPath = await ensureSigningBroker(cwd, privateKey);
+  const { BUZZ_PRIVATE_KEY: _stripped, ...rest } = env;
+  return { ...rest, BUZZ_SIGNER_SOCKET: socketPath };
 }
 
 function promptText(blocks: ContentBlock[]): string {

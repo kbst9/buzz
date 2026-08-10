@@ -113,6 +113,36 @@ describe("AcpServer protocol conformance", () => {
     await client.done;
   });
 
+  it("broker mode strips BUZZ_PRIVATE_KEY from the seed and injects BUZZ_SIGNER_SOCKET", async () => {
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { generateSecretKey } = await import("nostr-tools");
+    const { resetSigningBrokersForTests } = await import("../src/sandbox/broker.js");
+
+    const workspace = await mkdtemp(join(tmpdir(), "broker-seed-"));
+    const secretHex = Buffer.from(generateSecretKey()).toString("hex");
+    process.env["BUZZ_FLUE_SIGNER"] = "broker";
+    process.env["BUZZ_PRIVATE_KEY"] = secretHex;
+    try {
+      const engine = stubEngine();
+      const client = new TestClient(engine);
+      const id = client.request("session/new", { cwd: workspace, mcpServers: [] });
+      await client.response(id);
+      const seedEnv = engine.seeds[0]?.env ?? {};
+      // The M5 guarantee: no tier's sandbox ever receives the private key.
+      expect(seedEnv["BUZZ_PRIVATE_KEY"]).toBeUndefined();
+      expect(seedEnv["BUZZ_SIGNER_SOCKET"]).toBe(join(workspace, ".signer.sock"));
+      client.close();
+      await client.done;
+    } finally {
+      delete process.env["BUZZ_FLUE_SIGNER"];
+      delete process.env["BUZZ_PRIVATE_KEY"];
+      await resetSigningBrokersForTests();
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("streams updates then answers the prompt with its stopReason", async () => {
     const client = new TestClient(stubEngine());
     const id = client.request("session/prompt", {

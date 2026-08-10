@@ -20,7 +20,8 @@
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.71",
     "@earendil-works/pi-ai": "0.83.0",
-    "@flue/runtime": "2.0.3"
+    "@flue/runtime": "2.0.3",
+    "nostr-tools": "2.24.1"
   },
   "devDependencies": {
     "@flue/cli": "2.0.1",
