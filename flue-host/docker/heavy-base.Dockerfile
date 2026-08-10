@@ -7,7 +7,11 @@
 #
 # Build (on the fleet host, so the glibc matches the bind-mounted buzz):
 #   docker build -f flue-host/docker/heavy-base.Dockerfile -t buzz-heavy-base:latest .
-FROM debian:bookworm-slim
+#
+# Ubuntu 24.04 (glibc 2.39) — the bind-mounted `buzz` is built against the
+# fleet host's glibc (>= 2.38); a debian-bookworm base (glibc 2.36) can't load
+# it. Ubuntu also matches the cloudflare sandbox-sdk base-image pattern.
+FROM ubuntu:24.04
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

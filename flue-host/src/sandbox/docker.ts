@@ -123,6 +123,10 @@ async function ensureResources(policy: DockerPolicy): Promise<DockerResources> {
     ]);
     if (!proxyRun.ok) throw new Error(`docker heavy: proxy start failed: ${proxyRun.stderr.trim()}`);
     await docker(["network", "connect", "bridge", proxy]);
+    // The proxy runs `apk add tinyproxy` before listening — wait for the port
+    // to answer (busybox wget exit 4 = connection refused) or fail loudly, so
+    // the first agent exec never races an unready proxy.
+    await waitForProxy(proxy);
 
     // The agent container: internal net only (egress via proxy), host UID,
     // workspace + buzz CLI bind-mounted, proxy env set. Idle on `sleep`.
@@ -167,6 +171,23 @@ async function ensureResources(policy: DockerPolicy): Promise<DockerResources> {
 
 function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Poll until the in-container proxy port answers (busybox wget exit 4 = refused). */
+async function waitForProxy(proxy: string, timeoutMs = 30_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  const probe = 'wget -q -O /dev/null -T 2 http://127.0.0.1:8888/ 2>/dev/null; [ "$?" != 4 ]';
+  for (;;) {
+    const r = await docker(["exec", proxy, "sh", "-c", probe]);
+    if (r.ok) return;
+    if (Date.now() > deadline) {
+      const logs = await docker(["logs", "--tail", "5", proxy]);
+      throw new Error(`docker heavy: proxy not ready in ${timeoutMs}ms: ${logs.stderr.trim() || logs.stdout.trim()}`);
+    }
+    await sleep(500);
+  }
 }
 
 function abortError(): Error {
