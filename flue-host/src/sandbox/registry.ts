@@ -1,5 +1,6 @@
 import { auditingTier } from "./audit.js";
 import { localTier } from "./local.js";
+import { srtTier } from "./srt.js";
 import type { SandboxTier } from "./types.js";
 
 /**
@@ -57,3 +58,4 @@ export function selectSandboxTier(
 }
 
 registerSandboxTier(localTier);
+registerSandboxTier(srtTier);
