@@ -39,7 +39,7 @@ pub async fn cmd_get_users(
         return Err(CliError::Usage("--pubkey: maximum 200 pubkeys".into()));
     }
 
-    let my_pk = client.keys().public_key().to_hex();
+    let my_pk = client.public_key().to_hex();
     let authors: Vec<&str> = if pubkeys.is_empty() {
         vec![my_pk.as_str()]
     } else {
@@ -87,7 +87,7 @@ pub async fn cmd_get_users(
 fn effective_owner(client: &BuzzClient) -> String {
     client
         .auth_tag_owner_hex()
-        .unwrap_or_else(|| client.keys().public_key().to_hex())
+        .unwrap_or_else(|| client.public_key().to_hex())
 }
 
 fn resolve_owner(client: &BuzzClient, owner: Option<&str>) -> Result<Option<String>, CliError> {
@@ -385,7 +385,7 @@ pub async fn cmd_set_profile(
     // forward and the profile is branded bot:true. Rebuilding kind:0 from
     // known fields is exactly how agents got orphaned before — never
     // reintroduce a from-scratch profile write here.
-    let me = client.keys().public_key();
+    let me = client.public_key();
     let current = fetch_current_profile_parts(client, &me.to_hex()).await?;
     let env_auth_tag = std::env::var("BUZZ_AUTH_TAG").ok();
     let is_agent_identity = env_auth_tag
@@ -437,7 +437,7 @@ pub async fn cmd_get_profile(client: &BuzzClient, pubkey: Option<&str>) -> Resul
             validate_hex64(pk)?;
             pk.to_string()
         }
-        None => client.keys().public_key().to_hex(),
+        None => client.public_key().to_hex(),
     };
     let filter = serde_json::json!({
         "kinds": [0],

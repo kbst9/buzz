@@ -77,7 +77,7 @@ async fn fetch_project(
             crate::validate::validate_hex64(pk)?;
             pk.to_string()
         }
-        None => client.keys().public_key().to_hex(),
+        None => client.public_key().to_hex(),
     };
     let filter = serde_json::json!({
         "kinds": [KIND_PROJECT],
@@ -162,7 +162,7 @@ pub async fn cmd_create(
     // ── Local validation (all checks before any .await) ───────────────────
     validate_project_slug(slug)?;
 
-    let caller_pubkey = client.keys().public_key().to_hex();
+    let caller_pubkey = client.public_key().to_hex();
 
     // Expand and validate repo coordinates.
     let members: Vec<ProjectMemberCoord> = repos
@@ -244,7 +244,7 @@ pub async fn cmd_list(
             crate::validate::validate_hex64(pk)?;
             pk.to_string()
         }
-        None => client.keys().public_key().to_hex(),
+        None => client.public_key().to_hex(),
     };
     let mut filter = serde_json::json!({
         "kinds": [KIND_PROJECT],
@@ -265,7 +265,7 @@ pub async fn cmd_add_repo(
     repos: &[String],
 ) -> Result<(), CliError> {
     validate_project_slug(slug)?;
-    let caller_pubkey = client.keys().public_key().to_hex();
+    let caller_pubkey = client.public_key().to_hex();
 
     // ── Local validation before any .await ────────────────────────────────
     let new_members: Vec<ProjectMemberCoord> = repos
@@ -330,7 +330,7 @@ pub async fn cmd_remove_repo(
     repos: &[String],
 ) -> Result<(), CliError> {
     validate_project_slug(slug)?;
-    let caller_pubkey = client.keys().public_key().to_hex();
+    let caller_pubkey = client.public_key().to_hex();
 
     // ── Local validation before any .await ────────────────────────────────
     let to_remove: Vec<ProjectMemberCoord> = repos
@@ -502,7 +502,7 @@ pub async fn cmd_delete(client: &BuzzClient, slug: &str) -> Result<(), CliError>
         .ok_or_else(|| CliError::NotFound(format!("project {slug:?} not found")))?;
     let next_ts = next_timestamp(&head)?;
 
-    let pubkey_hex = client.keys().public_key().to_hex();
+    let pubkey_hex = client.public_key().to_hex();
     let tombstone = build_delete_addressable(KIND_PROJECT, &pubkey_hex, slug)
         .map_err(|e| CliError::Other(format!("failed to build delete event: {e}")))?
         .custom_created_at(next_ts);
@@ -1019,8 +1019,13 @@ mod tests {
         // Port 9 is the discard protocol — any real connect will be refused
         // immediately, but the guard fires before the first await so this
         // never reaches the network.
-        let client = crate::client::BuzzClient::new("http://127.0.0.1:9".into(), keys, None, None)
-            .expect("client construction");
+        let client = crate::client::BuzzClient::new(
+            "http://127.0.0.1:9".into(),
+            crate::signer::BuzzSigner::Local(keys),
+            None,
+            None,
+        )
+        .expect("client construction");
 
         let err = cmd_update(
             &client, "my-slug", None, false, // name / clear_name
@@ -1045,8 +1050,13 @@ mod tests {
 
     fn discard_client() -> crate::client::BuzzClient {
         let keys = nostr::Keys::generate();
-        crate::client::BuzzClient::new("http://127.0.0.1:9".into(), keys, None, None)
-            .expect("client construction")
+        crate::client::BuzzClient::new(
+            "http://127.0.0.1:9".into(),
+            crate::signer::BuzzSigner::Local(keys),
+            None,
+            None,
+        )
+        .expect("client construction")
     }
 
     /// Invalid visibility token must return Usage before touching the relay.
