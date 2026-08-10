@@ -611,6 +611,8 @@ enum RelayMessage {
 const MEMBERSHIP_NOTIF_SUB_ID: &str = "membership-notif";
 /// Subscription ID for encrypted owner-to-agent observer control frames.
 const OBSERVER_CONTROL_SUB_ID: &str = "agent-observer-control";
+/// Subscription ID for NIP-PC provider credential deliveries (kind 30990).
+const CREDENTIAL_SUB_ID: &str = "agent-provider-credentials";
 
 /// Commands sent from `HarnessRelay` to the background WebSocket task.
 enum RelayCommand {
@@ -630,6 +632,10 @@ enum RelayCommand {
     SubscribeMembership,
     /// Subscribe to encrypted observer control frames addressed to this agent.
     SubscribeObserverControls,
+    /// Subscribe to NIP-PC provider credential deliveries addressed to this
+    /// agent (kind 30990, authored by the owner). Addressable heads arrive
+    /// first (current state — no `since` watermark), then live updates.
+    SubscribeCredentials { owner_pubkey_hex: String },
     /// Open a live swarm assignment watch on one thread (docs/swarms.md §8).
     SubscribeSwarmWatch {
         channel_id: Uuid,
@@ -657,6 +663,8 @@ pub struct HarnessRelay {
     event_rx: mpsc::Receiver<Option<BuzzEvent>>,
     /// Receiver for encrypted observer control events addressed to this agent.
     observer_control_rx: Option<mpsc::Receiver<Event>>,
+    /// Receiver for NIP-PC provider credential delivery events (kind 30990).
+    credential_rx: Option<mpsc::Receiver<Event>>,
     /// Receiver for swarm assignment-watch events (docs/swarms.md §8).
     swarm_watch_rx: Option<mpsc::Receiver<BuzzEvent>>,
     /// Sender for commands to the background task.
@@ -733,6 +741,7 @@ impl HarnessRelay {
         let (event_tx, event_rx) = mpsc::channel::<Option<BuzzEvent>>(event_channel_capacity());
         let (observer_control_tx, observer_control_rx) =
             mpsc::channel::<Event>(event_channel_capacity());
+        let (credential_tx, credential_rx) = mpsc::channel::<Event>(event_channel_capacity());
         let (swarm_watch_tx, swarm_watch_rx) = mpsc::channel::<BuzzEvent>(event_channel_capacity());
         let (cmd_tx, cmd_rx) = mpsc::channel::<RelayCommand>(CMD_CHANNEL_CAPACITY);
 
@@ -747,6 +756,7 @@ impl HarnessRelay {
                 handshake_buffer,
                 event_tx,
                 observer_control_tx,
+                credential_tx,
                 swarm_watch_tx,
                 cmd_rx,
                 bg_keys,
@@ -760,6 +770,7 @@ impl HarnessRelay {
         Ok(Self {
             event_rx,
             observer_control_rx: Some(observer_control_rx),
+            credential_rx: Some(credential_rx),
             swarm_watch_rx: Some(swarm_watch_rx),
             cmd_tx,
             http: reqwest::Client::builder()
@@ -911,6 +922,26 @@ impl HarnessRelay {
     /// Take the observer-control receiver for polling outside this relay object.
     pub fn take_observer_control_rx(&mut self) -> Option<mpsc::Receiver<Event>> {
         self.observer_control_rx.take()
+    }
+
+    /// Subscribe to NIP-PC provider credential deliveries addressed to this
+    /// agent (kind 30990, authored by `owner_pubkey_hex`).
+    pub async fn subscribe_credentials(
+        &mut self,
+        owner_pubkey_hex: &str,
+    ) -> Result<(), RelayError> {
+        self.cmd_tx
+            .send(RelayCommand::SubscribeCredentials {
+                owner_pubkey_hex: owner_pubkey_hex.to_string(),
+            })
+            .await
+            .map_err(|_| RelayError::ConnectionClosed)?;
+        Ok(())
+    }
+
+    /// Take the credential-delivery receiver for polling outside this relay object.
+    pub fn take_credential_rx(&mut self) -> Option<mpsc::Receiver<Event>> {
+        self.credential_rx.take()
     }
 
     /// Take the swarm-watch receiver for polling outside this relay object.
@@ -1159,6 +1190,9 @@ struct BgState {
     membership_sub_active: bool,
     /// Whether the observer control subscription is active.
     observer_control_sub_active: bool,
+    /// Owner pubkey for the NIP-PC credential subscription; `Some` doubles as
+    /// the "subscription intent recorded" flag for reconnect restoration.
+    credential_sub_owner: Option<String>,
     /// Oldest dropped channel-event timestamp per channel, keyed by channel_id.
     /// Mirrors `membership_dropped_since` but for ordinary channel events.
     /// On reconnect resubscribe, `since` = min(last_seen, channel_dropped_since).
@@ -1199,6 +1233,9 @@ struct BgState {
     /// subscription. The main-loop drain re-sends the REQ once the gate clears,
     /// even when `rate_limited_pending` is empty.
     observer_resub_needed: bool,
+    /// Set when a rate-limited CLOSED arrives for the credential subscription,
+    /// or its (re)subscribe send fails; the rate-limit drain re-sends it.
+    credential_resub_needed: bool,
     /// Observer telemetry frames (kind 24200) parked while the rate-limit gate
     /// is armed. Unlike typing indicators, these frames are durable telemetry:
     /// dropping them silently loses turn history in the Desktop observer.
@@ -1236,6 +1273,7 @@ impl BgState {
             membership_last_seen: None,
             membership_sub_active: false,
             observer_control_sub_active: false,
+            credential_sub_owner: None,
             channel_dropped_since: HashMap::new(),
             proactive_resubscribe_needed: false,
             startup_watermark: None,
@@ -1244,6 +1282,7 @@ impl BgState {
             rate_limited_pending: HashMap::new(),
             membership_resub_needed: false,
             observer_resub_needed: false,
+            credential_resub_needed: false,
             gated_observer_pending: VecDeque::new(),
             observer_in_flight: VecDeque::new(),
             gated_observer_dropped: 0,
@@ -1436,6 +1475,9 @@ fn apply_command_to_state(state: &mut BgState, cmd: RelayCommand) {
         }
         RelayCommand::SubscribeObserverControls => {
             state.observer_control_sub_active = true;
+        }
+        RelayCommand::SubscribeCredentials { owner_pubkey_hex } => {
+            state.credential_sub_owner = Some(owner_pubkey_hex);
         }
         // Swarm watches are live-only (docs/swarms.md §8): no intent survives
         // a disconnect, so nothing is recorded while the socket is down.
@@ -1634,6 +1676,23 @@ async fn execute_connected_command(
                 false
             }
         }
+        RelayCommand::SubscribeCredentials { owner_pubkey_hex } => {
+            state.credential_sub_owner = Some(owner_pubkey_hex.clone());
+            if state.check_rate_gate().is_some() {
+                debug!("rate-gated: deferring credential subscription");
+                state.credential_resub_needed = true;
+                return true;
+            }
+            let sent = send_credential_subscribe(ws, agent_pubkey_hex, &owner_pubkey_hex).await;
+            if sent {
+                state.credential_resub_needed = false;
+                true
+            } else {
+                warn!("credential subscribe REQ failed — recording intent for reconnect");
+                state.credential_resub_needed = true;
+                false
+            }
+        }
         RelayCommand::SubscribeSwarmWatch {
             channel_id,
             thread_root_hex,
@@ -1729,6 +1788,7 @@ async fn run_background_task(
     initial_handshake_buffer: std::collections::VecDeque<RelayMessage>,
     event_tx: mpsc::Sender<Option<BuzzEvent>>,
     observer_control_tx: mpsc::Sender<Event>,
+    credential_tx: mpsc::Sender<Event>,
     swarm_watch_tx: mpsc::Sender<BuzzEvent>,
     mut cmd_rx: mpsc::Receiver<RelayCommand>,
     keys: Keys,
@@ -1743,6 +1803,7 @@ async fn run_background_task(
         initial_handshake_buffer,
         &event_tx,
         &observer_control_tx,
+        &credential_tx,
         &swarm_watch_tx,
         &mut state,
         &keys,
@@ -1765,6 +1826,7 @@ async fn run_background_task(
             &agent_pubkey_hex,
             &event_tx,
             &observer_control_tx,
+            &credential_tx,
             &swarm_watch_tx,
             auth_tag.as_ref(),
         )
@@ -1790,6 +1852,7 @@ async fn run_background_task(
                         &agent_pubkey_hex,
                         &event_tx,
                         &observer_control_tx,
+                        &credential_tx,
                         &swarm_watch_tx,
                         true,
                         auth_tag.as_ref(),
@@ -1850,6 +1913,7 @@ async fn run_background_task(
                         &agent_pubkey_hex,
                         &event_tx,
                         &observer_control_tx,
+                        &credential_tx,
                         &swarm_watch_tx,
                         auth_tag.as_ref(),
                     )
@@ -1881,6 +1945,7 @@ async fn run_background_task(
                                     &agent_pubkey_hex,
                                     &event_tx,
                                     &observer_control_tx,
+                                    &credential_tx,
                                     &swarm_watch_tx,
                                     true,
                                     auth_tag.as_ref(),
@@ -1940,6 +2005,22 @@ async fn run_background_task(
                         );
                     }
                 }
+                if state.credential_resub_needed && budget > 0 {
+                    let owner = state.credential_sub_owner.clone();
+                    if let Some(owner) = owner {
+                        if send_credential_subscribe(&mut ws, &agent_pubkey_hex, &owner).await {
+                            state.credential_resub_needed = false;
+                            budget = budget.saturating_sub(1);
+                            any_sent = true;
+                        } else {
+                            warn!(
+                                "credential resub after rate-limit failed — will retry next drain"
+                            );
+                        }
+                    } else {
+                        state.credential_resub_needed = false;
+                    }
+                }
             }
 
             if budget > 0 && !state.rate_limited_pending.is_empty() {
@@ -1995,6 +2076,7 @@ async fn run_background_task(
                                        &mut ws,
                                        &event_tx,
                                        &observer_control_tx,
+                                       &credential_tx,
                                        &swarm_watch_tx,
                                        &mut state,
                                        &keys,
@@ -2029,6 +2111,7 @@ async fn run_background_task(
                                &agent_pubkey_hex,
                                &event_tx,
                            &observer_control_tx,
+                           &credential_tx,
                            &swarm_watch_tx,
             auth_tag.as_ref(),
                            )
@@ -2050,7 +2133,7 @@ async fn run_background_task(
                                if matches!(
                                    wait_for_reconnect(
                                        &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-        &agent_pubkey_hex, &event_tx, &observer_control_tx, &swarm_watch_tx, true,
+        &agent_pubkey_hex, &event_tx, &observer_control_tx, &credential_tx, &swarm_watch_tx, true,
                         auth_tag.as_ref(),
                                    ).await,
                                    ReconnectOutcome::Shutdown
@@ -2070,7 +2153,7 @@ async fn run_background_task(
                                if matches!(
                                    wait_for_reconnect(
                                        &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-        &agent_pubkey_hex, &event_tx, &observer_control_tx, &swarm_watch_tx, true,
+        &agent_pubkey_hex, &event_tx, &observer_control_tx, &credential_tx, &swarm_watch_tx, true,
                         auth_tag.as_ref(),
                                    ).await,
                                    ReconnectOutcome::Shutdown
@@ -2106,6 +2189,7 @@ async fn run_background_task(
                                        &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
         &agent_pubkey_hex, &event_tx,
                                    &observer_control_tx,
+                                   &credential_tx,
                                    &swarm_watch_tx,
             auth_tag.as_ref(),
                                    ).await {
@@ -2120,7 +2204,7 @@ async fn run_background_task(
                                            if matches!(
                                                wait_for_reconnect(
                                                    &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-        &agent_pubkey_hex, &event_tx, &observer_control_tx, &swarm_watch_tx, true,
+        &agent_pubkey_hex, &event_tx, &observer_control_tx, &credential_tx, &swarm_watch_tx, true,
                         auth_tag.as_ref(),
                                                ).await,
                                                ReconnectOutcome::Shutdown
@@ -2146,6 +2230,7 @@ async fn run_background_task(
                                &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
         &agent_pubkey_hex, &event_tx,
                            &observer_control_tx,
+                           &credential_tx,
                            &swarm_watch_tx,
             auth_tag.as_ref(),
                            ).await {
@@ -2160,7 +2245,7 @@ async fn run_background_task(
                                    if matches!(
                                        wait_for_reconnect(
                                            &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-        &agent_pubkey_hex, &event_tx, &observer_control_tx, &swarm_watch_tx, true,
+        &agent_pubkey_hex, &event_tx, &observer_control_tx, &credential_tx, &swarm_watch_tx, true,
                         auth_tag.as_ref(),
                                        ).await,
                                        ReconnectOutcome::Shutdown
@@ -2180,6 +2265,7 @@ async fn run_background_task(
                                    &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
         &agent_pubkey_hex, &event_tx,
                                &observer_control_tx,
+                               &credential_tx,
                                &swarm_watch_tx,
             auth_tag.as_ref(),
                                ).await {
@@ -2194,7 +2280,7 @@ async fn run_background_task(
                                        if matches!(
                                            wait_for_reconnect(
                                                &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-        &agent_pubkey_hex, &event_tx, &observer_control_tx, &swarm_watch_tx, true,
+        &agent_pubkey_hex, &event_tx, &observer_control_tx, &credential_tx, &swarm_watch_tx, true,
                         auth_tag.as_ref(),
                                            ).await,
                                            ReconnectOutcome::Shutdown
@@ -2249,6 +2335,7 @@ async fn handle_ws_message(
     ws: &mut WsStream,
     event_tx: &mpsc::Sender<Option<BuzzEvent>>,
     observer_control_tx: &mpsc::Sender<Event>,
+    credential_tx: &mpsc::Sender<Event>,
     swarm_watch_tx: &mpsc::Sender<BuzzEvent>,
     state: &mut BgState,
     keys: &Keys,
@@ -2276,6 +2363,19 @@ async fn handle_ws_message(
                             Ok(()) => {}
                             Err(mpsc::error::TrySendError::Full(_)) => {
                                 warn!("observer control event dropped because control channel is full");
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => return false,
+                        }
+                    } else if subscription_id == CREDENTIAL_SUB_ID {
+                        match credential_tx.try_send(*event) {
+                            Ok(()) => {}
+                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                // Addressable heads: the newest delivery per
+                                // provider re-arrives on the next resubscribe,
+                                // so a full channel loses nothing durable.
+                                warn!(
+                                    "credential event dropped because credential channel is full"
+                                );
                             }
                             Err(mpsc::error::TrySendError::Closed(_)) => return false,
                         }
@@ -2472,6 +2572,8 @@ async fn handle_ws_message(
                             state.membership_resub_needed = true;
                         } else if subscription_id == OBSERVER_CONTROL_SUB_ID {
                             state.observer_resub_needed = true;
+                        } else if subscription_id == CREDENTIAL_SUB_ID {
+                            state.credential_resub_needed = true;
                         }
                         return true; // keep the socket
                     }
@@ -2505,6 +2607,16 @@ async fn handle_ws_message(
                         } else {
                             warn!("observer control resubscribe failed after CLOSED — triggering reconnect");
                             return false;
+                        }
+                    } else if subscription_id == CREDENTIAL_SUB_ID {
+                        let owner = state.credential_sub_owner.clone();
+                        if let Some(owner) = owner {
+                            let sent =
+                                send_credential_subscribe(ws, agent_pubkey_hex, &owner).await;
+                            if !sent {
+                                warn!("credential resubscribe failed after CLOSED — triggering reconnect");
+                                return false;
+                            }
                         }
                     } else if subscription_id == MEMBERSHIP_NOTIF_SUB_ID {
                         let since =
@@ -2630,6 +2742,7 @@ async fn process_handshake_buffer(
     buffer: std::collections::VecDeque<RelayMessage>,
     event_tx: &mpsc::Sender<Option<BuzzEvent>>,
     observer_control_tx: &mpsc::Sender<Event>,
+    credential_tx: &mpsc::Sender<Event>,
     swarm_watch_tx: &mpsc::Sender<BuzzEvent>,
     state: &mut BgState,
     keys: &Keys,
@@ -2831,6 +2944,23 @@ async fn resubscribe_after_reconnect(
                 return ResubscribeResult::RetryConnection;
             }
             state.observer_resub_needed = false;
+        }
+    }
+
+    if let Some(owner) = state.credential_sub_owner.clone() {
+        if state.check_rate_gate().is_some() {
+            debug!("rate-gated: parking credential resubscribe after reconnect");
+            state.credential_resub_needed = true;
+        } else {
+            if !pacing_sleep(cmd_rx, &mut deferred_commands, REQ_PACING_INTERVAL).await {
+                return ResubscribeResult::Shutdown;
+            }
+            if !send_credential_subscribe(ws, agent_pubkey_hex, &owner).await {
+                warn!("failed to resubscribe provider credentials after reconnect");
+                retain_deferred_command_intent(state, &mut deferred_commands);
+                return ResubscribeResult::RetryConnection;
+            }
+            state.credential_resub_needed = false;
         }
     }
 
@@ -3071,6 +3201,7 @@ async fn drain_commands(
             RelayCommand::Subscribe { .. }
             | RelayCommand::SubscribeMembership
             | RelayCommand::SubscribeObserverControls
+            | RelayCommand::SubscribeCredentials { .. }
             | RelayCommand::SubscribeSwarmWatch { .. } => {
                 // A gated subscription is only parked in state; pace only an
                 // actual live send attempt.
@@ -3137,6 +3268,7 @@ async fn try_autonomous_reconnect(
     agent_pubkey_hex: &str,
     event_tx: &mpsc::Sender<Option<BuzzEvent>>,
     observer_control_tx: &mpsc::Sender<Event>,
+    credential_tx: &mpsc::Sender<Event>,
     swarm_watch_tx: &mpsc::Sender<BuzzEvent>,
     auth_tag: Option<&nostr::Tag>,
 ) -> ReconnectOutcome {
@@ -3268,6 +3400,7 @@ async fn wait_for_reconnect(
     agent_pubkey_hex: &str,
     event_tx: &mpsc::Sender<Option<BuzzEvent>>,
     observer_control_tx: &mpsc::Sender<Event>,
+    credential_tx: &mpsc::Sender<Event>,
     swarm_watch_tx: &mpsc::Sender<BuzzEvent>,
     skip_drain: bool,
     auth_tag: Option<&nostr::Tag>,
@@ -3541,6 +3674,46 @@ async fn send_observer_control_subscribe(ws: &mut WsStream, agent_pubkey_hex: &s
         }
         Err(e) => {
             warn!("failed to serialize observer control REQ: {e}");
+            false
+        }
+    }
+}
+
+/// Send a NIP-01 REQ for NIP-PC provider credential deliveries: kind 30990,
+/// `#p` = this agent, authored by the owner. Deliberately WITHOUT `since` —
+/// 30990 is addressable (NIP-33 LWW), so the relay first returns the current
+/// heads (state, not history) and then streams live updates; a watermark
+/// would risk missing deliveries made while this agent was offline.
+async fn send_credential_subscribe(
+    ws: &mut WsStream,
+    agent_pubkey_hex: &str,
+    owner_pubkey_hex: &str,
+) -> bool {
+    let req = json!([
+        "REQ",
+        CREDENTIAL_SUB_ID,
+        {
+            "kinds": [buzz_core::kind::KIND_AGENT_PROVIDER_CREDENTIAL],
+            "#p": [agent_pubkey_hex],
+            "authors": [owner_pubkey_hex],
+        }
+    ]);
+
+    match serde_json::to_string(&req) {
+        Ok(text) => {
+            match ws_send_timeout(ws, Message::Text(text.into()), WS_SEND_TIMEOUT_SECS).await {
+                Ok(()) => {
+                    debug!("subscribed to provider credential deliveries");
+                    true
+                }
+                Err(e) => {
+                    warn!("failed to send credential REQ: {e}");
+                    false
+                }
+            }
+        }
+        Err(e) => {
+            warn!("failed to serialize credential REQ: {e}");
             false
         }
     }

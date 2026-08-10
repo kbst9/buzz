@@ -3,6 +3,7 @@
 mod acp;
 mod community_fetch;
 mod config;
+mod credential_sink;
 mod definition_fetch;
 mod engram_fetch;
 mod filter;
@@ -1175,6 +1176,125 @@ async fn publish_relay_observer_event(
 /// Maximum age (seconds) for an observer control frame to be considered fresh.
 const OBSERVER_CONTROL_FRESHNESS_SECS: i64 = 300;
 
+/// Extra env for agent subprocesses: persona env plus API-key credential
+/// projections from the NIP-PC store. Operator environment still wins —
+/// `AcpClient::spawn` applies every entry with an absent-only guard, and
+/// persona entries take precedence over credential projections here.
+fn agent_extra_env(config: &Config) -> Vec<(String, String)> {
+    let mut env = config.persona_env_vars.clone();
+    if let Some(workspace) = credential_sink::resolve_store_workspace(config.workspace.as_deref()) {
+        for pair in credential_sink::api_key_env_pairs(&workspace) {
+            if !env.iter().any(|(key, _)| key == &pair.0) {
+                env.push(pair);
+            }
+        }
+    }
+    env
+}
+
+/// Handle one NIP-PC `kind:30990` credential delivery: apply it to the host
+/// credential store off-thread (lock + file IO are blocking), then publish
+/// the `kind:30991` status projection. Failures degrade to warnings —
+/// credential handling must never take down the harness.
+async fn handle_relay_credential_event(
+    agent_keys: &nostr::Keys,
+    configured_workspace: Option<String>,
+    event: nostr::Event,
+    owner_pubkey_hex: &str,
+    rest_client: &relay::RestClient,
+) {
+    use buzz_core::provider_credential::{
+        ProviderCredentialState, ProviderCredentialStatusPayload,
+    };
+
+    let Some(workspace) = credential_sink::resolve_store_workspace(configured_workspace.as_deref())
+    else {
+        tracing::warn!(
+            target: "credential_sink",
+            "credential delivery received but no workspace resolvable — dropping"
+        );
+        return;
+    };
+    let keys = agent_keys.clone();
+    let owner = owner_pubkey_hex.to_string();
+    let apply = tokio::task::spawn_blocking(move || {
+        credential_sink::apply_delivery(&workspace, &keys, &owner, &event)
+    })
+    .await;
+
+    let (provider, state, detail) = match apply {
+        Ok(Ok(credential_sink::ApplyOutcome::Applied { provider })) => {
+            tracing::info!(target: "credential_sink", provider, "provider credential applied");
+            (provider, ProviderCredentialState::Applied, None)
+        }
+        Ok(Ok(credential_sink::ApplyOutcome::Removed { provider })) => {
+            tracing::info!(target: "credential_sink", provider, "provider credential removed");
+            (provider, ProviderCredentialState::Removed, None)
+        }
+        Ok(Ok(credential_sink::ApplyOutcome::Stale { provider })) => {
+            // Addressable heads re-arrive on every (re)subscribe; skipping the
+            // status write avoids churning the coordinate on each reconnect.
+            tracing::debug!(target: "credential_sink", provider, "stale credential delivery skipped");
+            return;
+        }
+        Ok(Err(err)) => {
+            tracing::warn!(target: "credential_sink", "credential delivery rejected: {err}");
+            // Coarse non-secret detail classes only — NIP-PC forbids secret
+            // material or provider account identifiers in status events.
+            let Some(provider) = err.provider().map(str::to_string) else {
+                return; // no coordinate to report against
+            };
+            let detail = match &err {
+                credential_sink::SinkError::Payload { .. } => "payload rejected",
+                credential_sink::SinkError::StoreIo { .. } => "store write failed",
+                _ => "rejected",
+            };
+            (
+                provider,
+                ProviderCredentialState::Error,
+                Some(detail.to_string()),
+            )
+        }
+        Err(join_err) => {
+            tracing::warn!(target: "credential_sink", "credential apply task failed: {join_err}");
+            return;
+        }
+    };
+
+    let payload = ProviderCredentialStatusPayload {
+        v: 1,
+        provider,
+        state,
+        detail,
+        updated_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    };
+    let builder = match buzz_sdk::build_agent_provider_credential_status(&payload) {
+        Ok(builder) => builder,
+        Err(e) => {
+            tracing::warn!(target: "credential_sink", "status build failed: {e}");
+            return;
+        }
+    };
+    let status_event = match builder.sign_with_keys(agent_keys) {
+        Ok(event) => event,
+        Err(e) => {
+            tracing::warn!(target: "credential_sink", "status sign failed: {e}");
+            return;
+        }
+    };
+    const STATUS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+    match tokio::time::timeout(STATUS_TIMEOUT, rest_client.submit_event(&status_event)).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => {
+            tracing::warn!(target: "credential_sink", "status publish failed: {e}")
+        }
+        Err(_) => tracing::warn!(target: "credential_sink", "status publish timed out"),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle_relay_observer_control_event(
     keys: &nostr::Keys,
@@ -1948,6 +2068,19 @@ async fn tokio_main() -> Result<()> {
         relay_observer_control_rx = relay.take_observer_control_rx();
         tracing::info!("owner control frames enabled");
     }
+    // NIP-PC credential sink: owner-delivered provider credentials. The
+    // subscription returns the current addressable heads first (state, not
+    // history — deliveries made while this process was down arrive here),
+    // then live updates.
+    let mut relay_credential_rx = None;
+    if let Some(ref owner_hex) = owner_cache.pubkey {
+        relay
+            .subscribe_credentials(owner_hex)
+            .await
+            .map_err(|e| anyhow::anyhow!("credential subscribe error: {e}"))?;
+        relay_credential_rx = relay.take_credential_rx();
+        tracing::info!("provider credential sink enabled");
+    }
     if config.relay_observer {
         if let (Some(observer), Some(owner_pubkey_hex)) =
             (observer.clone(), owner_cache.pubkey.clone())
@@ -2368,7 +2501,7 @@ async fn tokio_main() -> Result<()> {
                 tracing::info!(agent = idx, "slot refill: spawning background respawn");
                 let cmd = config.agent_command.clone();
                 let args = config.agent_args.clone();
-                let env = config.persona_env_vars.clone();
+                let env = agent_extra_env(&config);
                 let has_codex = config.has_generated_codex_config;
                 let observer = observer.clone();
                 let guard = RespawnGuard::new(idx, respawn_tx.clone());
@@ -2510,6 +2643,35 @@ async fn tokio_main() -> Result<()> {
                         None => {
                             relay_observer_control_rx = None;
                             tracing::warn!("relay observer control channel closed");
+                        }
+                    }
+                    None
+                }
+                credential_event = async {
+                    match relay_credential_rx.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    let _ = result_rx;
+                    match credential_event {
+                        Some(event) => {
+                            if let Some(ref owner_hex) = owner_cache.pubkey {
+                                handle_relay_credential_event(
+                                    &config.keys,
+                                    config.workspace.clone(),
+                                    event,
+                                    owner_hex,
+                                    &control_rest_client,
+                                )
+                                .await;
+                            } else {
+                                tracing::warn!("credential delivery received but no owner resolved — dropping");
+                            }
+                        }
+                        None => {
+                            relay_credential_rx = None;
+                            tracing::warn!("relay credential channel closed");
                         }
                     }
                     None
@@ -4430,7 +4592,7 @@ fn recover_panicked_agent(
     slot.respawn_in_flight = true;
     let cmd = config.agent_command.clone();
     let args = config.agent_args.clone();
-    let env = config.persona_env_vars.clone();
+    let env = agent_extra_env(&config);
     let has_codex = config.has_generated_codex_config;
     let guard = RespawnGuard::new(i, respawn_tx.clone());
     respawn_tasks.spawn(async move {
@@ -4634,7 +4796,7 @@ fn spawn_respawn_task(
     // Spawn the actual work (shutdown + sleep + spawn + init) off the main loop.
     let cmd = config.agent_command.clone();
     let args = config.agent_args.clone();
-    let env = config.persona_env_vars.clone();
+    let env = agent_extra_env(&config);
     let has_codex = config.has_generated_codex_config;
     let guard = RespawnGuard::new(index, respawn_tx.clone());
     respawn_tasks.spawn(async move {
@@ -4701,7 +4863,7 @@ impl PoolStartup {
             agents: config.agents,
             command: config.agent_command.clone(),
             args: config.agent_args.clone(),
-            extra_env: config.persona_env_vars.clone(),
+            extra_env: agent_extra_env(config),
             has_generated_codex_config: config.has_generated_codex_config,
             model: config.model.clone(),
             observer,

@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 /// - else `cwd` when it already contains [`buzz_nest::NEST_AGENTS_VERSION_FILE`];
 /// - else `default_nest` (`~/.buzz`), which may be `None` when no home
 ///   directory is resolvable — in that case there is nothing to seed.
-fn resolve_workspace(
+pub(crate) fn resolve_workspace(
     configured: Option<&str>,
     cwd: Option<&Path>,
     default_nest: Option<PathBuf>,
