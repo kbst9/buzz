@@ -2597,6 +2597,8 @@ impl Db {
         agent_pubkey: &[u8],
     ) -> Result<Option<Vec<u8>>> {
         user::get_agent_owner(&self.pool, community_id, agent_pubkey).await
+    }
+
     /// Check whether `pubkey` is a registered agent (non-NULL `agent_owner_pubkey`).
     pub async fn is_registered_agent(
         &self,
