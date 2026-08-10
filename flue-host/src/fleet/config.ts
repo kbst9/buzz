@@ -8,7 +8,8 @@
  * no secret ever crosses machines, exactly like new-standalone-agent.sh.
  *
  * The parser below covers the deliberate TOML subset the schema uses —
- * `[fleet]`, repeated `[[agents]]`, string keys, and string arrays — so the
+ * `[fleet]`, repeated `[[agents]]`, the per-agent `[agents.sandbox]`
+ * sub-table, string keys, string arrays, and bare booleans — so the
  * package stays dependency-free. Anything outside that subset is a hard
  * parse error, never a silent skip: a typo'd section or key must fail
  * provisioning loudly.
@@ -34,6 +35,23 @@ export type FleetSettings = {
   providerEnv?: string;
 };
 
+/**
+ * Tier-agnostic sandbox policy (AGENT_OS_M0.md invariant 2). This schema is
+ * OURS and stable; each tier adapter translates it to its native mechanism.
+ * Authored per-agent in fleet.toml as `[agents.sandbox]`. Swapping tiers
+ * must never require re-authoring these fields.
+ */
+export type AgentSandbox = {
+  /** Selects the tier factory (`BUZZ_FLUE_SANDBOX`). Default: `local`. */
+  tier: string;
+  /** Egress allowlist in our vocab (`relay`, `host`, `host:port`). Default: []. */
+  egress: string[];
+  /** Heavy-tier escalation binding (M3); reserved. Default: false. */
+  escalation: boolean;
+  /** Filesystem scope (reserved for M2/M3). Default: `workspace`. */
+  fsScope: string;
+};
+
 /** One provisioned agent: a unit, an env file, a keypair, a model. */
 export type FleetAgent = {
   /** Unit/env slug: buzz-acp-<name>.service, /etc/buzz-agents/<name>.env. */
@@ -46,7 +64,18 @@ export type FleetAgent = {
   respondTo: "owner-only" | "allowlist" | "anyone" | "nobody";
   /** BUZZ_ACP_RESPOND_TO_ALLOWLIST; required iff respondTo = allowlist. */
   allowlist: string[];
+  /** Sandbox policy; the default block selects the `local` tier. */
+  sandbox: AgentSandbox;
 };
+
+const DEFAULT_SANDBOX: AgentSandbox = {
+  tier: "local",
+  egress: [],
+  escalation: false,
+  fsScope: "workspace",
+};
+
+const FS_SCOPES = new Set(["workspace"]);
 
 export type FleetConfig = {
   fleet: FleetSettings;
@@ -67,18 +96,24 @@ export class FleetConfigError extends Error {
   }
 }
 
-type RawTable = Map<string, string | string[]>;
+type RawValue = string | string[] | boolean;
+type RawTable = Map<string, RawValue>;
 
 /**
- * Parse the fleet.toml subset: `[fleet]`, `[[agents]]`, `key = "string"`,
- * `key = ["array", "of", "strings"]`, comments, and blank lines.
+ * Parse the fleet.toml subset: `[fleet]`, `[[agents]]`, the per-agent
+ * `[agents.sandbox]` sub-table, `key = "string"`, `key = ["array", …]`,
+ * `key = true|false`, comments, and blank lines. `sandboxes[i]` is the
+ * sandbox sub-table for `agents[i]`, or undefined when the agent declares
+ * no `[agents.sandbox]`.
  */
 function parseTables(source: string): {
   fleet: RawTable;
   agents: RawTable[];
+  sandboxes: (RawTable | undefined)[];
 } {
   const fleet: RawTable = new Map();
   const agents: RawTable[] = [];
+  const sandboxes: (RawTable | undefined)[] = [];
   let current: RawTable | null = null;
   let currentName = "";
 
@@ -96,12 +131,32 @@ function parseTables(source: string): {
     if (line === "[[agents]]") {
       current = new Map();
       agents.push(current);
+      sandboxes.push(undefined);
       currentName = "agents";
+      continue;
+    }
+    if (line === "[agents.sandbox]") {
+      // Sub-table of the most recent [[agents]] entry (standard TOML).
+      if (agents.length === 0) {
+        throw new FleetConfigError(
+          "[agents.sandbox] must follow an [[agents]] entry",
+          lineNo,
+        );
+      }
+      if (sandboxes[agents.length - 1] !== undefined) {
+        throw new FleetConfigError(
+          "duplicate [agents.sandbox] for one agent",
+          lineNo,
+        );
+      }
+      current = new Map();
+      sandboxes[agents.length - 1] = current;
+      currentName = "agents.sandbox";
       continue;
     }
     if (line.startsWith("[")) {
       throw new FleetConfigError(
-        `unknown section ${line} — expected [fleet] or [[agents]]`,
+        `unknown section ${line} — expected [fleet], [[agents]], or [agents.sandbox]`,
         lineNo,
       );
     }
@@ -123,13 +178,15 @@ function parseTables(source: string): {
     current.set(key, parseValue(rawValue, lineNo));
   }
 
-  return { fleet, agents };
+  return { fleet, agents, sandboxes };
 }
 
-function parseValue(raw: string, lineNo: number): string | string[] {
+function parseValue(raw: string, lineNo: number): RawValue {
   if (raw.startsWith('"')) {
     return parseString(raw, lineNo);
   }
+  if (raw === "true") return true;
+  if (raw === "false") return false;
   if (raw.startsWith("[")) {
     if (!raw.endsWith("]")) {
       throw new FleetConfigError(`unterminated array: ${raw}`, lineNo);
@@ -139,7 +196,7 @@ function parseValue(raw: string, lineNo: number): string | string[] {
     return inner.split(",").map((item) => parseString(item.trim(), lineNo));
   }
   throw new FleetConfigError(
-    `unsupported value ${raw} — only "strings" and ["string", "arrays"]`,
+    `unsupported value ${raw} — only "strings", ["arrays"], and true/false`,
     lineNo,
   );
 }
@@ -183,6 +240,19 @@ function optionalString(
   return value;
 }
 
+function optionalBoolean(
+  table: RawTable,
+  key: string,
+  section: string,
+): boolean | undefined {
+  const value = table.get(key);
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") {
+    throw new FleetConfigError(`[${section}] ${key} must be true or false`);
+  }
+  return value;
+}
+
 function rejectUnknownKeys(
   table: RawTable,
   known: readonly string[],
@@ -195,9 +265,56 @@ function rejectUnknownKeys(
   }
 }
 
+const TIER_RE = /^[a-z0-9-]+$/;
+/** `relay`, a bare host, or host:port (loose — the tier is the authority). */
+const EGRESS_RE = /^(relay|[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]{1,5})?)$/;
+
+/**
+ * Parse and validate a `[agents.sandbox]` sub-table into an AgentSandbox.
+ * Absent block → the default (local tier, no egress). The tier NAME is only
+ * format-checked here; the tier registry is the runtime authority and fails
+ * loudly at session start on an unregistered name (invariant 1).
+ */
+function parseSandbox(table: RawTable | undefined, section: string): AgentSandbox {
+  if (table === undefined) return { ...DEFAULT_SANDBOX };
+  rejectUnknownKeys(table, ["tier", "egress", "escalation", "fs_scope"], section);
+
+  const tier = optionalString(table, "tier", section) ?? DEFAULT_SANDBOX.tier;
+  if (!TIER_RE.test(tier)) {
+    throw new FleetConfigError(`${section}.tier must be a lowercase slug, got "${tier}"`);
+  }
+
+  const rawEgress = table.get("egress");
+  if (rawEgress !== undefined && !Array.isArray(rawEgress)) {
+    throw new FleetConfigError(`${section}.egress must be an array of strings`);
+  }
+  const egress = Array.isArray(rawEgress) ? rawEgress : [];
+  for (const entry of egress) {
+    if (!EGRESS_RE.test(entry)) {
+      throw new FleetConfigError(
+        `${section}.egress entries must be "relay", a host, or host:port, got "${entry}"`,
+      );
+    }
+  }
+
+  const fsScope = optionalString(table, "fs_scope", section) ?? DEFAULT_SANDBOX.fsScope;
+  if (!FS_SCOPES.has(fsScope)) {
+    throw new FleetConfigError(
+      `${section}.fs_scope must be one of ${[...FS_SCOPES].join(", ")}, got "${fsScope}"`,
+    );
+  }
+
+  return {
+    tier,
+    egress,
+    escalation: optionalBoolean(table, "escalation", section) ?? DEFAULT_SANDBOX.escalation,
+    fsScope,
+  };
+}
+
 /** Parse and validate a fleet.toml source string. */
 export function parseFleetConfig(source: string): FleetConfig {
-  const { fleet: rawFleet, agents: rawAgents } = parseTables(source);
+  const { fleet: rawFleet, agents: rawAgents, sandboxes: rawSandboxes } = parseTables(source);
 
   if (rawFleet.size === 0) {
     throw new FleetConfigError("missing [fleet] section");
@@ -300,6 +417,7 @@ export function parseFleetConfig(source: string): FleetConfig {
       model: requireString(table, "model", section),
       respondTo: respondTo as FleetAgent["respondTo"],
       allowlist,
+      sandbox: parseSandbox(rawSandboxes[index], `${section}.sandbox`),
     };
   });
 

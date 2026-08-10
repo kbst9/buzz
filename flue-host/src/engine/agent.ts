@@ -26,8 +26,17 @@ export function BuzzAgent(): string {
   }
   useModel(model);
   const tier = selectSandboxTier();
+  // Egress policy (our vocab) arrives via BUZZ_FLUE_EGRESS, rendered from the
+  // agent's fleet.toml [agents.sandbox] block. Tiers without the
+  // egress-allowlist capability ignore it (local); srt translates it.
+  const egressEnv = process.env["BUZZ_FLUE_EGRESS"]?.trim();
+  const egress = egressEnv ? egressEnv.split(",").map((entry) => entry.trim()).filter(Boolean) : undefined;
   useSandbox(
-    tier.createFactory({ cwd: seed?.cwd ?? process.cwd(), env: seed?.env ?? {} }),
+    tier.createFactory({
+      cwd: seed?.cwd ?? process.cwd(),
+      env: seed?.env ?? {},
+      ...(egress ? { egress } : {}),
+    }),
   );
   return (
     seed?.systemPrompt ??

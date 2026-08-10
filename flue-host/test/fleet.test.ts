@@ -47,6 +47,12 @@ describe("parseFleetConfig", () => {
       providerEnv: "/etc/buzz-agents/flue-provider.env",
     });
 
+    const DEFAULT_SANDBOX = {
+      tier: "local",
+      egress: [],
+      escalation: false,
+      fsScope: "workspace",
+    };
     expect(config.agents).toHaveLength(2);
     expect(config.agents[0]).toEqual({
       name: "grok-1",
@@ -54,6 +60,8 @@ describe("parseFleetConfig", () => {
       model: "xai/grok-4.5",
       respondTo: "owner-only",
       allowlist: [],
+      // No [agents.sandbox] block → the default policy (local tier).
+      sandbox: DEFAULT_SANDBOX,
     });
     expect(config.agents[1]).toEqual({
       name: "sonnet-1",
@@ -61,6 +69,43 @@ describe("parseFleetConfig", () => {
       model: "anthropic/claude-sonnet-5",
       respondTo: "allowlist",
       allowlist: [PEER],
+      sandbox: DEFAULT_SANDBOX,
+    });
+  });
+
+  it("parses a [agents.sandbox] block into the tier-agnostic policy", () => {
+    const source = `[fleet]
+relay_url = "wss://buzz.example.com"
+owner_pubkey = "${OWNER}"
+invite_code = "v2.abc123"
+run_user = "kbs"
+
+[[agents]]
+name = "canary"
+model = "xai/grok-4.5"
+[agents.sandbox]
+tier = "srt"
+egress = ["relay", "api.x.ai", "127.0.0.1:8080"]
+escalation = true
+fs_scope = "workspace"
+
+[[agents]]
+name = "plain"
+model = "xai/grok-4.5"
+`;
+    const config = parseFleetConfig(source);
+    expect(config.agents[0]?.sandbox).toEqual({
+      tier: "srt",
+      egress: ["relay", "api.x.ai", "127.0.0.1:8080"],
+      escalation: true,
+      fsScope: "workspace",
+    });
+    // A sibling entry with no block still gets the default policy.
+    expect(config.agents[1]?.sandbox).toEqual({
+      tier: "local",
+      egress: [],
+      escalation: false,
+      fsScope: "workspace",
     });
   });
 
@@ -121,6 +166,36 @@ describe("parseFleetConfig", () => {
       VALID.replace('run_user = "kbs"', "run_user = 42"),
       /unsupported value/,
     ],
+    [
+      "sandbox before any agent",
+      `[fleet]\nrelay_url = "wss://x"\nowner_pubkey = "${OWNER}"\ninvite_code = "v2.z"\nrun_user = "kbs"\n[agents.sandbox]\ntier = "srt"\n`,
+      /\[agents\.sandbox\] must follow/,
+    ],
+    [
+      "unknown sandbox key",
+      `${VALID}[agents.sandbox]\nfoo = "bar"\n`,
+      /unknown key foo/,
+    ],
+    [
+      "bad sandbox tier",
+      `${VALID}[agents.sandbox]\ntier = "SRT"\n`,
+      /tier must be a lowercase slug/,
+    ],
+    [
+      "bad egress entry",
+      `${VALID}[agents.sandbox]\ntier = "srt"\negress = ["http://x"]\n`,
+      /egress entries must be/,
+    ],
+    [
+      "bad fs_scope",
+      `${VALID}[agents.sandbox]\ntier = "srt"\nfs_scope = "host"\n`,
+      /fs_scope must be one of/,
+    ],
+    [
+      "non-boolean escalation",
+      `${VALID}[agents.sandbox]\ntier = "srt"\nescalation = "yes"\n`,
+      /escalation must be true or false/,
+    ],
   ])("rejects %s", (_label, source, pattern) => {
     expect(() => parseFleetConfig(source)).toThrowError(pattern);
     expect(() => parseFleetConfig(source)).toThrowError(FleetConfigError);
@@ -156,6 +231,33 @@ BUZZ_ACP_PROFILE_NAME=Sonnet One
     expect(env).not.toContain("ALLOWLIST");
     expect(env).toContain("BUZZ_ACP_RESPOND_TO=owner-only");
     expect(env).toContain("BUZZ_ACP_PROFILE_NAME=grok-1");
+  });
+
+  it("omits sandbox env lines for the default (local, no egress) policy", () => {
+    const env = renderEnvFile(config.fleet, grokAgent, SECRET);
+    expect(env).not.toContain("BUZZ_FLUE_SANDBOX");
+    expect(env).not.toContain("BUZZ_FLUE_EGRESS");
+  });
+
+  it("emits BUZZ_FLUE_SANDBOX and BUZZ_FLUE_EGRESS from a sandbox block", () => {
+    const srtConfig = parseFleetConfig(`[fleet]
+relay_url = "wss://buzz.example.com"
+owner_pubkey = "${OWNER}"
+invite_code = "v2.abc123"
+run_user = "kbs"
+
+[[agents]]
+name = "canary"
+model = "xai/grok-4.5"
+[agents.sandbox]
+tier = "srt"
+egress = ["relay", "api.x.ai"]
+`);
+    const canary = srtConfig.agents[0];
+    if (!canary) throw new Error("fixture must parse one agent");
+    const env = renderEnvFile(srtConfig.fleet, canary, SECRET);
+    expect(env).toContain("BUZZ_FLUE_SANDBOX=srt");
+    expect(env).toContain("BUZZ_FLUE_EGRESS=relay,api.x.ai");
   });
 
   it("pins the unit file and paths to the standalone-agent shape", () => {

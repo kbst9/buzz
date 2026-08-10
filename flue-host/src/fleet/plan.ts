@@ -54,6 +54,15 @@ export function renderEnvFile(
     "BUZZ_ACP_RELAY_OBSERVER=true",
     `BUZZ_ACP_PROFILE_NAME=${agent.displayName}`,
   );
+  // Sandbox policy → runtime env. Emitted only when it diverges from the
+  // default (local tier, no egress), so agents without a [agents.sandbox]
+  // block render byte-identically to before this schema existed.
+  if (agent.sandbox.tier !== "local") {
+    lines.push(`BUZZ_FLUE_SANDBOX=${agent.sandbox.tier}`);
+  }
+  if (agent.sandbox.egress.length > 0) {
+    lines.push(`BUZZ_FLUE_EGRESS=${agent.sandbox.egress.join(",")}`);
+  }
   return `${lines.join("\n")}\n`;
 }
 
