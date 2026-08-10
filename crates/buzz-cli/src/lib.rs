@@ -3,12 +3,12 @@ mod client;
 mod commands;
 mod error;
 mod links;
+mod signer;
 mod validate;
 
 use clap::{Parser, Subcommand};
 use client::BuzzClient;
 use error::CliError;
-use nostr::Keys;
 use uuid::Uuid;
 
 /// Run the Buzz CLI from raw arguments (including `argv[0]`).
@@ -69,7 +69,10 @@ Buzz CLI — interact with a Buzz relay
 
 Configuration (flags override env vars):
   BUZZ_RELAY_URL     Relay base URL        [default: http://localhost:3000]
-  BUZZ_PRIVATE_KEY   Nostr private key (hex or nsec)  [required]
+  BUZZ_PRIVATE_KEY   Nostr private key (hex or nsec)  [required*]
+  BUZZ_SIGNER_SOCKET Unix socket of a host signing broker — signs events
+                     without the private key ever entering this process.
+                     *Either BUZZ_PRIVATE_KEY or BUZZ_SIGNER_SOCKET is required.
   BUZZ_AUTH_TAG      NIP-OA auth tag JSON  [optional]
 
 The 'pack' subcommand runs locally and does not require a relay connection.
@@ -85,6 +88,11 @@ struct Cli {
     /// Nostr private key (hex or nsec). This is the CLI's identity.
     #[arg(long, env = "BUZZ_PRIVATE_KEY", hide_env_values = true)]
     private_key: Option<String>,
+
+    /// Unix socket of a host signing broker (used when no private key is
+    /// present; the key then never enters this process).
+    #[arg(long, env = "BUZZ_SIGNER_SOCKET", hide_env_values = true)]
+    signer_socket: Option<String>,
 
     /// NIP-OA auth tag JSON (owner attestation). Injected into every signed event.
     #[arg(long, env = "BUZZ_AUTH_TAG", hide_env_values = true)]
@@ -1953,13 +1961,11 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         };
     }
 
-    // Auth: private key is required for all relay operations.
-    // The keypair IS the identity — no tokens, no other auth.
-    let private_key_str = cli.private_key.ok_or_else(|| {
-        CliError::Auth("BUZZ_PRIVATE_KEY is required (use --private-key or set env var)".into())
-    })?;
-    let keys = Keys::parse(&private_key_str)
-        .map_err(|e| CliError::Key(format!("invalid BUZZ_PRIVATE_KEY: {e}")))?;
+    // Auth: the keypair IS the identity — held locally (BUZZ_PRIVATE_KEY) or
+    // by a host signing broker (BUZZ_SIGNER_SOCKET) that signs on our behalf
+    // so the secret never enters this process (or the sandbox running it).
+    let signer =
+        signer::BuzzSigner::from_config(cli.private_key.as_deref(), cli.signer_socket.as_deref())?;
 
     // NIP-OA: parse and verify the auth tag if provided.
     //
@@ -1973,10 +1979,10 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             let json = normalize_auth_tag_input(input);
             let tag = buzz_sdk::nip_oa::parse_auth_tag(&json)
                 .map_err(|e| CliError::Auth(format!("BUZZ_AUTH_TAG is malformed: {e}")))?;
-            buzz_sdk::nip_oa::verify_auth_tag(&json, &keys.public_key()).map_err(|e| {
+            buzz_sdk::nip_oa::verify_auth_tag(&json, &signer.public_key()).map_err(|e| {
                 CliError::Auth(format!(
                     "BUZZ_AUTH_TAG verification failed for pubkey {}: {e}",
-                    keys.public_key().to_hex()
+                    signer.public_key().to_hex()
                 ))
             })?;
             // Canonical wire form derives from the parsed-and-verified tag
@@ -1988,7 +1994,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         _ => (None, None),
     };
 
-    let client = BuzzClient::new(relay_url, keys, auth_tag, auth_tag_json)?;
+    let client = BuzzClient::new(relay_url, signer, auth_tag, auth_tag_json)?;
 
     match cli.command {
         Cmd::Agents(sub) => commands::agents::dispatch(sub, &client).await,

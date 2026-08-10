@@ -9,7 +9,7 @@
 
 use hmac::digest::KeyInit;
 use hmac::{Hmac, Mac};
-use nostr::nips::nip44::{self, v2::ConversationKey, Version};
+use nostr::nips::nip44::{self, v2::ConversationKey};
 use nostr::{Event, EventBuilder, Keys, Kind, PublicKey, SecretKey, Tag};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -438,38 +438,49 @@ pub fn build_event(
     body: &Body,
     created_at: u64,
 ) -> Result<Event, EngramError> {
+    let k_c = conversation_key(agent_keys.secret_key(), owner_pubkey);
+    build_unsigned(&k_c, owner_pubkey, body, created_at)?
+        .sign_with_keys(agent_keys)
+        .map_err(|e| EngramError::Sign(e.to_string()))
+}
+
+/// Build the unsigned engram event (encryption + tags) from an
+/// already-derived conversation key, leaving signing to the caller.
+///
+/// This is [`build_event`] with the two secret-touching steps factored out:
+/// callers whose secret key lives behind a signing broker obtain `k_c`
+/// remotely and sign the returned builder remotely too — the secret never
+/// enters this process. The produced wire format is identical to
+/// [`build_event`]'s (NIP-44 v2 payload, standard base64).
+pub fn build_unsigned(
+    k_c: &ConversationKey,
+    owner_pubkey: &PublicKey,
+    body: &Body,
+    created_at: u64,
+) -> Result<EventBuilder, EngramError> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+
     let plaintext = body.to_json_bytes();
     if plaintext.len() > NIP44_PLAINTEXT_MAX {
         return Err(EngramError::BodyTooLarge(plaintext.len()));
     }
-    // `to_json_bytes` only emits ASCII control chars or `&str` bytes, so
-    // this is always Ok. We still verify rather than `.expect()` so a future
-    // change to the serializer can't silently introduce a panic on the hot
-    // path.
-    let plaintext_str = std::str::from_utf8(&plaintext)
-        .map_err(|e| EngramError::Encrypt(format!("body JSON not UTF-8: {e}")))?;
 
-    let k_c = conversation_key(agent_keys.secret_key(), owner_pubkey);
-    let ciphertext = nip44::encrypt(
-        agent_keys.secret_key(),
-        owner_pubkey,
-        plaintext_str,
-        Version::V2,
-    )
-    .map_err(|e| EngramError::Encrypt(e.to_string()))?;
+    let payload = nip44::v2::encrypt_to_bytes(k_c, &plaintext)
+        .map_err(|e| EngramError::Encrypt(e.to_string()))?;
+    let ciphertext = B64.encode(payload);
 
-    let d = d_tag(&k_c, body.slug());
+    let d = d_tag(k_c, body.slug());
     let tags = vec![
         Tag::parse(["d", &d]).map_err(|e| EngramError::Encrypt(e.to_string()))?,
         Tag::parse(["p", &owner_pubkey.to_hex()])
             .map_err(|e| EngramError::Encrypt(e.to_string()))?,
     ];
 
-    EventBuilder::new(Kind::Custom(KIND_AGENT_ENGRAM as u16), ciphertext)
-        .tags(tags)
-        .custom_created_at(nostr::Timestamp::from(created_at))
-        .sign_with_keys(agent_keys)
-        .map_err(|e| EngramError::Sign(e.to_string()))
+    Ok(
+        EventBuilder::new(Kind::Custom(KIND_AGENT_ENGRAM as u16), ciphertext)
+            .tags(tags)
+            .custom_created_at(nostr::Timestamp::from(created_at)),
+    )
 }
 
 /// Validate an event against *Head selection* rules (1) and (5) and return
@@ -491,6 +502,19 @@ pub fn validate_and_decrypt(
     expected_owner: &PublicKey,
     my_seckey: &SecretKey,
     their_pubkey: &PublicKey,
+) -> Result<Body, EngramError> {
+    let k_c = conversation_key(my_seckey, their_pubkey);
+    validate_and_decrypt_with_key(event, expected_agent, expected_owner, &k_c)
+}
+
+/// [`validate_and_decrypt`] from an already-derived conversation key —
+/// the broker-mode counterpart (see [`build_unsigned`]). `K_c` is symmetric
+/// per NIP-44, so either side's derivation works.
+pub fn validate_and_decrypt_with_key(
+    event: &Event,
+    expected_agent: &PublicKey,
+    expected_owner: &PublicKey,
+    k_c: &ConversationKey,
 ) -> Result<Body, EngramError> {
     if event.kind.as_u16() as u32 != KIND_AGENT_ENGRAM {
         return Err(EngramError::InvalidEnvelope(format!(
@@ -538,16 +562,18 @@ pub fn validate_and_decrypt(
         ));
     }
 
-    // Decrypt. `K_c` is symmetric per NIP-44, so the caller's `(my_seckey,
-    // their_pubkey)` pair yields the same conversation key regardless of
-    // whether the caller is the agent or the owner.
-    let plaintext = nip44::decrypt(my_seckey, their_pubkey, &event.content)
-        .map_err(|_| EngramError::Decrypt)?;
-    let body = Body::from_json_bytes(plaintext.as_bytes())?;
+    // Decrypt with the symmetric conversation key (standard-base64 NIP-44
+    // v2 payload — the same wire format `nip44::decrypt` handles).
+    let payload = {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+        B64.decode(event.content.trim())
+            .map_err(|_| EngramError::Decrypt)?
+    };
+    let plaintext = nip44::v2::decrypt_to_bytes(k_c, &payload).map_err(|_| EngramError::Decrypt)?;
+    let body = Body::from_json_bytes(&plaintext)?;
 
     // Rule (4): body slug re-derives to the event's d tag.
-    let k_c = conversation_key(my_seckey, their_pubkey);
-    let derived = d_tag(&k_c, body.slug());
+    let derived = d_tag(k_c, body.slug());
     if derived != d_value {
         return Err(EngramError::InvalidEnvelope(
             "body slug does not re-derive to d tag".into(),

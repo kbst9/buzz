@@ -20,7 +20,7 @@ use std::time::SystemTime;
 use sha2::{Digest, Sha256};
 
 use buzz_core::engram::{
-    self, conversation_key, d_tag, normalize_slug, select_head, validate_and_decrypt, Body, Listing,
+    self, d_tag, normalize_slug, select_head, validate_and_decrypt_with_key, Body, Listing,
 };
 use buzz_core::kind::KIND_AGENT_ENGRAM;
 use nostr::PublicKey;
@@ -64,16 +64,16 @@ fn resolve_reader(
         }
         let agent = PublicKey::from_hex(agent)
             .map_err(|e| CliError::Usage(format!("--agent must be a 64-hex pubkey: {e}")))?;
-        if agent == client.keys().public_key() {
+        if agent == client.public_key() {
             return Err(CliError::Usage(
                 "--agent must differ from the CLI identity; omit --agent for agent-side reads"
                     .into(),
             ));
         }
-        return Ok((agent, client.keys().public_key(), agent));
+        return Ok((agent, client.public_key(), agent));
     }
 
-    let agent = client.keys().public_key();
+    let agent = client.public_key();
     let owner = resolve_owner(client, owner_flag)?;
     Ok((agent, owner, owner))
 }
@@ -139,12 +139,12 @@ async fn fetch_head(
     owner: &PublicKey,
     slug: &str,
 ) -> Result<(Option<nostr::Event>, Option<Body>), CliError> {
-    let their_pubkey = if client.keys().public_key() == *agent {
+    let their_pubkey = if client.public_key() == *agent {
         owner
     } else {
         agent
     };
-    let k_c = conversation_key(client.keys().secret_key(), their_pubkey);
+    let k_c = client.conversation_key(their_pubkey)?;
     let d = d_tag(&k_c, slug);
 
     let filter = serde_json::json!({
@@ -164,7 +164,7 @@ async fn fetch_head(
         if ev.verify().is_err() {
             continue;
         }
-        match validate_and_decrypt(&ev, agent, owner, client.keys().secret_key(), their_pubkey) {
+        match validate_and_decrypt_with_key(&ev, agent, owner, &k_c) {
             Ok(body) => valid_with_body.push((ev, body)),
             Err(_) => continue,
         }
@@ -193,6 +193,7 @@ pub async fn cmd_ls(
     json: bool,
 ) -> Result<(), CliError> {
     let (agent, owner, their_pubkey) = resolve_reader(client, owner_flag, agent_flag)?;
+    let k_c = client.conversation_key(&their_pubkey)?;
 
     let filter = serde_json::json!({
         "kinds": [KIND_AGENT_ENGRAM],
@@ -219,13 +220,7 @@ pub async fn cmd_ls(
         else {
             continue;
         };
-        let body = match validate_and_decrypt(
-            &ev,
-            &agent,
-            &owner,
-            client.keys().secret_key(),
-            &their_pubkey,
-        ) {
+        let body = match validate_and_decrypt_with_key(&ev, &agent, &owner, &k_c) {
             Ok(b) => b,
             Err(_) => continue,
         };
@@ -357,14 +352,17 @@ pub async fn cmd_set(
             value: Some(value),
         }
     };
-    let agent_pubkey = client.keys().public_key();
+    let agent_pubkey = client.public_key();
     let (head, _) = fetch_head(client, &agent_pubkey, &owner, &slug).await?;
     let prior_created_at = head.map(|e| e.created_at.as_secs());
     let created_at = engram::monotonic_created_at(now_secs(), prior_created_at);
 
-    let agent = client.keys();
-    let event = engram::build_event(agent, &owner, &body, created_at)
+    let k_c = client.conversation_key(&owner)?;
+    let builder = engram::build_unsigned(&k_c, &owner, &body, created_at)
         .map_err(|e| CliError::Other(format!("build event failed: {e}")))?;
+    // Engram events carry no NIP-OA auth tag (parity with engram::build_event,
+    // which signs directly) — so the unchecked path, not sign_event.
+    let event = client.sign_event_unchecked(builder)?;
     let id = event.id.to_hex();
     submit_engram(client, event).await?;
     eprintln!("wrote {slug} (event {id}, created_at {created_at})");
@@ -598,7 +596,7 @@ pub async fn cmd_patch(
     };
 
     let owner = resolve_owner(client, owner_flag)?;
-    let agent_pubkey = client.keys().public_key();
+    let agent_pubkey = client.public_key();
     let (head, current) = fetch_value(client, &agent_pubkey, &owner, &slug).await?;
 
     // Base-hash gate: concurrent-edit safety.
@@ -688,9 +686,12 @@ pub async fn cmd_patch(
     let prior_created_at = Some(head.created_at.as_secs());
     let created_at = engram::monotonic_created_at(now_secs(), prior_created_at);
 
-    let agent = client.keys();
-    let event = engram::build_event(agent, &owner, &body, created_at)
+    let k_c = client.conversation_key(&owner)?;
+    let builder = engram::build_unsigned(&k_c, &owner, &body, created_at)
         .map_err(|e| CliError::Other(format!("build event failed: {e}")))?;
+    // Engram events carry no NIP-OA auth tag (parity with engram::build_event,
+    // which signs directly) — so the unchecked path, not sign_event.
+    let event = client.sign_event_unchecked(builder)?;
     let id = event.id.to_hex();
     submit_engram(client, event).await?;
     eprintln!("wrote {slug} (event {id}, created_at {created_at}, sha256 {new_hash})");
@@ -720,14 +721,17 @@ pub async fn cmd_rm(
         slug: slug.clone(),
         value: None,
     };
-    let agent_pubkey = client.keys().public_key();
+    let agent_pubkey = client.public_key();
     let (head, _) = fetch_head(client, &agent_pubkey, &owner, &slug).await?;
     let prior_created_at = head.map(|e| e.created_at.as_secs());
     let created_at = engram::monotonic_created_at(now_secs(), prior_created_at);
 
-    let agent = client.keys();
-    let event = engram::build_event(agent, &owner, &body, created_at)
+    let k_c = client.conversation_key(&owner)?;
+    let builder = engram::build_unsigned(&k_c, &owner, &body, created_at)
         .map_err(|e| CliError::Other(format!("build event failed: {e}")))?;
+    // Engram events carry no NIP-OA auth tag (parity with engram::build_event,
+    // which signs directly) — so the unchecked path, not sign_event.
+    let event = client.sign_event_unchecked(builder)?;
     let id = event.id.to_hex();
     submit_engram(client, event).await?;
     eprintln!("tombstoned {slug} (event {id}, created_at {created_at})");
@@ -786,7 +790,13 @@ mod tests {
     // common quick-check inputs.
 
     fn test_client(keys: nostr::Keys) -> BuzzClient {
-        BuzzClient::new("http://127.0.0.1:9".into(), keys, None, None).unwrap()
+        BuzzClient::new(
+            "http://127.0.0.1:9".into(),
+            crate::signer::BuzzSigner::Local(keys),
+            None,
+            None,
+        )
+        .unwrap()
     }
 
     #[test]
