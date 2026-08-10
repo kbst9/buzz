@@ -265,7 +265,11 @@ removing the key from every sandbox.
   fork-only dirs: never run pnpm inside flue-host while off deploy (it
   fabricates a stub package.json and pollutes the ROOT workspace
   lockfile — both reverted).
-- `just ci` gate: running; M5 closes on green.
+- `just ci` gate: **GREEN** (0 recipe failures, all suites through mobile;
+  flue-check inside it ran the broker + seed-strip tests). **✅ M5 COMPLETE —
+  the ladder is implemented end to end, M0 through M5, every rung
+  live-verified on the canary and gated; all six park points resolved.**
+  Tagged `deploy/2026-08-10.4`.
 
 ### 2026-08-10 — M4 gVisor pre-stage COMPLETE
 
