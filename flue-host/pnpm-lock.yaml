@@ -14,13 +14,13 @@ importers:
       '@earendil-works/pi-ai':
         specifier: 0.83.0
         version: 0.83.0(ws@8.21.1)(zod@4.4.3)
+      '@flue/runtime':
+        specifier: 2.0.3
+        version: 2.0.3(typescript@6.0.3)(ws@8.21.1)(zod@4.4.3)
+    devDependencies:
       '@flue/cli':
         specifier: 2.0.1
         version: 2.0.1(@types/node@26.1.2)(esbuild@0.28.1)(hono@4.12.34)(tsx@4.23.5)(typescript@6.0.3)(ws@8.21.1)(yaml@2.9.0)(zod@4.4.3)
-      '@flue/runtime':
-        specifier: 2.0.1
-        version: 2.0.1(typescript@6.0.3)(ws@8.21.1)(zod@4.4.3)
-    devDependencies:
       '@types/node':
         specifier: 26.1.2
         version: 26.1.2
@@ -326,6 +326,10 @@ packages:
 
   '@flue/runtime@2.0.1':
     resolution: {integrity: sha512-as+rrm8oHLuaLfpSReExwsuzOb1gC0sxQWgz3o+RvJUwHyGcQAcfBcn/R6j8logAq1j+ryfH1WsXf4J7Th9puQ==}
+    engines: {node: '>=22.19.0'}
+
+  '@flue/runtime@2.0.3':
+    resolution: {integrity: sha512-RfWyZG9x2hlDb1264XTESX42tzzG3AA8er3XjaTIxIMh28pTD91zKd9Jh6PFXKeTkZegLsGiJKDxmiCddlyeug==}
     engines: {node: '>=22.19.0'}
 
   '@flue/vite@2.0.1':
@@ -1524,6 +1528,26 @@ snapshots:
       - zod
 
   '@flue/runtime@2.0.1(typescript@6.0.3)(ws@8.21.1)(zod@4.4.3)':
+    dependencies:
+      '@earendil-works/pi-agent-core': 0.83.0(ws@8.21.1)(zod@4.4.3)
+      '@earendil-works/pi-ai': 0.83.0(ws@8.21.1)(zod@4.4.3)
+      '@hono/node-server': 2.0.12(hono@4.12.34)
+      '@modelcontextprotocol/client': 2.0.0
+      '@valibot/to-json-schema': 1.7.1(valibot@1.4.2(typescript@6.0.3))
+      hono: 4.12.34
+      js-yaml: 5.2.3
+      ulidx: 2.4.1
+      valibot: 1.4.2(typescript@6.0.3)
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - bufferutil
+      - supports-color
+      - typescript
+      - utf-8-validate
+      - ws
+      - zod
+
+  '@flue/runtime@2.0.3(typescript@6.0.3)(ws@8.21.1)(zod@4.4.3)':
     dependencies:
       '@earendil-works/pi-agent-core': 0.83.0(ws@8.21.1)(zod@4.4.3)
       '@earendil-works/pi-ai': 0.83.0(ws@8.21.1)(zod@4.4.3)

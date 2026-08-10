@@ -61,8 +61,18 @@ async function openStage(
     ...(options.egress ? { egress: options.egress } : {}),
     ...(options.onViolation ? { onViolation: options.onViolation } : {}),
   });
-  const env = await factory.createSessionEnv({ id: `conformance-${tier.name}` });
+  const env = await openSandbox(factory, `conformance-${tier.name}`);
   return { workspace, realWorkspace: await realpath(workspace), env };
+}
+
+/** Open a sandbox from a factory across Flue's createSandbox/createSessionEnv rename. */
+function openSandbox(
+  factory: { createSandbox?: (o: { id: string }) => Promise<SessionEnv>; createSessionEnv?: (o: { id: string }) => Promise<SessionEnv> },
+  id: string,
+): Promise<SessionEnv> {
+  const create = factory.createSandbox ?? factory.createSessionEnv;
+  if (!create) throw new Error("factory exposes no createSandbox");
+  return create({ id });
 }
 
 async function closeStage(stage: Stage | undefined): Promise<void> {
@@ -340,7 +350,7 @@ export function describeSandboxConformance(
         stage = {
           workspace,
           realWorkspace: await realpath(workspace),
-          env: await factory.createSessionEnv({ id: `conformance-${tier.name}-egress` }),
+          env: await openSandbox(factory, `conformance-${tier.name}-egress`),
         };
       });
 

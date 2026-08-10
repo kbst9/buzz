@@ -408,13 +408,15 @@ export const srtTier: SandboxTier = {
         process.env["BUZZ_RELAY_URL"],
       ),
     };
-    return {
-      createSessionEnv: () => {
-        // Kick off (or reuse) manager init up front; exec awaits it too.
-        void ensureManager(policy);
-        return Promise.resolve(createSrtSessionEnv(policy, options));
-      },
+    const createSandbox = (): Promise<SessionEnv> => {
+      // Kick off (or reuse) manager init up front; exec awaits it too.
+      void ensureManager(policy);
+      return Promise.resolve(createSrtSessionEnv(policy, options));
     };
+    // Provide both names: `createSandbox` is Flue 2.0.3's method; the
+    // deprecated `createSessionEnv` alias keeps the factory runnable on a
+    // 2.0.1 runtime too.
+    return { createSandbox, createSessionEnv: createSandbox };
   },
 };
 

@@ -20,10 +20,10 @@
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.71",
     "@earendil-works/pi-ai": "0.83.0",
-    "@flue/cli": "2.0.1",
-    "@flue/runtime": "2.0.1"
+    "@flue/runtime": "2.0.3"
   },
   "devDependencies": {
+    "@flue/cli": "2.0.1",
     "@types/node": "26.1.2",
     "tsx": "4.23.5",
     "typescript": "~6.0.3",

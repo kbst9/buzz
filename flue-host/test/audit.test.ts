@@ -40,7 +40,7 @@ function fakeTier(raise: (violation: SandboxViolation) => void = () => {}): Sand
         options.onViolation?.(violation);
         raise(violation);
       };
-      return { createSessionEnv: () => Promise.resolve(env) };
+      return { createSandbox: () => Promise.resolve(env) };
     },
   };
 }
@@ -59,7 +59,7 @@ async function withAudit<T>(run: (lines: AuditLine[]) => Promise<T>): Promise<Au
 describe("auditingTier", () => {
   it("emits one versioned line per exec with argv0 + sha256, never the command", async () => {
     const tier = auditingTier(fakeTier());
-    const env = await tier.createFactory({ cwd: "/fake", env: {} }).createSessionEnv({ id: "a" });
+    const env = await tier.createFactory({ cwd: "/fake", env: {} }).createSandbox({ id: "a" });
     const lines = await withAudit(async () => {
       await env.exec("git status --short");
     });
@@ -74,7 +74,7 @@ describe("auditingTier", () => {
     const tier = auditingTier(fakeTier());
     const env = await tier
       .createFactory({ cwd: "/fake", env: {}, onViolation: (violation) => observed.push(violation) })
-      .createSessionEnv({ id: "b" });
+      .createSandbox({ id: "b" });
     const lines = await withAudit(async () => {
       await env.exec("violate example.com");
     });
@@ -87,7 +87,7 @@ describe("auditingTier", () => {
 
   it("keeps concurrent execs' violations separate (AsyncLocalStorage isolation)", async () => {
     const tier = auditingTier(fakeTier());
-    const env = await tier.createFactory({ cwd: "/fake", env: {} }).createSessionEnv({ id: "c" });
+    const env = await tier.createFactory({ cwd: "/fake", env: {} }).createSandbox({ id: "c" });
     const lines = await withAudit(async () => {
       await Promise.all([env.exec("slow"), env.exec("violate a.example"), env.exec("violate b.example")]);
     });
@@ -101,7 +101,7 @@ describe("auditingTier", () => {
 
   it("logs exit null on a rejected exec and rethrows", async () => {
     const tier = auditingTier(fakeTier());
-    const env = await tier.createFactory({ cwd: "/fake", env: {} }).createSessionEnv({ id: "d" });
+    const env = await tier.createFactory({ cwd: "/fake", env: {} }).createSandbox({ id: "d" });
     const lines = await withAudit(async () => {
       await expect(env.exec("explode")).rejects.toThrow("spawn failed");
     });

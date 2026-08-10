@@ -75,12 +75,18 @@ export type PinCwd = Expect<Equal<SessionEnv["cwd"], string>>;
 export type PinResolvePath = Expect<Equal<SessionEnv["resolvePath"], (p: string) => string>>;
 
 // ── SandboxFactory: the seam every tier implements ─────────────────────────
-export type PinCreateSessionEnv = Expect<
-  Equal<Parameters<SandboxFactory["createSessionEnv"]>, [{ id: string }]>
+// Flue 2.0.3 renamed the primary method createSessionEnv → createSandbox
+// (createSessionEnv kept as a deprecated fallback). Our adapters publish
+// createSandbox (+ the alias); pin the current method by name.
+export type PinCreateSandbox = Expect<
+  Equal<Parameters<SandboxFactory["createSandbox"]>, [{ id: string }]>
 >;
-export type PinCreateSessionEnvReturn = Expect<
-  Equal<ReturnType<SandboxFactory["createSessionEnv"]>, Promise<SessionEnv>>
+export type PinCreateSandboxReturn = Expect<
+  Equal<ReturnType<SandboxFactory["createSandbox"]>, Promise<SessionEnv>>
 >;
 
-/** Imported by the conformance suite so this file is always in the test graph. */
-export const CONTRACT_DRIFT_CANARY = "flue-runtime-sandbox-contract-v1";
+/**
+ * Contract version bumped with the Flue 2.0.1 → 2.0.3 sandbox-surface change
+ * (createSessionEnv → createSandbox; SessionEnv is now an alias of Sandbox).
+ */
+export const CONTRACT_DRIFT_CANARY = "flue-runtime-sandbox-contract-v2";

@@ -134,11 +134,16 @@ export function auditingTier(tier: SandboxTier): SandboxTier {
           options.onViolation?.(violation);
         },
       });
-      return {
-        ...factory,
-        createSessionEnv: async (envOptions) =>
-          auditedSessionEnv(await factory.createSessionEnv(envOptions), tier.name),
-      };
+      // Flue 2.0.3 renamed the factory method createSessionEnv → createSandbox
+      // (old name kept as a deprecated fallback). Wrap whichever the tier
+      // exposes and re-publish under both names so the wrapped factory runs
+      // on either runtime.
+      const create =
+        factory.createSandbox?.bind(factory) ?? factory.createSessionEnv?.bind(factory);
+      if (!create) throw new Error(`tier "${tier.name}" factory exposes no createSandbox`);
+      const wrapped = async (envOptions: { id: string }) =>
+        auditedSessionEnv(await create(envOptions), tier.name);
+      return { ...factory, createSandbox: wrapped, createSessionEnv: wrapped };
     },
   };
 }
