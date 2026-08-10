@@ -261,8 +261,11 @@ async function collectEgressViolations(
   const logs = await docker(["logs", "--since", since, proxy]);
   const out: SandboxViolation[] = [];
   const seen = new Set<string>();
-  // tinyproxy denial: "Filtered connection ('host')." / "Connection to host:port denied".
-  const re = /(?:Filtered connection|denied|Access violation)[^'"\n]*['"]?([a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?::\d+)?)/gi;
+  // tinyproxy denial line:
+  //   NOTICE ...: Proxying refused on filtered domain "denied.invalid"
+  // (also tolerate "Filtered connection"/"Access violation" phrasings.)
+  const re =
+    /(?:refused on filtered domain|Filtered connection|Access violation)[^"'\n]*["']([a-zA-Z0-9.:_-]+)["']/gi;
   for (const line of `${logs.stdout}\n${logs.stderr}`.split("\n")) {
     let m: RegExpExecArray | null;
     re.lastIndex = 0;
