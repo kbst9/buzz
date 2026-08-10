@@ -214,11 +214,32 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 | M0.1 gate wiring | ✅ 2026-08-10 (merged to deploy behind the green M0 checkpoint CI) |
 | M0.2 conformance suite | ✅ 2026-08-10 (`feat/sandbox-m0`) |
 | M0.3 fleet smoke | ✅ 2026-08-10 (live PASS 9.4 s vs Fluelo; exit 2 proven vs stopped unit) |
-| M0.4 canary agent | ☐ (parked on invite — **flagged to Kevin 2026-08-10**) |
+| M0.4 canary agent | ✅ 2026-08-10 (invite minted by Kevin; `buzz-acp-canary` live, smoke 6.4 s on `local`) |
 | M0.5 audit log | ✅ 2026-08-10 (golden asserts lines; live lines in `journalctl -u buzz-acp-flue`) |
 | M0.6 workspace bench | ✅ 2026-08-10 (gradient baseline PASS: pjdfstest 6791 tests, fio, git workload, coherence) |
 
 ## Progress notes (dated; newest first)
+
+### 2026-08-10 — M0.4 done → **M0 COMPLETE**; M1 entry gate satisfied
+
+- Kevin minted the canary invite (park point 1 resolved).
+  `fleet.toml` authored on gradient (gitignored — it carries the invite
+  code), `provision-fleet.ts` dry-run then real: keypair generated
+  host-side, env + unit + provider drop-in written, unit enabled.
+- **Canary**: pubkey `3e7f2f249ebe3b2e8bb29feed686188545c805afe007df8ce2f82ed52fc77c7f`,
+  unit `buzz-acp-canary`, respond_to owner-only, model `xai/grok-4.5`
+  (the fleet's proven provider — the spec's "model cheap" deferred to a
+  later env edit; swapping is `BUZZ_FLUE_MODEL` + restart). Journal shows
+  the full claim sequence (workspace seeded → invite claimed
+  status=joined owner=a2c1dab1… → connected → membership notifications →
+  kind:0 profile published), zero errors.
+- **Done-means met**: smoke PASS in 6.4 s on the `local` tier, journal
+  clean; audit lines now visible in `journalctl -u buzz-acp-canary` —
+  the M0.5 deviation (flue as stand-in) is closed with the spec's exact
+  wording satisfied.
+- Rollback: `sudo systemctl disable --now buzz-acp-canary` (fleet
+  unaffected; provisioning is additive). Invite was single-use and is
+  now consumed.
 
 ### 2026-08-10 — M0 checkpoint: M0.1/2/3/5/6 complete, merged to deploy
 
