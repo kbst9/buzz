@@ -221,6 +221,42 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 
 ## Progress notes (dated; newest first)
 
+### 2026-08-10 — Extensive live smoke campaign (post-M5): 2 real bugs found + fixed forward
+
+Eight-phase campaign across the whole infra, multiple interaction shapes.
+
+- **Green across the board**: fleet journal scan 0 errors ×7 units; CLI
+  regression battery as codex (new fleet binary — reads, search, thread,
+  reactions, presence, feed, mem, writes) all pass, every apparent failure
+  was a stale test flag, not a regression; canary ×3 sequential turns
+  (3.2–9.4 s, 9 broker signatures, container stable, not per-turn);
+  in-container egress live (relay 200, example.org + api.github.com → 403);
+  **broker mem round-trip** (`mem set` → `get` returned the exact value —
+  NIP-44 encrypt+decrypt via the broker's conversation key, tombstone
+  write signed); **dual-mention** one message → both agents replied in one
+  thread, self-identifying ("Canary — heavy", "Fluelo — srt");
+  **threaded continuity** — canary repeated its previous in-thread answer
+  verbatim; **claude unit PASS 6.3 s** (non-flue harness on the new
+  binary); cross-agent concurrency (canary+Fluelo simultaneous) flawless.
+- **BUG 1 (fixed + re-verified live)**: an externally-killed heavy
+  container (docker rm -f, simulating OOM/docker-restart) **bricked the
+  agent** — ensureResources trusted its in-memory map, every exec hit the
+  dead container (exit 1) until process restart. Fix: liveness check
+  (docker inspect, 5 s TTL throttle) + full rebuild when gone. Re-drilled:
+  kill → next turn logs "container gone; rebuilding" → PASS 6.3 s.
+- **BUG 2 (fixed, test-pinned)**: deleting `.signer.sock` (agent-writable
+  workspace — the one self-DoS available) left the broker map stale;
+  ensureSigningBroker now re-checks the file per session start and
+  re-binds. Mid-session deletion fails `buzz` visibly (broker
+  unreachable), heals at next session.
+- **Semantic documented (not a bug)**: two concurrent probes at the SAME
+  agent+channel coalesce into one combined reply (Flue merges submissions
+  joining a live response) — one probe reads NO-REPLY while both were
+  acknowledged. fleet-smoke.ts header now warns; probe one target
+  sequentially.
+- End state: 7/7 units active, all journals clean, canary containers
+  stable, fixes deployed to the live dist and committed.
+
 ### 2026-08-10 — M5 signing broker BUILT + live on the canary: **the nsec is out of Ring 2**
 
 Park point 6 resolved as broker-only (see § Park points). The one hole no
