@@ -165,6 +165,7 @@ pub(crate) fn resolve_store_workspace(configured: Option<&str>) -> Option<PathBu
 }
 
 /// Held write lock on the store. Released (best-effort) on drop.
+#[derive(Debug)]
 struct StoreLock {
     path: PathBuf,
 }

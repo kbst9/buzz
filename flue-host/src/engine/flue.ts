@@ -5,6 +5,7 @@ import { type Flue, sqlite, start } from "@flue/runtime/node";
 import type { StopReason } from "../acp/protocol.js";
 import { log } from "../log.js";
 import { BuzzAgent } from "./agent.js";
+import { FileCredentialStore, storeBackedProviders } from "./credential-store.js";
 import { translateChunk } from "./translate.js";
 import { type AgentEngine, type SessionSeed, TurnFailedError } from "./types.js";
 
@@ -13,7 +14,10 @@ export interface FlueEngineOptions {
   model: string;
   /** SQLite path for Flue persistence; `:memory:` (the default) scopes state to the process — matching buzz-acp, which never reattaches sessions across respawns. */
   db?: string;
-  /** Provider override for tests (a faux provider). Omitted registers every pi built-in, resolving credentials from the environment. */
+  /** Provider override for tests (a faux provider). Omitted registers every
+   * pi built-in wrapped with NIP-PC store-aware auth: owner-delivered
+   * credentials in `~/.buzz/credentials.json` (or `BUZZ_FLUE_CREDENTIALS`)
+   * win, with env-var resolution as the legacy fallback. */
   providers?: readonly Provider[];
 }
 
@@ -26,10 +30,13 @@ interface SessionState {
 
 /** Boots the in-process Flue runtime and adapts it to the {@link AgentEngine} seam. */
 export async function createFlueEngine(options: FlueEngineOptions): Promise<AgentEngine> {
+  const providers =
+    options.providers ??
+    storeBackedProviders(new FileCredentialStore(FileCredentialStore.defaultPath()));
   const runtime: Flue = await start({
     agents: [BuzzAgent],
     db: sqlite(options.db ?? ":memory:"),
-    ...(options.providers ? { providers: options.providers } : {}),
+    providers,
   });
   const sessions = new Map<string, SessionState>();
 
@@ -88,8 +95,20 @@ export async function createFlueEngine(options: FlueEngineOptions): Promise<Agen
   };
 }
 
-function describe(cause: unknown): string {
+/** Render an unknown error cause legibly. Non-Error objects (provider SDK
+ * rejections are often plain objects) are JSON-serialized rather than
+ * collapsing to `[object Object]` — that collapse used to defeat buzz-acp's
+ * auth-error fast path and cost a full retry ladder on bad credentials. */
+export function describe(cause: unknown): string {
   if (cause instanceof AgentRunError) return `submission ${cause.outcome}: ${describe(cause.cause)}`;
   if (cause instanceof Error) return cause.message;
+  if (typeof cause === "object" && cause !== null) {
+    try {
+      const json = JSON.stringify(cause);
+      if (json && json !== "{}") return json;
+    } catch {
+      // Circular or non-serializable — fall through to String().
+    }
+  }
   return String(cause);
 }
