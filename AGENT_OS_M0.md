@@ -221,6 +221,46 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 
 ## Progress notes (dated; newest first)
 
+### 2026-08-10 — M3 heavy tier BUILT + validated on the canary
+
+Kevin redirected from "hold" to "build the heavy tier" → built the audit's
+recommended **Docker + srt-proxy** tier and validated it end-to-end.
+
+- **`src/sandbox/docker.ts`** — the `docker` heavy tier (native + git +
+  egress-allowlist + fs-projection). Each agent's execs run via `docker exec`
+  in a long-lived per-agent container; egress = internal Docker network
+  (deny-by-default, no route) + a dual-homed tinyproxy allowlist (our egress
+  vocab); workspace bind-mounted at the host path, container runs as the host
+  UID (files stay host-owned — the M2 lesson), `buzz` CLI bind-mounted RO.
+  Process-global resources keyed on policy signature (one container per agent
+  in prod); egress denials normalized + deduped per-exec.
+- **Base image** `heavy-base.Dockerfile` = **ubuntu:24.04** (glibc 2.39 — the
+  host-built `buzz` needs ≥2.38; debian-bookworm's 2.36 could not load it) +
+  git/curl/ca-certs.
+- **Escalation binding** (fleet.toml): `escalation = true` overrides `tier`
+  and emits `BUZZ_FLUE_SANDBOX=docker` — one flag binds an agent to the heavy
+  tier; rollback is the inverse + stop containers.
+- **Bugs found + fixed while building** (all empirical, on gradient): proxy
+  readiness raced first exec (busybox wget exit-code false-positive → switched
+  to a netstat listen-check); glibc mismatch (→ ubuntu base); tinyproxy
+  denial-log format ("refused on filtered domain") → normalized violation;
+  cross-exec violation re-attribution (module-level dedup); `docker exec`
+  client exits 0 when killed → force exit 124 on abort so the timeout contract
+  holds.
+- **Exit gate**: conformance **27/27 on gradient** (full suite, heavy caps —
+  incl. durable abort, secret canary, native, git, all egress tests, golden,
+  cancel-mid-exec); egress acceptance proven (allowed 200 / denied 403 /
+  normalized violation); **canary escalation smoke PASS 6.3–9.4 s** with the
+  agent's `buzz` exec running INSIDE container `buzz-heavy-*`, egress scoped
+  to the relay, audit `tier:"docker"`; **rollback rehearsed live** (docker→srt
+  one flag + stop containers → smoke PASS on srt, 0 containers left).
+  `just ci` on gradient: running (final gate).
+- **Prod state**: canary on the **docker** heavy tier (validated resting
+  state; 2 idle containers: agent + proxy). Fluelo stays on **srt** — moving
+  prod agents to the heavy tier is a separate rollout decision (not taken).
+  dist refreshed (docker tier); backup `dist.bak-20260810-predocker`; env bak
+  `canary.env.bak-20260810-docker`. Relay/DB/other units untouched.
+
 ### 2026-08-10 — M3 heavy-tier audit done; **park point 5 ready for sign-off**
 
 Entered M3 (substrate = SeaweedFS, park pt 4). First deliverable — the
