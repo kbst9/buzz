@@ -203,8 +203,8 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 1. ~~**Canary invite** (M0.4)~~ ✅ resolved 2026-08-10 — minted, canary live.
 2. ~~**Web-egress policy** (gates M1 fleet rollout)~~ ✅ resolved 2026-08-10 — relay + curated allowlist; Fluelo live with `relay,github.com,raw.githubusercontent.com,docs.rs`.
 3. ~~**srt prod rollout order/timing** (gates M1 completion)~~ ✅ resolved 2026-08-10 — switch Fluelo now (done, smoke PASS). **M1 COMPLETE.**
-4. **MinIO succession** (gates M2 → any prod storage change).
-5. **Heavy-tier selection** (gates M3 deploy).
+4. **MinIO succession** (gates M2 → any prod storage change) — **REACHED 2026-08-10** (pilot done, informs it), awaiting Kevin. Also gates M3's workspace substrate.
+5. **Heavy-tier selection** (gates M3 deploy) — **REACHED 2026-08-10** (M3 entry needs it), awaiting Kevin.
 6. **M5 trigger** (whether/when the isolate tier is warranted).
 
 ## M0 status
@@ -219,6 +219,35 @@ Emits a JSON (`v: 1`) + markdown report (timings + correctness verdicts).
 | M0.6 workspace bench | ✅ 2026-08-10 (gradient baseline PASS: pjdfstest 6791 tests, fio, git workload, coherence) |
 
 ## Progress notes (dated; newest first)
+
+### 2026-08-10 — M2 workspace pilot COMPLETE; ladder now blocked on park points 4 & 5
+
+Ran the M0.6 bench on **JuiceFS-on-MinIO** and **SeaweedFS** (both fully
+isolated from prod — throwaway MinIO :9100, throwaway Redis :6400, own
+SeaweedFS server) plus a projection trial. Exit gate met: two bench
+reports + written comparison — [docs/bench-m2/COMPARISON.md](docs/bench-m2/COMPARISON.md),
+anchored in the M1 analysis doc. **No prod mutation** (pilot).
+
+- **Finding**: SeaweedFS is the stronger technical fit on the single-node
+  topology (~1.8× 4k IOPS, faster clone, **~100× better cross-mount
+  delete-coherence** — JuiceFS lags ~1 s, cleaner POSIX 1-vs-4 failing
+  pjdfstest files incl. JuiceFS hard-link gaps, no MinIO/Redis dep). Both
+  git-correct (hash-match) at ~3–10× local latency. JuiceFS-on-MinIO's
+  only edge is topological (reuses MinIO) — contingent on park point 4.
+- **Projection trial**: bind-mount into a container works on both, but
+  requires UID-aligned container users (root writes host-unmanageable
+  files) + a git-preinstalled base image (non-root can't `apk add`) —
+  both are M3 inputs.
+- **Bench-tooling robustness fixes found via the pilot** (folded into
+  workspace-bench.sh): a FUSE mount is not root-accessible without
+  `user_allow_other` + `allow_other`, so pjdfstest silently 0-ran until
+  remounted; the "overall FAIL" is pjdfstest POSIX edge-cases, not a git
+  failure.
+- **Ladder now fully blocked on Kevin**: M3 entry = "M2 decision made" →
+  needs **park point 4 (MinIO succession** — which storage substrate) and
+  **park point 5 (heavy-tier selection**). M4 (gVisor pre-stage) needs
+  M3's image shape, so it too waits. M5 is trigger-gated. No further ladder
+  build is possible without those decisions; bench infra torn down.
 
 ### 2026-08-10 — M1 srt tier: exit gate met on the canary; **fleet rollout parked (points 2 & 3)**
 

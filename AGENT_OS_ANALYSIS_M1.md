@@ -486,3 +486,22 @@ The scan changes the first move. New ladder, cheapest-real-win first:
 4. gVisor pre-stage (runsc + daemon.json runtime entry; per-container
    opt-in, no KVM needed)
 5. (conditional) agentOS factory + bridge / signing broker — on trigger
+
+---
+
+## M2 pilot results (2026-08-10) — workspace substrate
+
+The M2 workspace pilot ran the M0.6 bench on **JuiceFS-on-MinIO** and
+**SeaweedFS** (both isolated from prod) plus a projection trial. Full
+write-up and raw reports: [docs/bench-m2/COMPARISON.md](docs/bench-m2/COMPARISON.md).
+
+**Outcome (informs park point 4, does not decide it):** SeaweedFS is the
+stronger technical fit on the current single-node topology — ~1.8x the 4k
+random IOPS, faster clone, ~100x better cross-mount delete-coherence
+(JuiceFS lags ~1s), cleaner POSIX (1 vs 4 failing pjdfstest files;
+JuiceFS gaps hard-links), and no external MinIO/Redis dependency. Both are
+correct for git (hash-match) at ~3-10x local latency. JuiceFS-on-MinIOs
+only edge is topological (reuses existing MinIO) — entirely contingent on
+the MinIO-succession decision. Projection (bind-mount into a container)
+works on both, requiring UID-aligned container users + a git-preinstalled
+base image (both M3 inputs).
