@@ -25,6 +25,10 @@ abstract final class EventKind {
   static const eventReminder = 30300;
   static const userStatus = 30315;
   static const dmVisibility = 30622;
+  // NIP-PC owner-delivered AI-provider credential (30990) + agent-authored
+  // status (30991). Mirror of desktop kinds.ts; mobile does not author these.
+  static const agentProviderCredential = 30990;
+  static const agentProviderCredentialStatus = 30991;
   static const streamMessageV2 = 40002;
   static const channelThreadSummary = 39005;
   static const channelWindowBounds = 39006;

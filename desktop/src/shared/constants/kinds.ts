@@ -81,6 +81,15 @@ export const KIND_GIT_STATUS_DRAFT = 1633;
 // NIP-DV: relay-signed per-viewer DM visibility snapshot (d=viewer pubkey,
 // h-tags = currently-hidden DM channel ids).
 export const KIND_DM_VISIBILITY = 30622;
+// NIP-PC: owner-delivered AI-provider credential (d = "<agent-pubkey>:<provider>",
+// p = recipient agent). NIP-44 ciphertext, owner-authored. Relay write-gates to
+// the agent's registered owner and read-gates to author-or-recipient. Mirror of
+// buzz-core's KIND_AGENT_PROVIDER_CREDENTIAL. See docs/nips/NIP-PC.md.
+export const KIND_AGENT_PROVIDER_CREDENTIAL = 30990;
+// NIP-PC: agent-authored plaintext credential status (d = provider id; content
+// = {v, provider, state, detail?, updatedAt}). Member-readable — the owner-facing
+// health signal rendered as an account status chip.
+export const KIND_AGENT_PROVIDER_CREDENTIAL_STATUS = 30991;
 
 // Human-visible "new content" message kinds. Used as the unread trigger set
 // (sidebar badges, catch-up queries) and as the Home-feed mention query.
