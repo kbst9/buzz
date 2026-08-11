@@ -29,7 +29,7 @@ use axum::{
     Router,
 };
 use base64::Engine as _;
-use nostr::{Keys, PublicKey};
+use nostr::{JsonUtil, Keys, PublicKey};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -37,8 +37,7 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::oneshot;
 
-use crate::app_state::AppState;
-use crate::app_state_keyring::keyring_service;
+use crate::app_state::{keyring_service, AppState};
 use crate::secret_store::SecretStore;
 
 /// Keychain key prefix; one blob per provider alongside the identity nsec.
